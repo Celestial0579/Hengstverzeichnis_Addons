@@ -75,6 +75,25 @@ Läuft automatisch bei jedem Push/PR gegen `main` über
 [`.github/workflows/tests.yml`](.github/workflows/tests.yml) (die
 Functional-Suite dort mit einem MariaDB-Service-Container).
 
+## Abhängigkeitspflege
+
+[`.github/dependabot.yml`](.github/dependabot.yml) hält Composer-Pakete
+(PHPUnit, das VCS-Dev-Requirement auf `hengstverzeichnis/framework`) und die
+in den Workflows verwendeten GitHub Actions wöchentlich aktuell - analog zum
+Framework-Repo. Ergänzt um:
+
+- [`.github/workflows/dependabot-auto-merge.yml`](.github/workflows/dependabot-auto-merge.yml) -
+  merged Dependabot-PRs automatisch per Squash, sobald `Tests` grün ist,
+  außer bei Major-Updates (die brauchen manuelle Prüfung).
+- [`.github/workflows/dependency-review.yml`](.github/workflows/dependency-review.yml) -
+  scannt PRs, die Abhängigkeiten ändern, auf bekannte Sicherheitslücken.
+
+Da `hengstverzeichnis/framework` als `dev-main` eingebunden ist (das
+Framework veröffentlicht bislang keine Tags/Releases), zeigt jede neue
+Dependabot-PR dafür schlicht den jeweils neuesten Commit auf `main` - die
+Functional-Suite läuft dabei jedes Mal gegen den echten, aktuellen Kern und
+deckt so auch Breaking Changes im Framework selbst auf.
+
 ## Neues Addon hinzufügen
 
 1. Neues Verzeichnis unter `plugins/<slug>/` anlegen (Konventionen siehe
