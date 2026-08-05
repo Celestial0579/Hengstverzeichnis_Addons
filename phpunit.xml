@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="tests/bootstrap.php"
+         colors="true"
+         cacheDirectory=".phpunit.cache">
+    <testsuites>
+        <!-- Strukturprüfung jedes Plugins unter plugins/ (Manifest, Namensschema,
+             PHP-Syntax) - läuft ohne Datenbank/Framework-Server, automatisch für
+             jedes neu hinzugefügte Plugin, ohne dass diese Datei angepasst werden muss. -->
+        <testsuite name="Manifest">
+            <directory>tests/Manifest</directory>
+        </testsuite>
+        <!-- Ein Test pro Plugin, der es tatsächlich in eine laufende
+             Hengstverzeichnis_Framework-Instanz aktiviert und per HTTP durchspielt
+             (siehe tests/bootstrap.php für die Kopie nach vendor/.../plugins). -->
+        <testsuite name="Functional">
+            <directory>tests/Functional</directory>
+        </testsuite>
+    </testsuites>
+</phpunit>
