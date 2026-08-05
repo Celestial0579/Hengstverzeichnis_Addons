@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "4282beab34e3ad97cbbb946d0d134d2a",
+    "content-hash": "3ac217631517a341573316dff4182994",
     "packages": [],
     "packages-dev": [
         {
@@ -13,12 +13,12 @@
             "source": {
                 "type": "git",
                 "url": "https://github.com/Celestial0579/Hengstverzeichnis_Framework.git",
-                "reference": "988544b92fc4b7a9a6ba56bfd7bce4603bcd28b6"
+                "reference": "76e91ec7bbf4e2b9ea4c0aa2a70e73fdb8bb4947"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/Celestial0579/Hengstverzeichnis_Framework/zipball/988544b92fc4b7a9a6ba56bfd7bce4603bcd28b6",
-                "reference": "988544b92fc4b7a9a6ba56bfd7bce4603bcd28b6",
+                "url": "https://api.github.com/repos/Celestial0579/Hengstverzeichnis_Framework/zipball/76e91ec7bbf4e2b9ea4c0aa2a70e73fdb8bb4947",
+                "reference": "76e91ec7bbf4e2b9ea4c0aa2a70e73fdb8bb4947",
                 "shasum": ""
             },
             "require": {
@@ -52,7 +52,7 @@
                 "source": "https://github.com/Celestial0579/Hengstverzeichnis_Framework/tree/main",
                 "issues": "https://github.com/Celestial0579/Hengstverzeichnis_Framework/issues"
             },
-            "time": "2026-08-05T15:17:49+00:00"
+            "time": "2026-08-05T21:02:17+00:00"
         },
         {
             "name": "myclabs/deep-copy",
@@ -1982,7 +1982,7 @@
     "prefer-stable": false,
     "prefer-lowest": false,
     "platform": {
-        "php": ">=8.3"
+        "php": ">=8.5"
     },
     "platform-dev": {},
     "plugin-api-version": "2.9.0"
