@@ -1,0 +1,2 @@
+# Hengstverzeichnis_Addons
+Enthält Addons für Hengstverzeichnis_Framework
