@@ -1,0 +1,19 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  # Dev-only Abhängigkeiten (PHPUnit für die Testsuite sowie
+  # hengstverzeichnis/framework als VCS-Dev-Abhängigkeit für die Functional-
+  # Tests, siehe composer.json) - betrifft keine Plugin-Runtime, die läuft
+  # ohne Composer/vendor direkt im Framework-Kern.
+  - package-ecosystem: "composer"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7

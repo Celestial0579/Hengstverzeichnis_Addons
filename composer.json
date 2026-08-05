@@ -1,0 +1,32 @@
+{
+    "name": "hengstverzeichnis/addons",
+    "description": "Sammlung von Addons/Plugins für Hengstverzeichnis_Framework, inkl. automatisierter Tests gegen den echten Framework-Kern.",
+    "type": "project",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.3"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11.5",
+        "hengstverzeichnis/framework": "dev-main"
+    },
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/Celestial0579/Hengstverzeichnis_Framework.git"
+        }
+    ],
+    "autoload-dev": {
+        "psr-4": {
+            "Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "test:manifest": "phpunit --testsuite Manifest",
+        "test:functional": "phpunit --testsuite Functional"
+    },
+    "config": {
+        "sort-packages": true
+    }
+}
