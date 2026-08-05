@@ -20,6 +20,8 @@ namespace Tests\Functional;
  */
 class BesucherstatistikPluginTest extends FunctionalTestCase {
 
+    use HorseListHelper;
+
     private const SLUG = 'besucherstatistik';
 
     public function testFullPluginLifecycle(): void {
@@ -119,16 +121,4 @@ class BesucherstatistikPluginTest extends FunctionalTestCase {
         $this->assertStringContainsString($horseName, $statsWithPermission->body);
     }
 
-    /**
-     * Ermittelt die ID des zuletzt angelegten Pferds über dessen eindeutigen
-     * Namen aus /admin/horses (dieselbe Zeile enthält ID-Zelle und Namen,
-     * siehe src/Views/admin_horses.php im Framework-Repo).
-     */
-    private function findHorseIdByName(\Tests\Support\HttpClient $admin, string $name): int {
-        $page = $admin->get('/admin/horses');
-        $pattern = '/<td[^>]*>(\d+)<\/td>.*?<strong>' . preg_quote($name, '/') . '<\/strong>/s';
-        preg_match($pattern, $page->body, $matches);
-        $this->assertNotEmpty($matches, "Konnte ID von Pferd '{$name}' nicht aus /admin/horses ermitteln.");
-        return (int) $matches[1];
-    }
 }

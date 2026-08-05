@@ -33,6 +33,16 @@ Danach unter **Admin → Plugins verwalten** (`/admin/plugins`) aktivieren.
 
 - [`besucherstatistik`](plugins/besucherstatistik/README.md) - zählt
   Seitenaufrufe je Pferd und zeigt eine Rangliste der meistgesehenen Pferde.
+- [`inzuchtkoeffizient`](plugins/inzuchtkoeffizient/README.md) - berechnet
+  Wright's Inzuchtkoeffizienten auf der Pferde-Detailseite und bietet einen
+  Verpaarungsrechner für den voraussichtlichen COI eines Fohlens.
+- [`statistik-dashboard`](plugins/statistik-dashboard/README.md) -
+  Kennzahlen-Übersicht im Admin-Bereich (Status-Verteilung, Deckstationen,
+  Wachstum über Zeit, Top-Blutlinien).
+- [`katalog-export`](plugins/katalog-export/README.md) - CSV-Export des
+  Pferdekatalogs, gefiltert oder ungefiltert.
+- [`pedigree-export`](plugins/pedigree-export/README.md) - druckoptimierte
+  Stammbaum-Ansicht zum Sichern als PDF über die Browser-Druckfunktion.
 
 ## Automatisierte Tests
 

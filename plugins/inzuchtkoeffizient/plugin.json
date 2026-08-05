@@ -1,0 +1,10 @@
+{
+    "slug": "inzuchtkoeffizient",
+    "name": "Inzuchtkoeffizient (Wright's COI)",
+    "version": "1.0.0",
+    "core_compatibility": ">=0.1.0-beta.1",
+    "description": "Berechnet und zeigt Wright's Inzuchtkoeffizienten auf der öffentlichen Pferde-Detailseite an und bietet einen Verpaarungsrechner für den voraussichtlichen COI eines Fohlens aus zwei ausgewählten Elterntieren.",
+    "author": "Hengstverzeichnis_Addons",
+    "hooks": ["horse.detail_sections"],
+    "entry": "Plugin.php"
+}
