@@ -56,6 +56,9 @@ class BesucherstatistikPluginTest extends FunctionalTestCase {
             'breeding_station' => 'Testgestüt',
             'birth_year' => '2020',
             'status' => 'active',
+            // Veröffentlichen, damit die öffentliche Detailseite (/hengst) sichtbar
+            // ist - der Kern bindet die öffentliche Sichtbarkeit an is_published = 1.
+            'is_published' => '1',
         ]);
         $this->assertSame('/admin/horses?success=created', $createResponse->location());
         $horseId = $this->findHorseIdByName($admin, $horseName);
