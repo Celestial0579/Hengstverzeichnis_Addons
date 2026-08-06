@@ -48,6 +48,11 @@ Danach unter **Admin → Plugins verwalten** (`/admin/plugins`) aktivieren.
 - [`zuchtschau-ergebnisse`](plugins/zuchtschau-ergebnisse/README.md) -
   erfasst Zuchtschau-/Körungsergebnisse (Note, Richter, Platzierung) pro
   Pferd und zeigt sie auf der Detailseite.
+- [`deckanfrage`](plugins/deckanfrage/README.md) - Deckanfrage-Formular auf
+  der Pferde-Detailseite, sendet direkt an die hinterlegte Deckstation.
+- [`verkaufsboerse`](plugins/verkaufsboerse/README.md) - markiert Pferde
+  als zum Verkauf/zur Vermittlung, mit eigener Übersichtsseite und
+  Kontaktformular.
 
 ## Automatisierte Tests
 
