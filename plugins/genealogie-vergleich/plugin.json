@@ -1,0 +1,10 @@
+{
+    "slug": "genealogie-vergleich",
+    "name": "Genealogie-Vergleichstool",
+    "version": "1.0.0",
+    "core_compatibility": ">=0.1.0-beta.1",
+    "description": "Stellt die Stammbäume zweier Pferde nebeneinander dar und hebt gemeinsame Vorfahren farblich hervor.",
+    "author": "Hengstverzeichnis_Addons",
+    "hooks": ["horse.detail_sections"],
+    "entry": "Plugin.php"
+}

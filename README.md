@@ -53,6 +53,9 @@ Danach unter **Admin → Plugins verwalten** (`/admin/plugins`) aktivieren.
 - [`verkaufsboerse`](plugins/verkaufsboerse/README.md) - markiert Pferde
   als zum Verkauf/zur Vermittlung, mit eigener Übersichtsseite und
   Kontaktformular.
+- [`genealogie-vergleich`](plugins/genealogie-vergleich/README.md) - stellt
+  die Stammbäume zweier Pferde nebeneinander dar und hebt gemeinsame
+  Vorfahren hervor.
 
 ## Automatisierte Tests
 
