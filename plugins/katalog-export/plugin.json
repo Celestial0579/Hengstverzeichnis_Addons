@@ -1,0 +1,10 @@
+{
+    "slug": "katalog-export",
+    "name": "Katalog-Export (CSV)",
+    "version": "1.0.0",
+    "core_compatibility": ">=0.1.0-beta.1",
+    "description": "CSV-Export des Pferdekatalogs (gefiltert oder ungefiltert, mit denselben Filterfeldern wie der öffentliche Katalog) - öffnet in Excel/LibreOffice ohne zusätzliche Abhängigkeiten.",
+    "author": "Hengstverzeichnis_Addons",
+    "hooks": ["admin.dashboard_tiles"],
+    "entry": "Plugin.php"
+}

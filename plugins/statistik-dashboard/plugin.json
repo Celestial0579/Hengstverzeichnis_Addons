@@ -1,0 +1,10 @@
+{
+    "slug": "statistik-dashboard",
+    "name": "Statistik-Dashboard",
+    "version": "1.0.0",
+    "core_compatibility": ">=0.1.0-beta.1",
+    "description": "Kennzahlen-Übersicht für den Admin-Bereich: Pferde nach Status, Verteilung nach Deckstation, Wachstum der Datenbank über Zeit und meistgenutzte Blutlinien.",
+    "author": "Hengstverzeichnis_Addons",
+    "hooks": ["admin.dashboard_tiles"],
+    "entry": "Plugin.php"
+}
