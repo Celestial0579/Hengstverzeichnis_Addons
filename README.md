@@ -43,6 +43,16 @@ Danach unter **Admin → Plugins verwalten** (`/admin/plugins`) aktivieren.
   Pferdekatalogs, gefiltert oder ungefiltert.
 - [`pedigree-export`](plugins/pedigree-export/README.md) - druckoptimierte
   Stammbaum-Ansicht zum Sichern als PDF über die Browser-Druckfunktion.
+- [`qr-code`](plugins/qr-code/README.md) - QR-Code zur Profil-URL auf der
+  Pferde-Detailseite sowie eine druckfertige Aushang-Ansicht.
+- [`zuchtschau-ergebnisse`](plugins/zuchtschau-ergebnisse/README.md) -
+  erfasst Zuchtschau-/Körungsergebnisse (Note, Richter, Platzierung) pro
+  Pferd und zeigt sie auf der Detailseite.
+- [`deckanfrage`](plugins/deckanfrage/README.md) - Deckanfrage-Formular auf
+  der Pferde-Detailseite, sendet direkt an die hinterlegte Deckstation.
+- [`verkaufsboerse`](plugins/verkaufsboerse/README.md) - markiert Pferde
+  als zum Verkauf/zur Vermittlung, mit eigener Übersichtsseite und
+  Kontaktformular.
 
 ## Automatisierte Tests
 
