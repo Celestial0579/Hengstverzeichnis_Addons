@@ -13,12 +13,12 @@
             "source": {
                 "type": "git",
                 "url": "https://github.com/Celestial0579/Hengstverzeichnis_Framework.git",
-                "reference": "76e91ec7bbf4e2b9ea4c0aa2a70e73fdb8bb4947"
+                "reference": "c7506dbe8bf4a24f7e5150808617fad30047b6ec"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/Celestial0579/Hengstverzeichnis_Framework/zipball/76e91ec7bbf4e2b9ea4c0aa2a70e73fdb8bb4947",
-                "reference": "76e91ec7bbf4e2b9ea4c0aa2a70e73fdb8bb4947",
+                "url": "https://api.github.com/repos/Celestial0579/Hengstverzeichnis_Framework/zipball/c7506dbe8bf4a24f7e5150808617fad30047b6ec",
+                "reference": "c7506dbe8bf4a24f7e5150808617fad30047b6ec",
                 "shasum": ""
             },
             "require": {

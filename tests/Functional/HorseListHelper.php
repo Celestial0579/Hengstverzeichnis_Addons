@@ -27,12 +27,19 @@ trait HorseListHelper {
 
     /**
      * @param array<string, string> $extra Zusätzliche POST-Felder (z. B. sire_id, status, breeding_station).
+     *   Standardmäßig wird das Pferd veröffentlicht (`is_published => '1'`), da die
+     *   meisten Plugin-Tests die öffentliche Sichtbarkeit (/hengst, öffentliche
+     *   Plugin-Routen) prüfen und der Kern diese seit der Status/Veröffentlichungs-
+     *   Entkopplung an `is_published = 1` bindet. Ein Test kann über
+     *   `['is_published' => '0']` bewusst ein unveröffentlichtes Pferd anlegen
+     *   (z. B. um die Zugriffskontrolle öffentlicher Plugin-Routen zu prüfen).
      */
     private function createHorse(HttpClient $admin, string $name, array $extra = []): int {
         $createForm = $admin->get('/admin/horses/create');
         $createResponse = $admin->post('/admin/horses/store', array_merge([
             'csrf_token' => $createForm->formField('csrf_token') ?? '',
             'name' => $name,
+            'is_published' => '1',
         ], $extra));
         $this->assertSame(
             '/admin/horses?success=created',

@@ -67,5 +67,27 @@ class GenealogieVergleichPluginTest extends FunctionalTestCase {
         $this->assertSame(200, $comparisonCE->statusCode);
         $this->assertStringContainsString('Keine gemeinsamen Vorfahren', $comparisonCE->body);
         $this->assertStringNotContainsString('box shared', $comparisonCE->body);
+
+        // 5. Sicherheit: ein UNVERÖFFENTLICHTES Pferd (is_published = 0) darf weder
+        // im öffentlichen Auswahl-Dropdown erscheinen noch über einen direkten
+        // Vergleich sichtbar werden - sonst würden im Kern verborgene Daten leaken.
+        $unpubName = "GVUnpub-{$unique}";
+        $unpubId = $this->createHorse($admin, $unpubName, ['status' => 'active', 'is_published' => '0']);
+
+        $toolPage = $visitor->get('/plugin/genealogie-vergleich');
+        $this->assertSame(200, $toolPage->statusCode);
+        $this->assertStringNotContainsString(
+            $unpubName,
+            $toolPage->body,
+            'Unveröffentlichtes Pferd darf nicht im öffentlichen Auswahl-Dropdown erscheinen.'
+        );
+
+        $compareUnpub = $visitor->get("/plugin/genealogie-vergleich?horse_a={$cId}&horse_b={$unpubId}");
+        $this->assertSame(200, $compareUnpub->statusCode);
+        $this->assertStringNotContainsString(
+            $unpubName,
+            $compareUnpub->body,
+            'Vergleich mit einem unveröffentlichten Pferd darf dessen Daten nicht offenlegen.'
+        );
     }
 }

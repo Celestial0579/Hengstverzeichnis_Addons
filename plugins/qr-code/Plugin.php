@@ -88,13 +88,22 @@ class Plugin {
 class AushangController extends BaseController {
 
     public function show(): void {
+        // Öffentliche Sichtbarkeit exakt wie im Kern (PublicController::horseDetail):
+        // Aushang nur, wenn die Gast-Gruppe Pferde sehen darf.
+        if (!$this->hasPermission('horses', 'view')) {
+            $this->renderNotFound('Für dieses Pferd konnte kein Aushang erstellt werden.');
+        }
+
         $id = isset($_GET['id']) ? (int) $_GET['id'] : 0;
         if (!$id) {
             $this->renderNotFound('Kein Pferd angegeben.');
         }
 
+        // Nur veröffentlichte Pferde (is_published = 1) - unveröffentlichte liefern
+        // wie ein fehlender Datensatz eine 404, damit der Aushang keine im Kern
+        // verborgenen Daten preisgibt.
         $stmt = Database::getInstance()->prepare(
-            'SELECT id, name, birth_year, image_url FROM horses WHERE id = ? AND deleted_at IS NULL'
+            'SELECT id, name, birth_year, image_url FROM horses WHERE id = ? AND deleted_at IS NULL AND is_published = 1'
         );
         $stmt->execute([$id]);
         $horse = $stmt->fetch();
