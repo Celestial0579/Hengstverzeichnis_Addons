@@ -75,16 +75,26 @@ class VergleichController extends BaseController {
     private const MAX_DEPTH = 7;
 
     public function show(): void {
+        // Öffentliche Sichtbarkeit exakt wie im Kern (PublicController::horseDetail):
+        // ohne Lese-Recht der Gast-Gruppe wird das Tool wie nicht vorhanden behandelt.
+        if (!$this->hasPermission('horses', 'view')) {
+            $this->renderNotFound('Nicht gefunden.');
+        }
+
+        // Nur veröffentlichte Pferde im Auswahl-Dropdown - sonst würden hier die
+        // Namen aller (auch unveröffentlichter) Pferde an anonyme Besucher leaken.
         $horses = Database::getInstance()->query(
-            'SELECT id, name, birth_year FROM horses WHERE deleted_at IS NULL ORDER BY name ASC'
+            'SELECT id, name, birth_year FROM horses WHERE deleted_at IS NULL AND is_published = 1 ORDER BY name ASC'
         )->fetchAll(PDO::FETCH_ASSOC);
 
         $horseAId = !empty($_GET['horse_a']) ? (int) $_GET['horse_a'] : null;
         $horseBId = !empty($_GET['horse_b']) ? (int) $_GET['horse_b'] : null;
         $depth = isset($_GET['depth']) ? max(2, min(self::MAX_DEPTH, (int) $_GET['depth'])) : self::DEFAULT_DEPTH;
 
-        $treeA = $horseAId ? PedigreeBuilder::build($horseAId, $depth) : null;
-        $treeB = $horseBId ? PedigreeBuilder::build($horseBId, $depth) : null;
+        // publishedOnly=true: unveröffentlichte Wurzelpferde/Vorfahren fließen nicht
+        // in den Vergleich ein (ZWINGEND für öffentliche Ausgaben, siehe PedigreeBuilder).
+        $treeA = $horseAId ? PedigreeBuilder::build($horseAId, $depth, true) : null;
+        $treeB = $horseBId ? PedigreeBuilder::build($horseBId, $depth, true) : null;
 
         $commonIds = [];
         if ($treeA !== null && $treeB !== null) {

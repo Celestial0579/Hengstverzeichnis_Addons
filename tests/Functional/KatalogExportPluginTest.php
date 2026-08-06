@@ -82,5 +82,29 @@ class KatalogExportPluginTest extends FunctionalTestCase {
         $allowedResponse = $editor->get('/plugin/katalog-export/csv');
         $this->assertSame(200, $allowedResponse->statusCode);
         $this->assertStringContainsString($horseName, $allowedResponse->body);
+
+        // 7. Sicherheit: CSV-Formel-Injection wird neutralisiert. Ein Name, der mit
+        // '=' beginnt (in Excel/LibreOffice sonst als Formel interpretiert), erscheint
+        // im Export mit vorangestelltem Hochkomma als reiner Text.
+        $formulaName = "=CsvInject-{$unique}";
+        $createFormInj = $admin->get('/admin/horses/create');
+        $createResponseInj = $admin->post('/admin/horses/store', [
+            'csrf_token' => $createFormInj->formField('csrf_token') ?? '',
+            'name' => $formulaName,
+            'status' => 'active',
+        ]);
+        $this->assertSame('/admin/horses?success=created', $createResponseInj->location());
+
+        $csvAfter = $admin->get('/plugin/katalog-export/csv');
+        $this->assertStringContainsString(
+            "'" . $formulaName,
+            $csvAfter->body,
+            'Zellwert mit führendem "=" muss im Export mit Hochkomma entschärft sein.'
+        );
+        $this->assertStringNotContainsString(
+            ';' . $formulaName,
+            $csvAfter->body,
+            'Der rohe, mit "=" beginnende Wert darf nicht unentschärft direkt nach dem ;-Trenner stehen.'
+        );
     }
 }

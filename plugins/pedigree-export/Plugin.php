@@ -69,10 +69,21 @@ class ExportController extends BaseController {
     private const MAX_DEPTH = 8;
 
     public function show(): void {
+        // Öffentliche Sichtbarkeit exakt wie im Kern (PublicController::horseDetail):
+        // Pferdedaten nur, wenn die Gast-Gruppe Leserecht hat - sonst wie nicht
+        // vorhanden behandeln, damit dieser Export keine im Kern verborgenen Daten
+        // preisgibt.
+        if (!$this->hasPermission('horses', 'view')) {
+            $this->renderNotFound('Für dieses Pferd konnte kein Stammbaum ermittelt werden.');
+        }
+
         $id = isset($_GET['id']) ? (int) $_GET['id'] : 0;
         $depth = isset($_GET['depth']) ? max(2, min(self::MAX_DEPTH, (int) $_GET['depth'])) : self::DEFAULT_DEPTH;
 
-        $tree = PedigreeBuilder::build($id ?: null, $depth);
+        // publishedOnly=true (ZWINGEND für öffentliche Ausgaben, siehe
+        // PedigreeBuilder): ein unveröffentlichtes Wurzelpferd liefert damit null
+        // (=> 404), unveröffentlichte Vorfahren erscheinen nicht im Export.
+        $tree = PedigreeBuilder::build($id ?: null, $depth, true);
         if ($tree === null) {
             $this->renderNotFound('Für dieses Pferd konnte kein Stammbaum ermittelt werden.');
         }

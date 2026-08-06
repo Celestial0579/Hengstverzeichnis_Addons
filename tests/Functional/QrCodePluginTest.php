@@ -51,5 +51,22 @@ class QrCodePluginTest extends FunctionalTestCase {
         // 3. Unbekannte ID liefert 404.
         $notFound = $visitor->get('/plugin/qr-code/aushang?id=0');
         $this->assertSame(404, $notFound->statusCode);
+
+        // 4. Sicherheit: ein UNVERÖFFENTLICHTES Pferd (is_published = 0) darf über
+        // die öffentliche Aushang-Route nicht abrufbar sein - der Kern verbirgt es
+        // ebenfalls (/hengst liefert 404), das Plugin muss dieselbe Grenze wahren.
+        $unpubName = "QrUnpub-{$unique}";
+        $unpubId = $this->createHorse($admin, $unpubName, ['status' => 'active', 'is_published' => '0']);
+
+        $coreDetail = $visitor->get("/hengst?id={$unpubId}");
+        $this->assertSame(404, $coreDetail->statusCode, 'Kern sollte unveröffentlichtes Pferd verbergen (Vorbedingung).');
+
+        $unpubAushang = $visitor->get("/plugin/qr-code/aushang?id={$unpubId}");
+        $this->assertSame(
+            404,
+            $unpubAushang->statusCode,
+            "Aushang eines unveröffentlichten Pferds muss 404 liefern (kein Datenleck). Body: {$unpubAushang->body}"
+        );
+        $this->assertStringNotContainsString($unpubName, $unpubAushang->body);
     }
 }

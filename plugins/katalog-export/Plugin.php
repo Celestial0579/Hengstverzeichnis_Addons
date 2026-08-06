@@ -249,7 +249,7 @@ class ExportController extends BaseController {
         $out = fopen('php://output', 'w');
         fputcsv($out, ['ID', 'Name', 'UELN', 'Fremd-UELN', 'Geburtsjahr', 'Farbe', 'Status', 'Deckstation', 'Vater', 'Mutter', 'Züchter', 'Besitzer'], ';');
         foreach ($rows as $row) {
-            fputcsv($out, [
+            fputcsv($out, array_map([self::class, 'csvSafe'], [
                 $row['id'],
                 $row['name'],
                 $row['ueln'],
@@ -262,9 +262,26 @@ class ExportController extends BaseController {
                 $row['dam_display'],
                 $row['breeder_name'],
                 $row['owner_name'],
-            ], ';');
+            ]), ';');
         }
         fclose($out);
         exit;
+    }
+
+    /**
+     * Neutralisiert CSV-/Formel-Injection: Tabellenkalkulationen (Excel,
+     * LibreOffice) interpretieren einen Zellwert, der mit =, +, -, @ oder einem
+     * Steuerzeichen (Tab/CR) beginnt, als Formel. Ein bösartig gesetzter
+     * Pferde-/Personenname wie `=HYPERLINK(...)` könnte so beim Öffnen der
+     * exportierten Datei ausgeführt werden. Ein vorangestelltes Hochkomma zwingt
+     * die Zelle in reinen Text, ohne die angezeigten Daten zu verändern.
+     */
+    private static function csvSafe($value): string
+    {
+        $value = (string) $value;
+        if ($value !== '' && in_array($value[0], ['=', '+', '-', '@', "\t", "\r"], true)) {
+            return "'" . $value;
+        }
+        return $value;
     }
 }

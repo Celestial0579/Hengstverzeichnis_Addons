@@ -58,5 +58,33 @@ class PedigreeExportPluginTest extends FunctionalTestCase {
         // 4. Unbekannte/ungültige ID liefert 404 statt eines Fehlers.
         $notFound = $visitor->get('/plugin/pedigree-export/export?id=0');
         $this->assertSame(404, $notFound->statusCode);
+
+        // 5. Sicherheit: ein UNVERÖFFENTLICHTES Pferd (is_published = 0) darf über
+        // die öffentliche Export-Route nicht abrufbar sein - der Kern verbirgt es
+        // ebenfalls (/hengst liefert 404).
+        $unpubName = "PdfUnpub-{$unique}";
+        $unpubId = $this->createHorse($admin, $unpubName, ['status' => 'active', 'is_published' => '0']);
+
+        $coreDetail = $visitor->get("/hengst?id={$unpubId}");
+        $this->assertSame(404, $coreDetail->statusCode, 'Kern sollte unveröffentlichtes Pferd verbergen (Vorbedingung).');
+
+        $unpubExport = $visitor->get("/plugin/pedigree-export/export?id={$unpubId}");
+        $this->assertSame(
+            404,
+            $unpubExport->statusCode,
+            "Export eines unveröffentlichten Pferds muss 404 liefern (kein Datenleck). Body: {$unpubExport->body}"
+        );
+
+        // 6. Sicherheit: ein unveröffentlichter Vorfahre (per sire_id verknüpft) darf
+        // im öffentlichen Stammbaum eines veröffentlichten Nachkommens nicht auftauchen.
+        $foalOfUnpub = "PdfFohlenUnpub-{$unique}";
+        $foalOfUnpubId = $this->createHorse($admin, $foalOfUnpub, ['status' => 'active', 'sire_id' => (string) $unpubId]);
+        $foalExport = $visitor->get("/plugin/pedigree-export/export?id={$foalOfUnpubId}");
+        $this->assertSame(200, $foalExport->statusCode);
+        $this->assertStringNotContainsString(
+            $unpubName,
+            $foalExport->body,
+            'Unveröffentlichter Vorfahre darf im öffentlichen Stammbaum-Export nicht erscheinen.'
+        );
     }
 }
