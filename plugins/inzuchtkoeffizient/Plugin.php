@@ -94,21 +94,35 @@ class Plugin {
  * Verwendet die im Zuchtwesen übliche Näherungsformel
  * F = Σ (0,5)^(n1+n2+1) über alle gemeinsamen Vorfahren, wobei n1/n2 die
  * Anzahl der Generationsschritte vom jeweiligen Elternteil zum gemeinsamen
- * Vorfahren sind. Der exakte Wright-Term (1+F_A) für die Ingezüchtetheit des
- * gemeinsamen Vorfahren selbst wird bewusst nicht rekursiv nachberechnet -
+ * Vorfahren sind. Wrights Pfadregel verlangt dabei, dass in einem Pfad kein
+ * Individuum mehr als einmal vorkommt - unterhalb eines gemeinsamen
+ * Vorfahren wird daher nicht weitergesammelt, denn dessen eigene Ahnen sind
+ * nur durch ihn hindurch erreichbar und stecken korrekt ausschließlich im
+ * Term (1+F_A). Dieser Term selbst wird bewusst nicht rekursiv nachberechnet -
  * das würde bei jedem Aufruf zusätzliche, potenziell exponentiell viele
  * PedigreeBuilder-Abfragen auslösen (kein Caching, siehe
  * docs/plugin-development.md). Für die verfügbare Tiefe (max. 6-8
- * Generationen) ist die Abweichung in der Praxis gering.
+ * Generationen) ist die dadurch entstehende geringe Unterschätzung in der
+ * Praxis vernachlässigbar.
  */
 class CoiCalculator {
 
     public static function fromParentTrees(?array $sireTree, ?array $damTree): float {
+        // Erster Durchlauf ohne Abbruch: bestimmt die Menge der IDs, die in
+        // beiden Teilbäumen vorkommen (gemeinsame Vorfahren).
+        $sireAll = [];
+        self::collectAncestors($sireTree, 0, $sireAll);
+        $damAll = [];
+        self::collectAncestors($damTree, 0, $damAll);
+        $common = array_intersect_key($sireAll, $damAll);
+
+        // Zweiter Durchlauf: Pfade enden am jeweils ersten gemeinsamen
+        // Vorfahren (Wrights Pfadregel, s. Klassenkommentar).
         $sireOccurrences = [];
-        self::collectAncestors($sireTree, 0, $sireOccurrences);
+        self::collectAncestors($sireTree, 0, $sireOccurrences, $common);
 
         $damOccurrences = [];
-        self::collectAncestors($damTree, 0, $damOccurrences);
+        self::collectAncestors($damTree, 0, $damOccurrences, $common);
 
         $sum = 0.0;
         foreach ($sireOccurrences as $ancestorId => $linksFromSire) {
@@ -133,17 +147,28 @@ class CoiCalculator {
      * fließen einzeln in die Summe ein, das ist im Pfad-Koeffizienten-Verfahren
      * so vorgesehen.
      *
-     * @param array<int, int> &$map Vorfahren-ID => Liste der Schrittzahlen
+     * Ist `$stopAt` gesetzt (Menge gemeinsamer Vorfahren-IDs), endet die
+     * Rekursion an jedem darin enthaltenen Knoten: seine eigenen Ahnen dürfen
+     * nach Wrights Pfadregel nicht als weitere "gemeinsame Vorfahren" gezählt
+     * werden, da jeder Pfad zu ihnen den bereits gezählten Vorfahren erneut
+     * enthielte.
+     *
+     * @param array<int, list<int>> &$map Vorfahren-ID => Liste der Schrittzahlen
+     * @param array<int, mixed> $stopAt IDs, an denen die Rekursion endet
      */
-    private static function collectAncestors(?array $node, int $links, array &$map): void {
+    private static function collectAncestors(?array $node, int $links, array &$map, array $stopAt = []): void {
         if ($node === null || empty($node['id']) || !empty($node['is_placeholder'])) {
             return;
         }
 
         $map[$node['id']][] = $links;
 
-        self::collectAncestors($node['sire'] ?? null, $links + 1, $map);
-        self::collectAncestors($node['dam'] ?? null, $links + 1, $map);
+        if (isset($stopAt[$node['id']])) {
+            return;
+        }
+
+        self::collectAncestors($node['sire'] ?? null, $links + 1, $map, $stopAt);
+        self::collectAncestors($node['dam'] ?? null, $links + 1, $map, $stopAt);
     }
 }
 

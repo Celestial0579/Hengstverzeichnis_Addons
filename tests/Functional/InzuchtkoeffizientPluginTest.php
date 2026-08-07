@@ -9,9 +9,11 @@ namespace Tests\Functional;
  * tests/bootstrap.php und Tests\Functional\FunctionalTestCase).
  *
  * Baut einen klassischen Vollgeschwister-Verpaarungsfall auf (zwei
- * unverwandte Großeltern A/B, zwei Nachkommen C/D aus A x B, ein Fohlen E aus
- * C x D) - der erwartete Inzuchtkoeffizient von E ist exakt 25 % (zwei
- * gemeinsame Vorfahren A und B, je ein Pfad mit n1=n2=1: 2 x (0,5)^3 = 0,25).
+ * untereinander unverwandte Großeltern A/B - jeweils mit eigenen Eltern, siehe
+ * Regressionshinweis zu Issue #25 im Testkörper -, zwei Nachkommen C/D aus
+ * A x B, ein Fohlen E aus C x D) - der erwartete Inzuchtkoeffizient von E ist
+ * exakt 25 % (zwei gemeinsame Vorfahren A und B, je ein Pfad mit n1=n2=1:
+ * 2 x (0,5)^3 = 0,25).
  * Deckt sowohl den automatischen Abschnitt auf der Detailseite als auch den
  * Verpaarungsrechner samt Berechtigungsdurchsetzung ab.
  */
@@ -41,8 +43,20 @@ class InzuchtkoeffizientPluginTest extends FunctionalTestCase {
         $this->assertSame('/admin/plugins?success=1', $toggleResponse->location());
 
         $unique = uniqid();
-        $aId = $this->createHorse($admin, "A-{$unique}", ['status' => 'active']);
-        $bId = $this->createHorse($admin, "B-{$unique}", ['status' => 'active']);
+
+        // Regression zu Issue #25: Die gemeinsamen Vorfahren A und B erhalten
+        // selbst je zwei Eltern(-Generationen). Nach Wrights Pfadregel darf das
+        // den COI von E NICHT verändern (die Ahnen von A/B sind nur DURCH A/B
+        // hindurch erreichbar, ihr Beitrag steckt allein im hier bewusst
+        // weggelassenen Term (1+F_A)) - die fehlerhafte Implementierung
+        // summierte sie mit und lieferte 48,44 % statt 25,00 %.
+        $aSireId = $this->createHorse($admin, "A-Vater-{$unique}", ['status' => 'active']);
+        $aDamId = $this->createHorse($admin, "A-Mutter-{$unique}", ['status' => 'active']);
+        $bSireId = $this->createHorse($admin, "B-Vater-{$unique}", ['status' => 'active']);
+        $bDamId = $this->createHorse($admin, "B-Mutter-{$unique}", ['status' => 'active']);
+
+        $aId = $this->createHorse($admin, "A-{$unique}", ['status' => 'active', 'sire_id' => (string) $aSireId, 'dam_id' => (string) $aDamId]);
+        $bId = $this->createHorse($admin, "B-{$unique}", ['status' => 'active', 'sire_id' => (string) $bSireId, 'dam_id' => (string) $bDamId]);
         $cId = $this->createHorse($admin, "C-{$unique}", ['status' => 'active', 'sire_id' => (string) $aId, 'dam_id' => (string) $bId]);
         $dId = $this->createHorse($admin, "D-{$unique}", ['status' => 'active', 'sire_id' => (string) $aId, 'dam_id' => (string) $bId]);
         $eId = $this->createHorse($admin, "E-{$unique}", ['status' => 'active', 'sire_id' => (string) $cId, 'dam_id' => (string) $dId]);
@@ -57,7 +71,7 @@ class InzuchtkoeffizientPluginTest extends FunctionalTestCase {
             "Detailseite von E sollte den berechneten Inzuchtkoeffizienten von 25,00 % enthalten. Body: {$detailPage->body}"
         );
 
-        // 2. Ein unverwandtes Pferd (A) hat COI 0,00 % (kein Stammbaum vorhanden).
+        // 2. Ein Pferd ohne gemeinsame Vorfahren beider Elternseiten (A) hat COI 0,00 %.
         $unrelatedDetail = $visitor->get("/hengst?id={$aId}");
         $this->assertStringContainsString('0,00 %', $unrelatedDetail->body);
 
