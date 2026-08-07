@@ -56,6 +56,9 @@ Danach unter **Admin → Plugins verwalten** (`/admin/plugins`) aktivieren.
 - [`genealogie-vergleich`](plugins/genealogie-vergleich/README.md) - stellt
   die Stammbäume zweier Pferde nebeneinander dar und hebt gemeinsame
   Vorfahren hervor.
+- [`anpaarungs-empfehlung`](plugins/anpaarungs-empfehlung/README.md) - rankt
+  für ein ausgewähltes Pferd alle möglichen Partner nach dem voraussichtlichen
+  Inzuchtkoeffizienten eines Fohlens (geringste Inzucht zuerst).
 
 ## Automatisierte Tests
 
