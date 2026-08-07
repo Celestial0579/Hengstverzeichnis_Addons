@@ -60,6 +60,9 @@ Danach unter **Admin → Plugins verwalten** (`/admin/plugins`) aktivieren.
   für das Fjordpferd: schätzt die Fohlenfarbe aus den Farben zweier
   Elterntiere über die fünf anerkannten Falbfarben und ordnet die eingetragene
   Farbe auf der Detailseite genetisch ein.
+- [`anpaarungs-empfehlung`](plugins/anpaarungs-empfehlung/README.md) - rankt
+  für ein ausgewähltes Pferd alle möglichen Partner nach dem voraussichtlichen
+  Inzuchtkoeffizienten eines Fohlens (geringste Inzucht zuerst).
 
 ## Automatisierte Tests
 
