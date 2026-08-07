@@ -66,7 +66,10 @@ class Plugin {
 class ExportController extends BaseController {
 
     private const DEFAULT_DEPTH = 6;
-    private const MAX_DEPTH = 8;
+    // Gedeckelt auf die Kern-Tiefe von /hengst (6 Generationen): die Route ist
+    // anonym erreichbar, eine größere wählbare Tiefe würde pro Request
+    // exponentiell mehr Datenbank-Abfragen erlauben als der Kern selbst.
+    private const MAX_DEPTH = 6;
 
     public function show(): void {
         // Öffentliche Sichtbarkeit exakt wie im Kern (PublicController::horseDetail):
