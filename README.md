@@ -56,6 +56,10 @@ Danach unter **Admin → Plugins verwalten** (`/admin/plugins`) aktivieren.
 - [`genealogie-vergleich`](plugins/genealogie-vergleich/README.md) - stellt
   die Stammbäume zweier Pferde nebeneinander dar und hebt gemeinsame
   Vorfahren hervor.
+- [`farbvererbung`](plugins/farbvererbung/README.md) - Farbvererbungsrechner
+  für das Fjordpferd: schätzt die Fohlenfarbe aus den Farben zweier
+  Elterntiere über die fünf anerkannten Falbfarben und ordnet die eingetragene
+  Farbe auf der Detailseite genetisch ein.
 
 ## Automatisierte Tests
 
