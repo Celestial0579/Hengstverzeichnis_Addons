@@ -13,19 +13,19 @@
             "source": {
                 "type": "git",
                 "url": "https://github.com/Celestial0579/Hengstverzeichnis_Framework.git",
-                "reference": "c7506dbe8bf4a24f7e5150808617fad30047b6ec"
+                "reference": "6464a638d02f53202c9672b1ed22deb0ff907231"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/Celestial0579/Hengstverzeichnis_Framework/zipball/c7506dbe8bf4a24f7e5150808617fad30047b6ec",
-                "reference": "c7506dbe8bf4a24f7e5150808617fad30047b6ec",
+                "url": "https://api.github.com/repos/Celestial0579/Hengstverzeichnis_Framework/zipball/6464a638d02f53202c9672b1ed22deb0ff907231",
+                "reference": "6464a638d02f53202c9672b1ed22deb0ff907231",
                 "shasum": ""
             },
             "require": {
-                "php": ">=8.3"
+                "php": ">=8.5"
             },
             "require-dev": {
-                "phpunit/phpunit": "^11.5"
+                "phpunit/phpunit": "^13.2"
             },
             "default-branch": true,
             "type": "project",
@@ -52,7 +52,7 @@
                 "source": "https://github.com/Celestial0579/Hengstverzeichnis_Framework/tree/main",
                 "issues": "https://github.com/Celestial0579/Hengstverzeichnis_Framework/issues"
             },
-            "time": "2026-08-05T21:02:17+00:00"
+            "time": "2026-08-08T18:23:30+00:00"
         },
         {
             "name": "myclabs/deep-copy",
