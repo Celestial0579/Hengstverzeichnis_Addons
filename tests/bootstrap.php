@@ -21,6 +21,29 @@
 
 require __DIR__ . '/../vendor/autoload.php';
 
+// DB_*-Konstanten für DIESEN Prozess. Die Functional-Suite startet die App zwar
+// als eigenen `php -S`-Subprozess, aber FunctionalTestCase greift zwischendurch
+// direkt aus dem PHPUnit-Prozess auf die Datenbank zu (resetTotpReplayGuard()
+// ruft App\Database::getInstance(), das DB_HOST/DB_NAME/... als Konstanten
+// erwartet, siehe src/Database.php).
+//
+// Mit dem aktuell in composer.lock festgenagelten Framework-Stand läuft es auch
+// ohne diesen Block; gegen Framework-main bricht sonst JEDER Functional-Test mit
+// 'Undefined constant "App\DB_HOST"' ab. Er steht deshalb hier, BEVOR composer.lock
+// nachgezogen wird - sonst sähe das Nachziehen später wie die Ursache aus.
+//
+// Bewusst dieselbe Bauart wie tests/bootstrap.php des Frameworks: nur aus der
+// Umgebung, nur wenn DB_HOST gesetzt ist, und NICHT über config/config.php --
+// das setzt eine vollständig konfigurierte Instanz voraus.
+if (getenv('DB_HOST') !== false && !defined('DB_HOST')) {
+    define('DB_HOST', getenv('DB_HOST'));
+    define('DB_PORT', getenv('DB_PORT') ?: '3306');
+    define('DB_NAME', getenv('DB_NAME') ?: 'hengst_addons_functional');
+    define('DB_USER', getenv('DB_USER') ?: 'root');
+    define('DB_PASS', getenv('DB_PASS') ?: '');
+    define('APP_ENV', getenv('APP_ENV') ?: 'development');
+}
+
 const FRAMEWORK_VENDOR_DIR = __DIR__ . '/../vendor/hengstverzeichnis/framework';
 const ADDON_PLUGINS_DIR = __DIR__ . '/../plugins';
 

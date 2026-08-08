@@ -246,8 +246,16 @@ class ExportController extends BaseController {
         // die Datei fälschlich als ANSI zu interpretieren.
         echo "\xEF\xBB\xBF";
 
+        // $escape MUSS explizit leer sein. PHPs Vorgabe "\\" ist kein CSV-Standard:
+        // Ein Zellwert, der \" enthält, wird damit als \" statt als "" geschrieben,
+        // und jeder RFC-4180-Parser (Excel, LibreOffice) sieht das Feld an dieser
+        // Stelle enden. Alles danach landet in NEUEN Feldern, die csvSafe() nie
+        // gesehen hat — ein Wert wie `Name\";=FORMEL(...)` schleust so trotz
+        // csvSafe() eine Formel ein. Mit '' wird das " regelkonform verdoppelt und
+        // der Wert bleibt ein Feld. PHP 8.4+ verlangt den Parameter ohnehin
+        // ausdrücklich (Deprecation), weil sich die Vorgabe ändern wird.
         $out = fopen('php://output', 'w');
-        fputcsv($out, ['ID', 'Name', 'UELN', 'Fremd-UELN', 'Geburtsjahr', 'Farbe', 'Status', 'Deckstation', 'Vater', 'Mutter', 'Züchter', 'Besitzer'], ';');
+        fputcsv($out, ['ID', 'Name', 'UELN', 'Fremd-UELN', 'Geburtsjahr', 'Farbe', 'Status', 'Deckstation', 'Vater', 'Mutter', 'Züchter', 'Besitzer'], ';', '"', '');
         foreach ($rows as $row) {
             fputcsv($out, array_map([self::class, 'csvSafe'], [
                 $row['id'],
@@ -262,7 +270,7 @@ class ExportController extends BaseController {
                 $row['dam_display'],
                 $row['breeder_name'],
                 $row['owner_name'],
-            ]), ';');
+            ]), ';', '"', '');
         }
         fclose($out);
         exit;

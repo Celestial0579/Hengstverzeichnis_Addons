@@ -106,5 +106,62 @@ class KatalogExportPluginTest extends FunctionalTestCase {
             $csvAfter->body,
             'Der rohe, mit "=" beginnende Wert darf nicht unentschärft direkt nach dem ;-Trenner stehen.'
         );
+
+        // 8. Sicherheit: Ausbruch aus dem Feld. csvSafe() prüft nur das ERSTE Zeichen
+        // eines Wertes - ein Name, der mittendrin \" enthält, beginnt harmlos und
+        // kommt daran vorbei. Schreibt fputcsv() mit PHPs Vorgabe-$escape "\\", wird
+        // das " nicht verdoppelt, ein RFC-4180-Parser beendet das Feld dort, und der
+        // Rest des Namens wird zu EIGENEN Feldern - eines davon mit "=" beginnend,
+        // also eine Formel, die csvSafe() nie zu sehen bekam.
+        //
+        // Deshalb wird hier nicht im Rohtext gesucht, sondern so geparst, wie Excel
+        // und LibreOffice es tun (str_getcsv mit leerem $escape = strikt RFC 4180).
+        $breakoutName = "CsvBreak-{$unique}" . '\\";=CsvInjectBreak-' . $unique;
+        $createFormBreak = $admin->get('/admin/horses/create');
+        $createResponseBreak = $admin->post('/admin/horses/store', [
+            'csrf_token' => $createFormBreak->formField('csrf_token') ?? '',
+            'name' => $breakoutName,
+            'status' => 'active',
+        ]);
+        $this->assertSame('/admin/horses?success=created', $createResponseBreak->location());
+
+        $csvBreak = $admin->get('/plugin/katalog-export/csv');
+        $this->assertSame(200, $csvBreak->statusCode);
+
+        $row = null;
+        foreach (preg_split('/\r\n|\n/', $csvBreak->body) as $line) {
+            if (str_contains($line, "CsvBreak-{$unique}")) {
+                $row = str_getcsv($line, ';', '"', '');
+                break;
+            }
+        }
+        $this->assertNotNull($row, 'Das Testpferd muss im Export auftauchen.');
+
+        $this->assertCount(
+            12,
+            $row,
+            'Der Export hat 12 Spalten. Mehr Felder heißt: ein Zellwert ist aus seinem '
+            . 'Feld ausgebrochen - dann stimmt die Spaltenzuordnung nicht mehr und '
+            . 'csvSafe() greift für die entstandenen Felder nicht.'
+        );
+
+        foreach ($row as $index => $field) {
+            $this->assertNotContains(
+                substr((string) $field, 0, 1),
+                ['=', '+', '-', '@', "\t", "\r"],
+                sprintf(
+                    'Feld %d beginnt mit einem Formelzeichen (%s) - Excel/LibreOffice '
+                    . 'würden es beim Öffnen auswerten.',
+                    $index,
+                    var_export($field, true)
+                )
+            );
+        }
+
+        $this->assertContains(
+            $breakoutName,
+            $row,
+            'Der Name muss vollständig in genau einem Feld stehen.'
+        );
     }
 }
