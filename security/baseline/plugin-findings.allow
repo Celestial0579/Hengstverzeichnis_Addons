@@ -1,0 +1,6 @@
+# plugin-findings.allow — bewusst akzeptierte Funde des statischen Plugin-Checks.
+# Eine Zeile je Muster "<plugin>|<titel>" (Teilstring). Ein Treffer zaehlt als
+# akzeptiert und blockiert nicht. Nur fuer gepruefte, dokumentierte Ausnahmen —
+# der Anlass gehoert in die PR-Beschreibung.
+#
+# (leer: derzeit keine Ausnahmen)
