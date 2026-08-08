@@ -20,6 +20,15 @@
         <testsuite name="Manifest">
             <directory>tests/Manifest</directory>
         </testsuite>
+        <!-- Rechenkerne einzelner Plugins, die als reine Funktionen prüfbar sind -
+             ohne Datenbank, ohne laufende Framework-Instanz, in Millisekunden.
+             Gedacht für Fälle, die über HTTP nur mit unverhältnismäßigem Aufwand
+             abzubilden wären (z. B. viele Verwandtschaftsgrade beim COI). Das
+             Zusammenspiel eines Plugins mit dem Kern gehört weiterhin nach
+             tests/Functional. -->
+        <testsuite name="Unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
         <!-- Ein Test pro Plugin, der es tatsächlich in eine laufende
              Hengstverzeichnis_Framework-Instanz aktiviert und per HTTP durchspielt
              (siehe tests/bootstrap.php für die Kopie nach vendor/.../plugins). -->

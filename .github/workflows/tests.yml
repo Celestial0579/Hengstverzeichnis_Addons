@@ -57,6 +57,16 @@ jobs:
       - name: Run Manifest tests
         run: composer test:manifest
 
+      # Die Unit-Suite läuft bewusst in DIESEM Job und nicht in einem eigenen:
+      # Sie braucht wie die Manifest-Suite weder Datenbank noch laufende
+      # Instanz, und der Job-Name "Plugin-Manifest-Prüfung" ist als
+      # Pflicht-Check in der Branch-Protection von main hinterlegt. Ein eigener
+      # Job hiesse ein neuer Check-Name, der dort erst eingetragen werden
+      # müsste - bis dahin könnte die Suite rot werden, ohne einen Merge zu
+      # verhindern. Genau das soll nicht passieren.
+      - name: Run Unit tests
+        run: composer test:unit
+
   functional:
     name: Plugin-Functional-Tests
     runs-on: ubuntu-latest
