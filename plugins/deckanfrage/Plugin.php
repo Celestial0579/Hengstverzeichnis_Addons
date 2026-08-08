@@ -152,10 +152,16 @@ class AnfrageController extends BaseController {
         }
 
         $db = Database::getInstance();
+        // bs.is_published = 1 spiegelt exakt den JOIN der oeffentlichen
+        // Detailseite (Kern-#122): Das Formular erscheint nur bei
+        // veroeffentlichter Station - ohne denselben Filter hier liesse sich
+        // per direktem POST (gueltiger CSRF-Token von jeder Seite) weiterhin
+        // an eine bewusst unveroeffentlichte Station versenden. Anzeige und
+        // Verarbeitung muessen dieselbe Sichtbarkeitsregel anwenden.
         $stmt = $db->prepare(
             'SELECT h.id, h.name, bs.email AS station_email, bs.name AS station_name
              FROM horses h
-             LEFT JOIN breeding_stations bs ON h.breeding_station_id = bs.id AND bs.deleted_at IS NULL
+             LEFT JOIN breeding_stations bs ON h.breeding_station_id = bs.id AND bs.deleted_at IS NULL AND bs.is_published = 1
              WHERE h.id = ? AND h.deleted_at IS NULL AND h.is_published = 1'
         );
         $stmt->execute([$horseId]);

@@ -126,6 +126,43 @@ class DeckanfragePluginTest extends FunctionalTestCase {
             'Unveröffentlichte Pferde müssen denselben Status wie der Honeypot-Pfad liefern (kein Existenz-Orakel).'
         );
 
+        // 6b. Härtung analog für die STATION: Ein veröffentlichtes Pferd,
+        // dessen Deckstation UNveröffentlicht ist, zeigt das Formular nicht
+        // (Kern-#122/#151) - dann darf auch ein direkter POST mit gültigem
+        // CSRF-Token nichts an die Station versenden. Der Handler wendet
+        // denselben bs.is_published-Filter an wie die Anzeige und antwortet
+        // wie beim Honeypot-Pfad mit "erfolg" (stillschweigend verworfen,
+        // kein Existenz-Orakel, keine E-Mail). Vor der Härtung antwortete er
+        // hier mit "fehler", weil er den Versand tatsächlich versuchte.
+        $hiddenStationForm = $admin->get('/admin/breeding-stations/create');
+        $hiddenStationName = "VerborgeneStation-{$unique}";
+        $hiddenStationResponse = $admin->post('/admin/breeding-stations/store', [
+            'csrf_token' => $hiddenStationForm->formField('csrf_token') ?? '',
+            'name' => $hiddenStationName,
+            'email' => "verborgen-{$unique}@example.test",
+            // KEIN is_published: bleibt auf dem Spalten-Default 0.
+        ]);
+        $this->assertSame('/admin/breeding-stations?success=created', $hiddenStationResponse->location());
+        $hiddenStationId = $this->findBreedingStationIdByName($admin, $hiddenStationName);
+
+        $horseWithHiddenStation = $this->createHorse($admin, "MitVerborgenerStation-{$unique}", [
+            'status' => 'active',
+            'persons' => [['role' => 'owner', 'breeding_station_id' => (string) $hiddenStationId]],
+        ]);
+        $hiddenStationPost = $visitor->post('/plugin/deckanfrage/anfrage', [
+            'csrf_token' => $csrfToken,
+            'horse_id' => (string) $horseWithHiddenStation,
+            'requester_name' => 'Direkter Poster',
+            'requester_email' => 'direkt@example.test',
+            'message' => 'Anfrage an eine unveröffentlichte Station.',
+        ]);
+        $this->assertSame(
+            "/hengst?id={$horseWithHiddenStation}&deckanfrage=erfolg",
+            $hiddenStationPost->location(),
+            'Eine unveröffentlichte Station darf per Direkt-POST nicht erreichbar sein - '
+            . 'stillschweigend verwerfen wie beim Honeypot, kein Versand, kein Orakel.'
+        );
+
         // 7. CSRF-Schutz: fehlendes/ungültiges Token wird abgewiesen.
         $csrfRejected = $visitor->post('/plugin/deckanfrage/anfrage', [
             'csrf_token' => 'invalid-token',
