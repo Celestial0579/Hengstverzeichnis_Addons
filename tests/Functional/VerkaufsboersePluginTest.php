@@ -73,6 +73,30 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
         $this->assertStringContainsString($horseName, $listePage->body);
         $this->assertStringContainsString('1.500,00 €', $listePage->body);
 
+        // 5b. Regression zu Issue #24: Ein Inserat für ein UNVERÖFFENTLICHTES
+        // Pferd darf in der öffentlichen Übersicht nicht erscheinen - /hengst
+        // liefert für dieses Pferd 404, die Börse darf Name/Preis nicht doch
+        // preisgeben.
+        $unpublishedName = "UnveroeffentlichtVerkauf-{$unique}";
+        $unpublishedId = $this->createHorse($admin, $unpublishedName, [
+            'status' => 'active',
+            'is_published' => '0',
+        ]);
+        $unpublishedStore = $admin->post('/plugin/verkaufsboerse/verwaltung/store', [
+            'csrf_token' => $verwaltungPage->formField('csrf_token') ?? '',
+            'horse_id' => (string) $unpublishedId,
+            'price' => '18500.00',
+            'contact_email' => $contactEmail,
+        ]);
+        $this->assertSame('/plugin/verkaufsboerse/verwaltung', $unpublishedStore->location());
+
+        $listeWithUnpublished = $visitor->get('/plugin/verkaufsboerse/liste');
+        $this->assertStringNotContainsString(
+            $unpublishedName,
+            $listeWithUnpublished->body,
+            'Unveröffentlichte Pferde dürfen nicht in der öffentlichen Verkaufsbörse erscheinen.'
+        );
+
         // 6. Detailseite zeigt jetzt automatisch das Badge inkl. Preis und Formular.
         $detailAfter = $visitor->get("/hengst?id={$horseId}");
         $this->assertStringContainsString('Zum Verkauf', $detailAfter->body);

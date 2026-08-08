@@ -155,10 +155,16 @@ class Plugin {
 class ListeController extends BaseController {
 
     public function show(): void {
+        // Öffentliche Sichtbarkeit exakt wie im Kern (PublicController::catalog):
+        // Liste nur, wenn die Gast-Gruppe Pferde sehen darf.
+        if (!$this->hasPermission('horses', 'view')) {
+            $this->renderNotFound('Nicht gefunden.');
+        }
+
         $listings = Database::getInstance()->query(
             'SELECT l.*, h.name AS horse_name, h.birth_year, h.color, h.image_url
              FROM `plugin_verkaufsboerse_listings` l
-             JOIN horses h ON h.id = l.horse_id AND h.deleted_at IS NULL
+             JOIN horses h ON h.id = l.horse_id AND h.deleted_at IS NULL AND h.is_published = 1
              WHERE l.listed_until IS NULL OR l.listed_until >= CURDATE()
              ORDER BY l.listed_at DESC'
         )->fetchAll(PDO::FETCH_ASSOC);
@@ -381,8 +387,9 @@ class KontaktController extends BaseController {
         $stmt = $db->prepare(
             'SELECT l.contact_email, h.name AS horse_name
              FROM `plugin_verkaufsboerse_listings` l
-             JOIN horses h ON h.id = l.horse_id AND h.deleted_at IS NULL
-             WHERE l.horse_id = ?'
+             JOIN horses h ON h.id = l.horse_id AND h.deleted_at IS NULL AND h.is_published = 1
+             WHERE l.horse_id = ?
+               AND (l.listed_until IS NULL OR l.listed_until >= CURDATE())'
         );
         $stmt->execute([$horseId]);
         $listing = $stmt->fetch(PDO::FETCH_ASSOC);

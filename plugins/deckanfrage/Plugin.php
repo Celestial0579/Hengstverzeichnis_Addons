@@ -148,13 +148,16 @@ class AnfrageController extends BaseController {
             'SELECT h.id, h.name, bs.email AS station_email, bs.name AS station_name
              FROM horses h
              LEFT JOIN breeding_stations bs ON h.breeding_station_id = bs.id AND bs.deleted_at IS NULL
-             WHERE h.id = ? AND h.deleted_at IS NULL'
+             WHERE h.id = ? AND h.deleted_at IS NULL AND h.is_published = 1'
         );
         $stmt->execute([$horseId]);
         $horse = $stmt->fetch();
 
+        // Nicht auffindbares/unveröffentlichtes Pferd: stillschweigend verwerfen
+        // und wie beim Honeypot "erfolg" melden - der Redirect-Status darf kein
+        // Existenz-Orakel für im Kern verborgene Pferde-IDs sein.
         if (!$horse || empty($horse['station_email'])) {
-            $this->redirectBack($horseId, 'fehler');
+            $this->redirectBack($horseId, 'erfolg');
         }
 
         $insertStmt = $db->prepare(

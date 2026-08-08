@@ -97,7 +97,29 @@ class DeckanfragePluginTest extends FunctionalTestCase {
         $detailAfter = $visitor->get("/hengst?id={$horseWithStation}&deckanfrage=fehler");
         $this->assertStringContainsString('konnte nicht versendet werden', $detailAfter->body);
 
-        // 6. CSRF-Schutz: fehlendes/ungültiges Token wird abgewiesen.
+        // 6. Regression zu Issue #26: Ein UNVERÖFFENTLICHTES Pferd (auch mit
+        // Deckstation) darf über den Redirect-Status kein Existenz-Orakel
+        // liefern - die Anfrage wird stillschweigend verworfen und wie beim
+        // Honeypot als "erfolg" beantwortet, es geht keine E-Mail raus.
+        $unpublishedHorse = $this->createHorse($admin, "Unveroeffentlicht-{$unique}", [
+            'status' => 'active',
+            'is_published' => '0',
+            'persons' => [['role' => 'owner', 'breeding_station_id' => (string) $stationId]],
+        ]);
+        $unpublishedResponse = $visitor->post('/plugin/deckanfrage/anfrage', [
+            'csrf_token' => $csrfToken,
+            'horse_id' => (string) $unpublishedHorse,
+            'requester_name' => 'Neugieriger Dritter',
+            'requester_email' => 'dritter@example.test',
+            'message' => 'Gibt es dieses Pferd?',
+        ]);
+        $this->assertSame(
+            "/hengst?id={$unpublishedHorse}&deckanfrage=erfolg",
+            $unpublishedResponse->location(),
+            'Unveröffentlichte Pferde müssen denselben Status wie der Honeypot-Pfad liefern (kein Existenz-Orakel).'
+        );
+
+        // 7. CSRF-Schutz: fehlendes/ungültiges Token wird abgewiesen.
         $csrfRejected = $visitor->post('/plugin/deckanfrage/anfrage', [
             'csrf_token' => 'invalid-token',
             'horse_id' => (string) $horseWithStation,

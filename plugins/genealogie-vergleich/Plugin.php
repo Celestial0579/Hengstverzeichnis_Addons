@@ -72,7 +72,11 @@ class Plugin {
 class VergleichController extends BaseController {
 
     private const DEFAULT_DEPTH = 5;
-    private const MAX_DEPTH = 7;
+    // Gedeckelt auf die Kern-Tiefe von /hengst (6 Generationen): die Route ist
+    // anonym erreichbar und baut zwei Bäume pro Request auf - eine größere
+    // wählbare Tiefe würde exponentiell mehr Datenbank-Abfragen erlauben als
+    // der Kern selbst.
+    private const MAX_DEPTH = 6;
 
     public function show(): void {
         // Öffentliche Sichtbarkeit exakt wie im Kern (PublicController::horseDetail):
