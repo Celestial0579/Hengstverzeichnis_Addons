@@ -1,9 +1,9 @@
 {
     "slug": "pedigree-export",
     "name": "Pedigree-Export (Druck/PDF)",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "core_compatibility": ">=0.1.0-beta.1",
-    "description": "Druckoptimierte, eigenständige Ansicht des Stammbaums eines Pferdes (bis zu 8 Generationen) zum Sichern als PDF über die Browser-Druckfunktion - verlinkt automatisch von der öffentlichen Pferde-Detailseite.",
+    "description": "Druckoptimierte, eigenständige Ansicht des Stammbaums eines Pferdes (bis zu 6 Generationen) zum Sichern als PDF über die Browser-Druckfunktion - verlinkt automatisch von der öffentlichen Pferde-Detailseite.",
     "author": "Hengstverzeichnis_Addons",
     "hooks": ["horse.detail_sections"],
     "entry": "Plugin.php"

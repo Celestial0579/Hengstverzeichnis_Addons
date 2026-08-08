@@ -21,10 +21,16 @@ der gewünschten Gruppe unter `/admin/groups` die Berechtigung
 
 - Über `/plugin/zuchtschau-ergebnisse/ergebnisse` Ergebnisse für ein
   bestehendes Pferd erfassen (Veranstaltung, Datum, Kategorie, Note,
-  Platzierung, Richter, Kommentar) oder löschen.
+  Platzierung, Richter, Kommentar) oder löschen (POST-Routen
+  `/ergebnisse/store` und `/ergebnisse/delete`; Tabelle
+  `plugin_zuchtschau_ergebnisse`).
 - Erfasste Ergebnisse erscheinen automatisch chronologisch (neuestes zuerst)
   auf der öffentlichen Detailseite des jeweiligen Pferdes - der Abschnitt
-  wird nur angezeigt, wenn mindestens ein Ergebnis vorliegt.
+  wird nur angezeigt, wenn mindestens ein Ergebnis vorliegt. **Es gibt kein
+  Freigabe-Häkchen** (anders als bei `gesundheitstests`): alles, was hier
+  erfasst wird, ist bei veröffentlichtem Pferd sofort öffentlich sichtbar -
+  einschließlich des Freitext-Kommentars, der Richternamen und Bewertungen
+  enthalten kann.
 
 ## Berechtigungen
 

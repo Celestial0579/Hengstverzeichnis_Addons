@@ -13,14 +13,19 @@ cp -r genealogie-vergleich /pfad/zu/Hengstverzeichnis_Framework/plugins/genealog
 ```
 
 Danach unter **Admin → Plugins verwalten** (`/admin/plugins`) aktivieren.
-Keine Berechtigung nötig - das Tool zeigt ausschließlich Kombinationen von
-Daten, die für jedes einzelne Pferd bereits öffentlich über `/hengst?id=...`
-einsehbar sind.
+Keine plugin-eigene Berechtigung nötig - das Tool zeigt ausschließlich
+Kombinationen von Daten, die für jedes einzelne Pferd bereits öffentlich über
+`/hengst?id=...` einsehbar sind. Es gelten dieselben Sichtbarkeitsregeln:
+Ohne `horses.view` der Gast-Gruppe liefert die Route eine 404, zur Auswahl
+stehen nur veröffentlichte Pferde, und unveröffentlichte Vorfahren erscheinen
+nur als Platzhalter - sie werden auch nicht als "gemeinsam" gezählt. Das Tool
+kann deshalb weniger gemeinsame Vorfahren finden als eine Sicht auf die
+vollständigen Daten im Admin-Bereich.
 
 ## Nutzung
 
 - Direkt über `/plugin/genealogie-vergleich` aufrufen und zwei Pferde
-  auswählen (optional Generationstiefe 2-7 anpassen, Standard 5).
+  auswählen (optional Generationstiefe 2-6 anpassen, Standard 5).
 - Oder von der Pferde-Detailseite aus über den Link "🔬 Stammbaum mit einem
   anderen Pferd vergleichen" - startet das Tool mit diesem Pferd bereits als
   erste Auswahl vorbelegt (`?horse_a=<id>`).

@@ -18,13 +18,20 @@ der gewünschten Gruppe unter `/admin/groups` die Berechtigung
 
 ## Enthaltene Kennzahlen (`/plugin/statistik-dashboard/statistik`)
 
-- Anzahl aktiver/inaktiver/verstorbener Pferde (Gesamtzahl + je Status)
+- Anzahl aktiver/inaktiver/verstorbener Pferde je Status; die Kachel
+  "Pferde gesamt" summiert genau diese drei Status - Datensätze mit
+  abweichendem oder leerem Status zählen dort nicht mit
 - Verteilung nach Deckstation (Top 15)
 - Wachstum der Datenbank über Zeit (neu angelegte Pferde je Jahr, basierend
   auf `created_at`)
 - Top-Blutlinien: meistgenutzte Väter und Mütter (Top 10 je Elternteil,
   berücksichtigt sowohl verknüpfte Pferde über `sire_id`/`dam_id` als auch
   unverknüpfte Namenseinträge über `sire_name`/`dam_name`)
+
+Alle Kennzahlen beziehen sich auf den Gesamtbestand (nur gelöschte
+Datensätze ausgenommen), also **einschließlich unveröffentlichter** Pferde
+und Stationen - als berechtigungsgeschützte Verwaltungssicht gewollt. Die
+Zahlen weichen deshalb von der öffentlichen Katalogsicht ab.
 
 ## Berechtigungen
 

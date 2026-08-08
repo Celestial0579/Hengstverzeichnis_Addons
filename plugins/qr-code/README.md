@@ -14,8 +14,13 @@ cp -r qr-code /pfad/zu/Hengstverzeichnis_Framework/plugins/qr-code
 ```
 
 Danach unter **Admin → Plugins verwalten** (`/admin/plugins`) aktivieren.
-Keine Berechtigung nötig - zeigt nur eine andere Aufbereitung der ohnehin
-öffentlich einsehbaren Profil-URL.
+Keine plugin-eigene Berechtigung nötig. Die Aushang-Route
+(`/plugin/qr-code/aushang?id=<horse_id>`) zeigt neben der Profil-URL auch
+Foto und Name des Pferdes und folgt denselben Sichtbarkeitsregeln wie die
+Detailseite: ohne `horses.view` der Gast-Gruppe oder bei unveröffentlichtem
+Pferd eine 404. Der QR-Code kodiert die Profil-URL auf Basis der gerade
+aufgerufenen Domain (`window.location.origin`) - auf einer
+Staging-/Vorschau-Domain zeigt er entsprechend dorthin.
 
 ## Warum keine neue Abhängigkeit?
 

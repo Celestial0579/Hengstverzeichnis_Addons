@@ -11,6 +11,12 @@ den voraussichtlichen Inzuchtkoeffizienten (Wright's COI) eines gemeinsamen
 Fohlens und sortiert die Vorschläge aufsteigend, also die vielfältigste
 (niedrigster COI) Verpaarung zuerst. Verpaarungen ab einem Fohlen-COI von
 6,25 % (etwa Halbgeschwister- bzw. Onkel/Nichte-Niveau) werden optisch markiert.
+Als Kandidaten zählen alle nicht gelöschten Pferde des Registers, auch
+unveröffentlichte, und die Stammbäume werden ungefiltert geladen - für eine
+berechtigungsgeschützte Zucht-Auswertung gewollt; die Werte können deshalb von
+der öffentlichen Detailseite abweichen, die nur veröffentlichte Vorfahren
+einbezieht. Die Route ist nur per direkter URL erreichbar, das Addon
+registriert keine Dashboard-Kachel und keinen Hook.
 
 Generationstiefe (1–8) und Anzahl der Vorschläge sind einstellbar.
 
@@ -30,9 +36,20 @@ damit es unabhängig davon funktioniert, ob `inzuchtkoeffizient` aktiviert ist.
 Näherung `F = Σ (0,5)^(n1+n2+1)` über alle gemeinsamen Vorfahren, ausgewertet
 über den verfügbaren Stammbaum (Standard 5, bis zu 8 Generationen). Der exakte
 Wright-Term für die Eigen-Ingezüchtetheit gemeinsamer Vorfahren wird – wie beim
-`inzuchtkoeffizient`-Addon – nicht rekursiv nachberechnet. Die Empfehlung ist
-eine genetische Kennzahl, keine vollständige züchterische Bewertung. Für die
-Farbprognose siehe das Addon `farbvererbung`.
+`inzuchtkoeffizient`-Addon – nicht rekursiv nachberechnet.
+
+**Bekannte Abweichung zum `inzuchtkoeffizient`-Addon:** Dessen Rechenkern
+wendet inzwischen Wrights Pfadregel an (die Ahnen eines bereits gezählten
+gemeinsamen Vorfahren zählen nicht zusätzlich); die hiesige Näherung summiert
+dagegen über **alle** gemeinsamen Vorfahren weiter. Sobald ein gemeinsamer
+Vorfahre selbst bekannte Vorfahren im Baum hat, liefert dieses Addon deshalb
+systematisch **höhere** COI-Werte als der Verpaarungsrechner. Für das Ranking
+(aufsteigende Sortierung) ist das meist unschädlich, die absoluten Prozentwerte
+beider Addons sind aber nicht vergleichbar. Eine Angleichung an die
+Pfadregel steht aus.
+
+Die Empfehlung ist eine genetische Kennzahl, keine vollständige züchterische
+Bewertung. Für die Farbprognose siehe das Addon `farbvererbung`.
 
 ## Installation
 
