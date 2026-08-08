@@ -61,18 +61,35 @@ class Plugin {
  * HTTP/Controller. Verwendet die im Zuchtwesen übliche Näherung
  * F = Σ (0,5)^(n1+n2+1) über alle gemeinsamen Vorfahren beider Elterntiere,
  * wobei n1/n2 die Generationsschritte vom jeweiligen Elternteil zum
- * gemeinsamen Vorfahren sind. Der exakte Wright-Term (1+F_A) für die
- * Ingezüchtetheit des gemeinsamen Vorfahren selbst wird - wie beim
- * Inzuchtkoeffizient-Addon - bewusst nicht rekursiv nachberechnet.
+ * gemeinsamen Vorfahren sind - MIT Wrights Pfadregel, identisch zum
+ * CoiCalculator des Inzuchtkoeffizient-Addons: Pfade enden am jeweils
+ * ersten gemeinsamen Vorfahren, dessen eigene Ahnen zählen nicht zusätzlich
+ * (jeder Pfad zu ihnen enthielte den bereits gezählten Vorfahren erneut).
+ * Eine frühere Fassung ließ die Regel weg und lieferte dadurch systematisch
+ * HÖHERE Werte als der Verpaarungsrechner, sobald ein gemeinsamer Vorfahre
+ * selbst bekannte Ahnen im Baum hatte - die Absolutwerte beider Addons waren
+ * nicht vergleichbar. Der exakte Wright-Term (1+F_A) für die Ingezüchtetheit
+ * des gemeinsamen Vorfahren selbst wird - wie dort - bewusst nicht rekursiv
+ * nachberechnet.
  */
 class CoiEstimator {
 
     public static function fromParentTrees(?array $sireTree, ?array $damTree): float {
+        // Erster Durchlauf ohne Abbruch: Menge der IDs, die in beiden
+        // Teilbäumen vorkommen (gemeinsame Vorfahren).
+        $sireAll = [];
+        self::collectAncestors($sireTree, 0, $sireAll);
+        $damAll = [];
+        self::collectAncestors($damTree, 0, $damAll);
+        $common = array_intersect_key($sireAll, $damAll);
+
+        // Zweiter Durchlauf: Pfade enden am jeweils ersten gemeinsamen
+        // Vorfahren (Wrights Pfadregel, s. Klassenkommentar).
         $sireOccurrences = [];
-        self::collectAncestors($sireTree, 0, $sireOccurrences);
+        self::collectAncestors($sireTree, 0, $sireOccurrences, $common);
 
         $damOccurrences = [];
-        self::collectAncestors($damTree, 0, $damOccurrences);
+        self::collectAncestors($damTree, 0, $damOccurrences, $common);
 
         $sum = 0.0;
         foreach ($sireOccurrences as $ancestorId => $linksFromSire) {
@@ -90,17 +107,23 @@ class CoiEstimator {
     }
 
     /**
-     * @param array<int, int> &$map Vorfahren-ID => Liste der Schrittzahlen
+     * @param array<int, list<int>> &$map Vorfahren-ID => Liste der Schrittzahlen
+     * @param array<int, mixed> $stopAt IDs gemeinsamer Vorfahren, an denen die
+     *   Rekursion endet (Wrights Pfadregel); leer im ersten Durchlauf
      */
-    private static function collectAncestors(?array $node, int $links, array &$map): void {
+    private static function collectAncestors(?array $node, int $links, array &$map, array $stopAt = []): void {
         if ($node === null || empty($node['id']) || !empty($node['is_placeholder'])) {
             return;
         }
 
         $map[$node['id']][] = $links;
 
-        self::collectAncestors($node['sire'] ?? null, $links + 1, $map);
-        self::collectAncestors($node['dam'] ?? null, $links + 1, $map);
+        if (isset($stopAt[$node['id']])) {
+            return;
+        }
+
+        self::collectAncestors($node['sire'] ?? null, $links + 1, $map, $stopAt);
+        self::collectAncestors($node['dam'] ?? null, $links + 1, $map, $stopAt);
     }
 }
 

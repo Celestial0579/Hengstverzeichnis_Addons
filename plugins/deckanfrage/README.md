@@ -45,17 +45,16 @@ DSGVO-Benachrichtigungen etc. nutzt).
   Klartext; eine Löschroutine bringt das Addon nicht mit - für
   DSGVO-Löschersuchen muss der Betreiber die Tabelle selbst bereinigen.
 
-**Bekannte Einschränkungen:**
+Anzeige und Verarbeitung wenden dieselbe Sichtbarkeitsregel an: Auch der
+POST-Handler (`/plugin/deckanfrage/anfrage`) filtert die Deckstation auf
+`is_published` - ein direkter POST an ein Pferd mit unveröffentlichter
+Station wird stillschweigend verworfen (Antwort wie beim Honeypot-Pfad,
+kein Versand, kein Existenz-Orakel).
 
-- `App\Service\Mailer::send()` unterstützt aktuell keinen `Reply-To`-Header -
-  die E-Mail-Adresse des Interessenten wird daher gut sichtbar im
-  Nachrichtentext genannt, damit die Deckstation manuell darauf antworten
-  kann, statt direkt per "Antworten"-Knopf.
-- Der POST-Handler (`/plugin/deckanfrage/anfrage`) filtert die Deckstation
-  bislang **nicht** auf `is_published` - anders als die Anzeige. Ein direkt
-  abgesetzter POST mit gültigem CSRF-Token kann daher an eine bewusst
-  unveröffentlichte Station versenden, deren Formular gar nicht angezeigt
-  wird. Die Angleichung an die Kern-Semantik steht aus.
+**Bekannte Einschränkung:** `App\Service\Mailer::send()` unterstützt aktuell
+keinen `Reply-To`-Header - die E-Mail-Adresse des Interessenten wird daher
+gut sichtbar im Nachrichtentext genannt, damit die Deckstation manuell
+darauf antworten kann, statt direkt per "Antworten"-Knopf.
 
 ## Berechtigungen
 

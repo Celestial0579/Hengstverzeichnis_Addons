@@ -34,19 +34,14 @@ damit es unabhängig davon funktioniert, ob `inzuchtkoeffizient` aktiviert ist.
 ## Annahmen
 
 Näherung `F = Σ (0,5)^(n1+n2+1)` über alle gemeinsamen Vorfahren, ausgewertet
-über den verfügbaren Stammbaum (Standard 5, bis zu 8 Generationen). Der exakte
-Wright-Term für die Eigen-Ingezüchtetheit gemeinsamer Vorfahren wird – wie beim
-`inzuchtkoeffizient`-Addon – nicht rekursiv nachberechnet.
-
-**Bekannte Abweichung zum `inzuchtkoeffizient`-Addon:** Dessen Rechenkern
-wendet inzwischen Wrights Pfadregel an (die Ahnen eines bereits gezählten
-gemeinsamen Vorfahren zählen nicht zusätzlich); die hiesige Näherung summiert
-dagegen über **alle** gemeinsamen Vorfahren weiter. Sobald ein gemeinsamer
-Vorfahre selbst bekannte Vorfahren im Baum hat, liefert dieses Addon deshalb
-systematisch **höhere** COI-Werte als der Verpaarungsrechner. Für das Ranking
-(aufsteigende Sortierung) ist das meist unschädlich, die absoluten Prozentwerte
-beider Addons sind aber nicht vergleichbar. Eine Angleichung an die
-Pfadregel steht aus.
+über den verfügbaren Stammbaum (Standard 5, bis zu 8 Generationen) – **mit
+Wrights Pfadregel**, identisch zum Rechenkern des `inzuchtkoeffizient`-Addons:
+Pfade enden am jeweils ersten gemeinsamen Vorfahren, dessen eigene Ahnen
+zählen nicht zusätzlich. Beide Addons liefern damit für dieselbe Verpaarung
+denselben Wert; der Gleichlauf ist per Unit-Test festgenagelt
+(`tests/Unit/AnpaarungsEmpfehlungCoiTest.php`). Der exakte Wright-Term für
+die Eigen-Ingezüchtetheit gemeinsamer Vorfahren wird – wie dort – nicht
+rekursiv nachberechnet.
 
 Die Empfehlung ist eine genetische Kennzahl, keine vollständige züchterische
 Bewertung. Für die Farbprognose siehe das Addon `farbvererbung`.
