@@ -74,7 +74,14 @@ class Plugin {
                         var ids = window.hvMerkliste.read();
                         document.querySelectorAll("[data-hv-merkliste]").forEach(function (btn) {
                             var saved = ids.indexOf(parseInt(btn.getAttribute("data-hv-merkliste"), 10)) !== -1;
-                            btn.textContent = saved ? "★ Gemerkt" : "☆ Merken";
+                            var next = saved ? "★ Gemerkt" : "☆ Merken";
+                            // Nur schreiben, wenn sich der Text tatsaechlich aendert:
+                            // Jede textContent-Zuweisung ist selbst eine DOM-Mutation,
+                            // die den MutationObserver unten erneut ausloest. Ohne diesen
+                            // Guard synchronisiert sich der Observer endlos selbst (100% CPU,
+                            // die Seite friert ein), sobald ueberhaupt Merken-Buttons im DOM
+                            // sind - also auf jedem befuellten Katalog und jeder Detailseite.
+                            if (btn.textContent !== next) { btn.textContent = next; }
                         });
                     }
                 };

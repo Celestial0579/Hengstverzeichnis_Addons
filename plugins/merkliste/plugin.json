@@ -1,10 +1,13 @@
 {
     "slug": "merkliste",
     "name": "Merkliste für anonyme Besucher",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "core_compatibility": ">=0.1.0-beta.1",
     "description": "Rein clientseitige Merkliste ohne Account: \"Merken\"-Button auf Detailseite und Katalogkarten speichert Pferde-IDs im localStorage des Browsers, eine eigene Merklisten-Seite löst sie über eine schreibgeschützte JSON-API zu Name/Bild/Link auf.",
     "author": "Hengstverzeichnis_Addons",
-    "hooks": ["horse.detail_sections", "catalog.card_sections"],
+    "hooks": [
+        "horse.detail_sections",
+        "catalog.card_sections"
+    ],
     "entry": "Plugin.php"
 }
