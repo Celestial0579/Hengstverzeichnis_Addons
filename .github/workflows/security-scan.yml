@@ -1,0 +1,66 @@
+# Sicherheits-Checks der Addons
+#
+#   - plugin-static: statischer Sicherheits-Check des Plugin-Codes
+#     (security/plugin-security-scan.sh). Schnell, ohne Infrastruktur, laeuft
+#     bei jedem Push/PR als Gate.
+#   - addon-dast: kali-DAST gegen einen Framework-Build MIT diesen Addons
+#     (security/run-addon-dast.sh). Braucht Docker und einen Framework-Stand
+#     mit security/-Harness; daher woechentlich + manuell statt bei jedem PR.
+name: Security Scan
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  plugin-static:
+    name: Statischer Plugin-Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2 (2.37.2)
+        with:
+          php-version: "8.5"
+          coverage: none
+
+      - name: Statischer Sicherheits-Check der Plugins
+        run: |
+          chmod +x security/plugin-security-scan.sh
+          security/plugin-security-scan.sh
+
+  addon-dast:
+    name: DAST (Kali) mit Addons
+    # Nur zeitgesteuert/manuell: baut das Framework + Docker-Instanz, cross-Repo.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Scan-Werkzeuge installieren
+        run: |
+          sudo apt-get update
+          for p in nmap nikto whatweb sqlmap gobuster wafw00f; do
+            sudo apt-get install -y --no-install-recommends "$p" || echo "::warning::$p nicht installierbar — Check wird uebersprungen"
+          done
+
+      - name: DAST gegen addon-haltigen Framework-Build
+        env:
+          SEC_RUNNER: local
+          FRAMEWORK_REF: main
+          SEC_TOOL_TIMEOUT: "300"
+          NIKTO_MAXTIME: "90"
+        run: |
+          chmod +x security/run-addon-dast.sh
+          security/run-addon-dast.sh
