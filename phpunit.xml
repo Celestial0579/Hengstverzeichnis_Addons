@@ -3,7 +3,16 @@
          xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
          bootstrap="tests/bootstrap.php"
          colors="true"
-         cacheDirectory=".phpunit.cache">
+         cacheDirectory=".phpunit.cache"
+         displayDetailsOnAllIssues="true">
+    <!-- displayDetailsOnAllIssues nennt Fundstelle und Auslöser jeder Deprecation,
+         statt sie hinter "OK, but there were issues!" zu verstecken.
+         failOnDeprecation/-Notice/-Warning (analog Hengstverzeichnis_Framework #147)
+         fehlen hier BEWUSST noch: Der über composer.lock festgenagelte
+         Framework-Stand löst in tests/Support/HttpClient.php eine curl_close()-
+         Deprecation aus, die den Lauf sofort rot machen würde (nachgemessen:
+         Exit 1). Auf Framework-main ist sie behoben - sobald composer.lock dorthin
+         nachgezogen werden kann, gehören die drei Schalter hier hinein. -->
     <testsuites>
         <!-- Strukturprüfung jedes Plugins unter plugins/ (Manifest, Namensschema,
              PHP-Syntax) - läuft ohne Datenbank/Framework-Server, automatisch für
