@@ -10,7 +10,11 @@ anhand der Farbgenetik des Norwegischen Fjordpferds.
   Wahrscheinlichkeitsverteilung der Fohlenfarbe über die fünf anerkannten
   Falbfarben erhalten. Zugriff nur mit der Berechtigung
   `farbvererbung.calculate` (unter **Admin → Gruppen** zuweisbar; Admins haben
-  sie systemseitig immer).
+  sie systemseitig immer). Die Route ist nur per direkter URL erreichbar -
+  das Addon registriert keine Dashboard-Kachel. Das Nachschlage-Element
+  "Farben im Register" dort listet die Farbwerte aller nicht gelöschten
+  Pferde, auch unveröffentlichter - zulässig, weil berechtigungsgeschützt,
+  aber bewusst mehr als die öffentliche Sicht.
 - **Detailseiten-Hinweis** (`horse.detail_sections`): ordnet die im Feld
   *Farbe* eingetragene Bezeichnung – sofern erkennbar – einer der fünf
   Falbfarben zu und zeigt die genetische Einordnung an.

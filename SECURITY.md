@@ -31,8 +31,10 @@ Bitte gib nach Möglichkeit an:
 
 ## Unterstützte Versionen
 
-Es wird jeweils nur die neueste veröffentlichte Version eines Addons mit
-Sicherheitsupdates versorgt.
+Dieses Repository veröffentlicht keine Tags oder Releases; maßgeblich ist
+stets der aktuelle Stand von `main`. Sicherheitsupdates erfolgen nur dort -
+bitte gib bei Meldungen deshalb den Commit-Hash an (die `version` in
+`plugins/<slug>/plugin.json` allein reicht zur Eingrenzung nicht aus).
 
 ## Bereits umgesetzte Schutzmaßnahmen
 
@@ -40,6 +42,13 @@ Das Sicherheitskonzept des Kerns (2FA, Session-Hardening, CSRF, Verschlüsselung
 Rate-Limiting, Audit-Log u. a.) ist in
 [docs/security.md](https://github.com/Celestial0579/Hengstverzeichnis_Framework/blob/main/docs/security.md)
 des Frameworks beschrieben. Die Plugins folgen denselben Grundsätzen (gebundene
-SQL-Parameter, Ausgabe-Encoding, CSRF-Prüfung, Eingabevalidierung); vor jedem
-Release prüfen ein statischer Plugin-Check und ein Kali-DAST-Lauf die Addons
-(siehe [`security/`](security/)).
+SQL-Parameter, Ausgabe-Encoding, CSRF-Prüfung, Eingabevalidierung). Geprüft
+wird das automatisiert (siehe [`security/`](security/)):
+
+- Ein **statischer Plugin-Check** läuft bei jedem Push und PR gegen `main`
+  und lässt sich vor einem Beitrag auch lokal ausführen:
+  `security/plugin-security-scan.sh` (Exit ≠ 0 bei HIGH/CRITICAL-Funden).
+- Ein **Kali-DAST-Lauf** läuft wöchentlich sowie auf manuellen Anstoß. Er
+  prüft bewusst nur die Deployment-Sicht, ohne die Plugins zu aktivieren -
+  das Verhalten der Addon-Routen selbst deckt stattdessen die
+  PHPUnit-Functional-Suite ab.

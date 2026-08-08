@@ -50,6 +50,16 @@ Danach unter **Admin → Plugins verwalten** (`/admin/plugins`) aktivieren.
   Pferd und zeigt sie auf der Detailseite.
 - [`deckanfrage`](plugins/deckanfrage/README.md) - Deckanfrage-Formular auf
   der Pferde-Detailseite, sendet direkt an die hinterlegte Deckstation.
+  Erscheint nur, wenn die verknüpfte Deckstation veröffentlicht und ihre
+  E-Mail-Adresse damit öffentlich sichtbar ist.
+- [`galerie`](plugins/galerie/README.md) - Bild- und Video-Galerie je Pferd
+  (Uploads plus YouTube/Vimeo-Links) mit eigener Verwaltungsseite.
+- [`gesundheitstests`](plugins/gesundheitstests/README.md) - verwaltet
+  Gesundheits-/Gentest-Befunde je Pferd; Dokumente liegen außerhalb des
+  Webroots, öffentlich wird nur, was ausdrücklich freigegeben ist.
+- [`merkliste`](plugins/merkliste/README.md) - clientseitige Merkliste
+  (localStorage) mit Merken-Buttons auf Katalogkarten und Detailseite und
+  eigener Übersichtsseite.
 - [`verkaufsboerse`](plugins/verkaufsboerse/README.md) - markiert Pferde
   als zum Verkauf/zur Vermittlung, mit eigener Übersichtsseite und
   Kontaktformular.
@@ -72,13 +82,18 @@ bindet `hengstverzeichnis/framework` als reine Dev-Abhängigkeit über ein
 VCS-Repository (GitHub-URL) ein - die PHPUnit-Suite läuft damit gegen den
 echten Kern, genau wie die Testsuite im Framework-Repo selbst.
 
-Zwei Ebenen (siehe [`phpunit.xml`](phpunit.xml)):
+Drei Ebenen (siehe [`phpunit.xml`](phpunit.xml)):
 
 - **`tests/Manifest`** - generische Strukturprüfung für **jedes** Verzeichnis
   unter `plugins/` (Manifest-Pflichtfelder, Slug-Format, PHP-Syntax,
   Namenskonvention der Plugin-Klasse, Form von `permissions()`/`routes()`).
   Läuft ohne Datenbank und muss bei einem neuen Addon **nicht** angepasst
   werden - der Test scannt `plugins/` zur Laufzeit.
+- **`tests/Unit`** - Rechenkerne einzelner Addons, die als reine Funktionen
+  prüfbar sind (derzeit der COI-Rechner des Plugins `inzuchtkoeffizient`).
+  Läuft wie die Manifest-Suite ohne Datenbank und ohne Framework-Instanz -
+  gedacht für Fälle, die über HTTP nur mit unverhältnismäßigem Aufwand
+  abzubilden wären.
 - **`tests/Functional`** - ein Test pro Addon, der es tatsächlich in einer
   echten, per `php -S` gestarteten Framework-Instanz aktiviert und per HTTP
   durchspielt (Hooks, eigene Routen, Berechtigungsdurchsetzung). Das
@@ -94,6 +109,9 @@ composer install
 # Nur Manifest-Prüfung (keine Datenbank nötig):
 composer test:manifest
 
+# Nur Unit-Suite (ebenfalls ohne Datenbank):
+composer test:unit
+
 # Functional-Suite (braucht eine erreichbare MariaDB/MySQL-Testdatenbank):
 DB_HOST=127.0.0.1 DB_NAME=hengst_addons_functional DB_USER=hengst DB_PASS=hengst \
   APP_KEY=lokaler-test-schluessel SITE_NAME="Testverband" \
@@ -102,27 +120,45 @@ DB_HOST=127.0.0.1 DB_NAME=hengst_addons_functional DB_USER=hengst DB_PASS=hengst
 ```
 
 Läuft automatisch bei jedem Push/PR gegen `main` über
-[`.github/workflows/tests.yml`](.github/workflows/tests.yml) (die
-Functional-Suite dort mit einem MariaDB-Service-Container).
+[`.github/workflows/tests.yml`](.github/workflows/tests.yml). Die
+Unit-Suite läuft dort bewusst im selben Job wie die Manifest-Prüfung
+(`Plugin-Manifest-Prüfung` ist der als Pflicht-Check hinterlegte Name);
+die Functional-Suite hat einen eigenen Job mit MariaDB-Service-Container.
 
 ## Abhängigkeitspflege
 
 [`.github/dependabot.yml`](.github/dependabot.yml) hält Composer-Pakete
-(PHPUnit, das VCS-Dev-Requirement auf `hengstverzeichnis/framework`) und die
-in den Workflows verwendeten GitHub Actions wöchentlich aktuell - analog zum
-Framework-Repo. Ergänzt um:
+(PHPUnit) und die in den Workflows verwendeten GitHub Actions wöchentlich
+aktuell - analog zum Framework-Repo.
+
+**Die Framework-Abhängigkeit selbst hält Dependabot NICHT aktuell:**
+`hengstverzeichnis/framework` hängt als `dev-main` über ein VCS-Repository
+in `composer.json`, und Branch-Abhängigkeiten dieser Bauart aktualisiert
+Dependabot nicht - es hebt Versionsbereiche, keine Zweig-Zeiger. Ohne
+Gegenmaßnahme bliebe `composer.lock` auf einem alten Framework-Commit
+stehen, und die Suite prüfte grün gegen einen Kern, den es so nicht mehr
+gibt (genau so blieb die Regression Framework-#151 tagelang unbemerkt).
+Deshalb übernimmt das
+[`.github/workflows/framework-update.yml`](.github/workflows/framework-update.yml):
+wöchentlich (und per Hand auslösbar) hebt es das Framework auf den
+aktuellen `main`, lässt die volle Suite dagegen laufen und öffnet bei Grün
+einen PR mit dem neuen Lock - bei Rot stattdessen ein Issue, das sich
+selbst schließt, sobald ein späterer Lauf wieder grün ist. Bewusst kein
+Auto-Merge: Ein Kern-Update kann das Verhalten der Plugins ändern.
+
+Weitere Automatik:
 
 - [`.github/workflows/dependabot-auto-merge.yml`](.github/workflows/dependabot-auto-merge.yml) -
   merged Dependabot-PRs automatisch per Squash, sobald `Tests` grün ist,
   außer bei Major-Updates (die brauchen manuelle Prüfung).
 - [`.github/workflows/dependency-review.yml`](.github/workflows/dependency-review.yml) -
   scannt PRs, die Abhängigkeiten ändern, auf bekannte Sicherheitslücken.
-
-Da `hengstverzeichnis/framework` als `dev-main` eingebunden ist (das
-Framework veröffentlicht bislang keine Tags/Releases), zeigt jede neue
-Dependabot-PR dafür schlicht den jeweils neuesten Commit auf `main` - die
-Functional-Suite läuft dabei jedes Mal gegen den echten, aktuellen Kern und
-deckt so auch Breaking Changes im Framework selbst auf.
+- [`.github/workflows/security-scan.yml`](.github/workflows/security-scan.yml) -
+  statischer Plugin-Sicherheits-Check bei jedem Push/PR plus wöchentlicher
+  DAST-Lauf; Details in [`SECURITY.md`](SECURITY.md) und
+  [`security/`](security/).
+- [`.github/workflows/scorecard.yml`](.github/workflows/scorecard.yml) -
+  OpenSSF-Scorecard-Bewertung der Repo-Absicherung.
 
 ## Neues Addon hinzufügen
 
@@ -134,3 +170,8 @@ deckt so auch Breaking Changes im Framework selbst auf.
    aktiviert und sein tatsächliches Verhalten (Hooks, Routen, Berechtigungen)
    gegen die echte Framework-Instanz prüft - am einfachsten als Kopie von
    [`tests/Functional/BesucherstatistikPluginTest.php`](tests/Functional/BesucherstatistikPluginTest.php).
+4. Bei jeder späteren inhaltlichen Änderung am Addon-Code die `version` in
+   dessen `plugin.json` erhöhen - der Kern erkennt Änderungen an aktivierten
+   Plugins über einen Inhalts-Hash und sperrt sie fail-closed, bis ein Admin
+   die neue Fassung erneut freigibt; der Versionssprung macht den Anlass
+   sichtbar.

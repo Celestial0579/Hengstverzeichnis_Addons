@@ -1,7 +1,17 @@
 # katalog-export
 
-CSV-Export des Pferdekatalogs - wahlweise gefiltert (dieselben Filterfelder
-wie der öffentliche Katalog) oder komplett ungefiltert. CSV statt eines
+CSV-Export des Pferdebestands - wahlweise gefiltert (dieselben Filterfelder
+wie der öffentliche Katalog) oder komplett ungefiltert.
+
+**Wichtig:** Der Export ist bewusst eine Backoffice-Funktion und **kein**
+Abbild des öffentlichen Katalogs: Er enthält alle nicht gelöschten Pferde
+**einschließlich unveröffentlichter**, ebenso Namen unveröffentlichter
+Deckstationen, Züchter und Besitzer. Genau deshalb ist die Route über die
+Berechtigung `katalog-export.export` geschützt - die exportierte Datei
+enthält Daten, die öffentlich nicht sichtbar sind, und ist entsprechend zu
+behandeln.
+
+CSV statt eines
 echten `.xlsx`-Formats, damit keine zusätzliche Composer-Abhängigkeit nötig
 ist - die Datei öffnet direkt in Excel/LibreOffice/Numbers (inkl.
 UTF-8-BOM, damit Umlaute unter Windows-Excel korrekt dargestellt werden).
@@ -27,10 +37,16 @@ der gewünschten Gruppe unter `/admin/groups` die Berechtigung
 
 1. Über die Dashboard-Kachel "📤 Katalog-Export" zu
    `/plugin/katalog-export/formular` navigieren.
-2. Optional Filter setzen (Name, UELN, Geburtsjahr-Bereich, Farbe, Status,
-   Deckstation, Vater, Mutter, Züchter, Besitzer) - ohne Filter wird der
-   komplette Katalog exportiert.
+2. Optional Filter setzen (allgemeine Suche, Name, UELN, Geburtsjahr-Bereich,
+   Farbe, Status, Deckstation, Vater, Mutter, Züchter, Besitzer) - ohne
+   Filter wird der komplette Bestand exportiert.
 3. "⬇️ Als CSV herunterladen" klicken.
+
+Zum Format: Trennzeichen ist das Semikolon (auf deutsche Excel-Installationen
+zugeschnitten - andere Importe müssen das ggf. angeben), und Feldwerte, die
+mit `=`, `+`, `-`, `@`, Tab oder CR beginnen, werden mit einem führenden
+Hochkomma entschärft (Schutz vor CSV-Formel-Injection beim Öffnen in
+Tabellenkalkulationen).
 
 Die Export-Route `/plugin/katalog-export/csv` akzeptiert dieselben
 Query-Parameter wie die öffentliche Katalogseite (`search`, `q_name`,

@@ -36,6 +36,18 @@ der gewünschten Gruppe unter `/admin/groups` die Berechtigung
 1. Unter **Dashboard → Galerie** (`/plugin/galerie/verwaltung`) je Pferd
    Fotos hochladen oder Video-Links hinzufügen, optional mit
    Bildunterschrift und Sortierreihenfolge.
-2. Die Galerie erscheint automatisch als Abschnitt "🖼️ Galerie" auf der
-   öffentlichen Pferde-Detailseite (Klick auf ein Foto öffnet die
-   Lightbox, Escape oder Klick schließt sie).
+2. Die Galerie erscheint als Abschnitt "🖼️ Galerie" auf der öffentlichen
+   Pferde-Detailseite, sobald mindestens ein Medium erfasst ist (Klick auf
+   ein Foto öffnet die Lightbox, Escape oder Klick schließt sie).
+
+## Technik
+
+- Berechtigung: Modul `galerie`, Aktion `manage` (Verwaltungsseite und alle
+  schreibenden Routen).
+- Routen: `/plugin/galerie/verwaltung` (GET), `/verwaltung/store` und
+  `/verwaltung/delete` (POST).
+- Tabelle: `plugin_galerie_media`. Beim endgültigen Löschen eines Pferdes
+  entfernt `ON DELETE CASCADE` nur die Datenbank-Zeilen - die hochgeladenen
+  Dateien unter `public/uploads/plugin_galerie/` bleiben dann als Waisen
+  liegen (nur das Löschen über die Verwaltungsseite entfernt auch die
+  Datei). Betreiber sollten das Verzeichnis gelegentlich abgleichen.

@@ -30,9 +30,9 @@ automatischer Veröffentlichung:
   direkt per URL erreichbar - ausschließlich über die Download-Route
   `/plugin/gesundheitstests/download?id=...`, die dieselben
   Sichtbarkeitsregeln durchsetzt: öffentliche Einträge für alle (sofern die
-  Gast-Gruppe `horses.view` hat), alle übrigen nur mit der
-  Verwaltungs-Berechtigung. Unbekannte und nicht zugängliche IDs liefern
-  eine identische 404 (kein Existenz-Orakel).
+  Gast-Gruppe `horses.view` hat **und** das Pferd veröffentlicht ist), alle
+  übrigen nur mit der Verwaltungs-Berechtigung. Unbekannte und nicht
+  zugängliche IDs liefern eine identische 404 (kein Existenz-Orakel).
 - Uploads werden per echter MIME-Prüfung (`finfo`) auf PDF/JPEG/PNG/WebP
   begrenzt (max. 10 MB) und unter einem zufälligen Dateinamen gespeichert -
   gleiches Muster wie `HorseController::handleImageUpload()` im Kern.

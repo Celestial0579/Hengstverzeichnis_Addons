@@ -11,7 +11,10 @@ Demonstriert alle drei Erweiterungspunkte des Plugin-Systems (siehe
 im Framework-Repo):
 
 - **Hooks**: `horse.detail_sections` (Filter), `admin.dashboard_tiles`
-  (Filter), `horse.after_save` (Action)
+  (Filter), `horse.after_save` (Action). Gezählt wird direkt im
+  `horse.detail_sections`-Filter - jeder Seitenaufruf erhöht den Zähler,
+  auch Bots und Crawler; eine Deduplizierung per Session oder IP gibt es
+  bewusst nicht (keine personenbezogene Speicherung).
 - **Eigene Tabelle**: `plugin_besucherstatistik_views`, in `register()`
   idempotent per `CREATE TABLE IF NOT EXISTS` angelegt
 - **Eigene Route**: `/plugin/besucherstatistik/statistik`, geschützt über
