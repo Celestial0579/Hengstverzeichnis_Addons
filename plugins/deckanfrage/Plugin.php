@@ -52,6 +52,14 @@ class Plugin {
      * Deckstation eine E-Mail-Adresse hinterlegt ist - `$horse` enthält das
      * bereits (PublicController::horseDetail() joint `breeding_stations` als
      * `station_email`/`station_name`), keine eigene Datenbankabfrage nötig.
+     *
+     * Wichtig: Der Kern übergibt dem Hook ÖFFENTLICH GEFILTERTE Daten. Alle
+     * `station_*`-Felder sind gemeinsam null, wenn die Station unveröffentlicht
+     * oder gelöscht ist oder der Gast-Gruppe `breeding_stations.view` fehlt -
+     * `$horse['breeding_station_id']` bleibt dabei gesetzt und taugt deshalb
+     * NICHT als Bedingung. Genau darum wird hier `station_email` geprüft und
+     * nicht die Verknüpfung. Siehe docs/plugin-development.md des Kerns,
+     * Abschnitt "Was in $horse und $horsePersons steht".
      */
     public function addDetailSection(array $sections, array $horse, array $horsePersons, ?array $pedigree): array {
         if (empty($horse['station_email'])) {

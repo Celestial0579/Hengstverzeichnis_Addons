@@ -37,7 +37,13 @@ class DeckanfragePluginTest extends FunctionalTestCase {
 
         $unique = uniqid();
 
-        // 1. Deckstation MIT E-Mail-Adresse anlegen.
+        // 1. Deckstation MIT E-Mail-Adresse anlegen - und VERÖFFENTLICHT.
+        // Neu angelegte Stationen sind per Default unveröffentlicht
+        // (breeding_stations.is_published DEFAULT 0), und die öffentliche
+        // Pferde-Detailseite joint die Station nur mit is_published = 1
+        // (Kern-#122). Ohne dieses Feld wäre $horse['station_email'] im Hook
+        // horse.detail_sections null, das Formular erschiene nie, und der Test
+        // schlüge fehl, ohne dass am Plugin etwas kaputt wäre (Kern-#151).
         $stationForm = $admin->get('/admin/breeding-stations/create');
         $stationName = "Deckstation-{$unique}";
         $stationEmail = "station-{$unique}@example.test";
@@ -45,6 +51,7 @@ class DeckanfragePluginTest extends FunctionalTestCase {
             'csrf_token' => $stationForm->formField('csrf_token') ?? '',
             'name' => $stationName,
             'email' => $stationEmail,
+            'is_published' => '1',
         ]);
         $this->assertSame('/admin/breeding-stations?success=created', $stationResponse->location());
         $stationId = $this->findBreedingStationIdByName($admin, $stationName);
