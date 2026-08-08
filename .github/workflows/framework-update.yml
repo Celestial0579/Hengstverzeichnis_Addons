@@ -1,0 +1,225 @@
+# Automatisches Update der Framework-Abhängigkeit
+#
+# Warum es diesen Workflow braucht, obwohl Dependabot eingerichtet ist:
+# hengstverzeichnis/framework hängt als `dev-main` über ein VCS-Repository in
+# composer.json (siehe dort). Dependabot aktualisiert Branch-Abhängigkeiten
+# dieser Bauart NICHT — es hebt Versionsbereiche, nicht Zweig-Zeiger. Dieses
+# Repo hat deshalb noch nie einen Dependabot-PR gesehen, und composer.lock
+# blieb auf dem Commit stehen, der beim Anlegen des Locks aktuell war.
+#
+# Die Folge ist unangenehm leise: Die Testsuite prüft die Plugins dann gegen
+# einen ALTEN Kern. Bricht ein Addon am aktuellen Framework, meldet die CI
+# trotzdem grün — auch der nächtliche devhost-tests-Lauf, der dieselbe
+# composer.lock benutzt. Genau so ist die Regression
+# Hengstverzeichnis_Framework#151 tagelang unbemerkt geblieben.
+#
+# Deshalb hier wöchentlich:
+#   1. Framework auf den aktuellen main heben.
+#   2. Ändert sich composer.lock nicht: fertig, nichts zu tun.
+#   3. Suite laufen lassen (Manifest + Functional gegen eine Wegwerf-MariaDB).
+#      - grün -> Pull Request mit dem neuen Lock öffnen.
+#      - rot  -> Issue öffnen bzw. aktualisieren. Der Lock wird NICHT gehoben;
+#        gemeldet wird, dass Kern und Addons auseinanderlaufen.
+#   4. Läuft die Suite später wieder grün, schließt sich das Issue selbst.
+#
+# Bewusst KEIN Auto-Merge: Ein Kern-Update kann das Verhalten der Plugins
+# ändern. Der PR wartet auf einen Menschen — anders als die Dependabot-PRs für
+# Actions/PHPUnit, die dependabot-auto-merge.yml bei patch/minor durchwinkt.
+#
+# Ein Umgebungsfehler ist kein Ergebnis: Scheitert schon `composer update`
+# (Netz, GitHub-Störung), bricht der Workflow ab, OHNE ein Issue zu schreiben —
+# "konnte nicht prüfen" und "geprüft, ist kaputt" sind verschiedene Aussagen.
+name: Framework-Update
+
+on:
+  schedule:
+    - cron: "0 5 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    name: Framework-Abhängigkeit prüfen
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # Branch mit dem neuen composer.lock pushen
+      pull-requests: write   # PR dazu öffnen
+      issues: write          # Meldung, wenn Kern und Addons auseinanderlaufen
+
+    services:
+      mariadb:
+        image: mariadb:11@sha256:d9f7eb2637296652f24b484afd5d246f759f49f5babcadc6a9e344c9acb75fbf
+        env:
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2 (2.37.2)
+        with:
+          php-version: "8.5"
+          extensions: pdo, pdo_mysql, curl
+          coverage: none
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      - name: Framework auf aktuellen main heben
+        id: bump
+        run: |
+          set -euo pipefail
+          vorher="$(jq -r '(.packages + (."packages-dev" // []))[] | select(.name == "hengstverzeichnis/framework") | .source.reference' composer.lock)"
+          composer update hengstverzeichnis/framework --no-interaction --no-progress
+          nachher="$(jq -r '(.packages + (."packages-dev" // []))[] | select(.name == "hengstverzeichnis/framework") | .source.reference' composer.lock)"
+
+          echo "vorher=$vorher"   >> "$GITHUB_OUTPUT"
+          echo "nachher=$nachher" >> "$GITHUB_OUTPUT"
+
+          if git diff --quiet -- composer.lock; then
+            echo "geaendert=false" >> "$GITHUB_OUTPUT"
+            echo "composer.lock unverändert ($vorher) — nichts zu tun."
+          else
+            echo "geaendert=true" >> "$GITHUB_OUTPUT"
+            echo "Framework: $vorher -> $nachher"
+          fi
+
+      - name: Testdatenbank vorbereiten
+        if: steps.bump.outputs.geaendert == 'true'
+        run: |
+          mysql -h127.0.0.1 -uroot -proot -e "
+            CREATE DATABASE IF NOT EXISTS hengst_addons_functional;
+            CREATE USER IF NOT EXISTS 'hengst'@'%' IDENTIFIED BY 'hengst';
+            GRANT ALL PRIVILEGES ON *.* TO 'hengst'@'%' WITH GRANT OPTION;
+            FLUSH PRIVILEGES;
+          "
+
+      # continue-on-error, weil ein rotes Ergebnis hier ein ERGEBNIS ist und
+      # kein Abbruchgrund: Es soll als Issue herausgehen, nicht den Lauf
+      # abwürgen. Der Ausgang wird über steps.suite.outcome ausgewertet.
+      - name: Suite gegen den neuen Framework-Stand
+        id: suite
+        if: steps.bump.outputs.geaendert == 'true'
+        continue-on-error: true
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: "3306"
+          DB_NAME: hengst_addons_functional
+          DB_USER: hengst
+          DB_PASS: hengst
+          APP_ENV: development
+          APP_KEY: ci-addons-functional-test-key-not-for-production-use
+          SITE_NAME: CI Addon-Testverband
+          ADMIN_USERNAME: e2eaddonadmin
+          ADMIN_EMAIL: e2e-addon-admin@example.com
+          ADMIN_PASSWORD: FunctionalTest123!
+        # pipefail ist hier nicht kosmetisch: Ohne ihn liefert die Pipe den
+        # Exit-Code von `tee` (immer 0), steps.suite.outcome wäre IMMER
+        # 'success' und der ganze Workflow eine Attrappe. GitHub startet
+        # run-Blöcke mit `bash -e`, aber OHNE pipefail.
+        run: |
+          set -o pipefail
+          composer test 2>&1 | tee suite.log
+
+      - name: Pull Request öffnen (Suite grün)
+        if: steps.bump.outputs.geaendert == 'true' && steps.suite.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VORHER: ${{ steps.bump.outputs.vorher }}
+          NACHHER: ${{ steps.bump.outputs.nachher }}
+        run: |
+          set -euo pipefail
+          branch="auto/framework-update"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add composer.lock
+          git commit \
+            -m "deps: hengstverzeichnis/framework auf ${NACHHER:0:7} heben" \
+            -m "Automatisch erzeugt von .github/workflows/framework-update.yml." \
+            -m "Vorher:  ${VORHER}" \
+            -m "Nachher: ${NACHHER}" \
+            -m "Manifest- und Functional-Suite sind gegen diesen Stand gelaufen und grün."
+          git push --force origin "$branch"
+
+          # Rumpf über eine Datei, nicht als Argument: Markdown-Tabellen
+          # beginnen Zeilen mit '|', und das sprengt in einem YAML-Block-Skalar
+          # die Einrückung.
+          {
+            printf '%s\n\n' 'Automatisches Update der `dev-main`-Abhängigkeit `hengstverzeichnis/framework`, die Dependabot nicht abdeckt.'
+            printf '%s\n' '| | Commit |'
+            printf '%s\n' '|---|---|'
+            printf '| vorher | `%s` |\n' "$VORHER"
+            printf '| nachher | `%s` |\n\n' "$NACHHER"
+            printf '%s\n\n' 'Manifest- und Functional-Suite sind im erzeugenden Lauf gegen diesen Stand gelaufen und grün.'
+            printf '%s\n' '**Hinweis:** Von `GITHUB_TOKEN` erzeugte Pull Requests lösen keine `pull_request`-Workflows aus — die Pflicht-Checks starten hier also nicht von selbst. Einmal Schließen und wieder Öffnen genügt, dann laufen sie.'
+          } > pr-body.md
+
+          if [ -z "$(gh pr list --head "$branch" --state open --json number --jq '.[].number')" ]; then
+            gh pr create \
+              --head "$branch" \
+              --title "deps: Framework auf ${NACHHER:0:7} heben" \
+              --body-file pr-body.md
+          else
+            echo "PR für $branch ist bereits offen — Branch wurde aktualisiert."
+          fi
+
+      - name: Issue öffnen oder aktualisieren (Suite rot)
+        if: steps.bump.outputs.geaendert == 'true' && steps.suite.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VORHER: ${{ steps.bump.outputs.vorher }}
+          NACHHER: ${{ steps.bump.outputs.nachher }}
+        run: |
+          set -euo pipefail
+          titel="Addons brechen gegen den aktuellen Framework-main"
+
+          # Nur die Fehlerabschnitte, nicht das ganze Protokoll.
+          auszug="$(grep -E '^(There w|[0-9]+\) |FAILURES|ERRORS|Tests: )' suite.log | head -40 || true)"
+
+          {
+            printf 'Der wöchentliche Lauf hat `hengstverzeichnis/framework` von `%s` auf `%s` gehoben. ' "$VORHER" "$NACHHER"
+            printf '%s\n\n' 'Die Testsuite dieses Repos ist dagegen **rot**. `composer.lock` wurde deshalb NICHT verändert — die CI läuft weiter gegen den alten, funktionierenden Stand.'
+            printf '%s\n\n' 'Damit laufen Kern und Addons auseinander: Wer die Plugins in eine aktuelle Framework-Instanz kopiert, bekommt das hier zu sehen, während die CI grün meldet.'
+            printf '```\n%s\n```\n\n' "$auszug"
+            printf '[Vollständiges Protokoll](%s/%s/actions/runs/%s)\n\n' \
+              "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+            printf '%s\n' 'Das Issue schließt sich selbst, sobald ein späterer Lauf wieder grün ist.'
+          } > issue-body.md
+
+          nummer="$(gh issue list --state open --search "$titel in:title" --json number,title \
+                    --jq "[.[] | select(.title == \"$titel\")] | .[0].number // empty")"
+          if [ -n "$nummer" ]; then
+            gh issue comment "$nummer" --body-file issue-body.md
+          else
+            gh issue create --title "$titel" --body-file issue-body.md
+          fi
+
+      - name: Issue schließen (Suite wieder grün)
+        if: steps.bump.outputs.geaendert == 'true' && steps.suite.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          titel="Addons brechen gegen den aktuellen Framework-main"
+          nummer="$(gh issue list --state open --search "$titel in:title" --json number,title \
+                    --jq "[.[] | select(.title == \"$titel\")] | .[0].number // empty")"
+          if [ -n "$nummer" ]; then
+            gh issue close "$nummer" --comment "Die Suite läuft gegen den aktuellen Framework-main wieder grün."
+          fi
