@@ -60,13 +60,13 @@ class Plugin {
 /**
  * Rendert eine komplett eigenständige HTML-Seite (kein Kern-Layout) mit
  * Bildschirm- UND Druck-Stylesheet. Bewusst ohne Zugriffsschutz: zeigt exakt
- * dieselben, bereits öffentlich über /hengst?id=... einsehbaren Pedigree-Daten
+ * dieselben, bereits öffentlich über /horse?id=... einsehbaren Pedigree-Daten
  * in anderer Aufbereitung - keine zusätzliche Rechteausweitung.
  */
 class ExportController extends BaseController {
 
     private const DEFAULT_DEPTH = 6;
-    // Gedeckelt auf die Kern-Tiefe von /hengst (6 Generationen): die Route ist
+    // Gedeckelt auf die Kern-Tiefe von /horse (6 Generationen): die Route ist
     // anonym erreichbar, eine größere wählbare Tiefe würde pro Request
     // exponentiell mehr Datenbank-Abfragen erlauben als der Kern selbst.
     private const MAX_DEPTH = 6;

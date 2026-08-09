@@ -42,7 +42,7 @@ class GaleriePluginTest extends FunctionalTestCase {
 
         // 2. Ohne Medien: keine Galerie-Sektion auf der Detailseite.
         $visitor = $this->newClient();
-        $detailBefore = $visitor->get("/hengst?id={$horseId}");
+        $detailBefore = $visitor->get("/horse?id={$horseId}");
         $this->assertStringNotContainsString('Galerie</h3>', $detailBefore->body);
 
         // 3. Video-Link (YouTube, https) hinzufügen.
@@ -58,7 +58,7 @@ class GaleriePluginTest extends FunctionalTestCase {
         ]);
         $this->assertSame('/plugin/galerie/verwaltung', $storeVideo->location());
 
-        $detailWithVideo = $visitor->get("/hengst?id={$horseId}");
+        $detailWithVideo = $visitor->get("/horse?id={$horseId}");
         $this->assertStringContainsString('Galerie', $detailWithVideo->body);
         $this->assertStringContainsString("Freispringen {$unique}", $detailWithVideo->body);
         $this->assertStringContainsString(
@@ -112,7 +112,7 @@ class GaleriePluginTest extends FunctionalTestCase {
         ]);
         $this->assertSame('/plugin/galerie/verwaltung', $deleteResponse->location());
 
-        $detailAfterDelete = $visitor->get("/hengst?id={$horseId}");
+        $detailAfterDelete = $visitor->get("/horse?id={$horseId}");
         $this->assertStringNotContainsString("Freispringen {$unique}", $detailAfterDelete->body);
     }
 }

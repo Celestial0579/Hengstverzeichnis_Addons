@@ -66,6 +66,15 @@ class Plugin {
             return $sections;
         }
 
+        // Geschlechts-Gate (#53): Eine Deckanfrage richtet sich an einen
+        // HENGST. Für Stuten und Wallache erscheint kein Formular, auch wenn
+        // sie einer Station mit E-Mail zugeordnet sind. NULL (unbekannt,
+        // Altbestand) bleibt zugelassen - konsistent zur NULL-Regel des Kerns
+        // (Framework #165); die Station-E-Mail bleibt der zweite Filter.
+        if (in_array($horse['sex'] ?? null, ['mare', 'gelding'], true)) {
+            return $sections;
+        }
+
         $horseId = (int) $horse['id'];
         $csrfToken = htmlspecialchars(Router::generateCsrfToken(), ENT_QUOTES, 'UTF-8');
 
@@ -159,7 +168,7 @@ class AnfrageController extends BaseController {
         // an eine bewusst unveroeffentlichte Station versenden. Anzeige und
         // Verarbeitung muessen dieselbe Sichtbarkeitsregel anwenden.
         $stmt = $db->prepare(
-            'SELECT h.id, h.name, bs.email AS station_email, bs.name AS station_name
+            'SELECT h.id, h.name, h.sex, bs.email AS station_email, bs.name AS station_name
              FROM horses h
              LEFT JOIN breeding_stations bs ON h.breeding_station_id = bs.id AND bs.deleted_at IS NULL AND bs.is_published = 1
              WHERE h.id = ? AND h.deleted_at IS NULL AND h.is_published = 1'
@@ -169,8 +178,11 @@ class AnfrageController extends BaseController {
 
         // Nicht auffindbares/unveröffentlichtes Pferd: stillschweigend verwerfen
         // und wie beim Honeypot "erfolg" melden - der Redirect-Status darf kein
-        // Existenz-Orakel für im Kern verborgene Pferde-IDs sein.
-        if (!$horse || empty($horse['station_email'])) {
+        // Existenz-Orakel für im Kern verborgene Pferde-IDs sein. Dasselbe
+        // Muster für das Geschlechts-Gate (#53): Anzeige und Verarbeitung
+        // wenden dieselbe Regel an, ein direkter POST auf eine Stute läuft
+        // ununterscheidbar ins Leere.
+        if (!$horse || empty($horse['station_email']) || in_array($horse['sex'] ?? null, ['mare', 'gelding'], true)) {
             $this->redirectBack($horseId, 'erfolg');
         }
 
@@ -212,7 +224,7 @@ class AnfrageController extends BaseController {
     }
 
     private function redirectBack(?int $horseId, string $status): void {
-        header('Location: /hengst?id=' . (int) $horseId . '&deckanfrage=' . $status);
+        header('Location: /horse?id=' . (int) $horseId . '&deckanfrage=' . $status);
         exit;
     }
 }

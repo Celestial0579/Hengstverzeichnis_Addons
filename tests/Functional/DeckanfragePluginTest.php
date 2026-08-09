@@ -71,12 +71,28 @@ class DeckanfragePluginTest extends FunctionalTestCase {
         $visitor = $this->newClient();
 
         // 3. Formular erscheint nur beim Pferd MIT verknüpfter Deckstation.
-        $detailWith = $visitor->get("/hengst?id={$horseWithStation}");
+        $detailWith = $visitor->get("/horse?id={$horseWithStation}");
         $this->assertStringContainsString('Deckanfrage stellen', $detailWith->body);
         $this->assertStringContainsString('name="webseite"', $detailWith->body, 'Honeypot-Feld sollte im Formular enthalten sein.');
 
-        $detailWithout = $visitor->get("/hengst?id={$horseWithoutStation}");
+        $detailWithout = $visitor->get("/horse?id={$horseWithoutStation}");
         $this->assertStringNotContainsString('Deckanfrage stellen', $detailWithout->body);
+
+        // 3b. Geschlechts-Gate (#53): Eine STUTE mit Station samt E-Mail bekommt
+        // KEIN Deckanfrage-Formular - eine Deckanfrage richtet sich an einen
+        // Hengst. Pferde ohne Geschlechtsangabe (wie oben) bleiben zugelassen.
+        $mareWithStation = $this->createHorse($admin, "StuteMitStation-{$unique}", [
+            'status' => 'active',
+            'sex' => 'mare',
+            'persons' => [['role' => 'owner', 'breeding_station_id' => (string) $stationId]],
+        ]);
+        $detailMare = $visitor->get("/horse?id={$mareWithStation}");
+        $this->assertSame(200, $detailMare->statusCode);
+        $this->assertStringNotContainsString(
+            'Deckanfrage stellen',
+            $detailMare->body,
+            'Für eine Stute darf trotz Station-E-Mail kein Deckanfrage-Formular erscheinen.'
+        );
 
         // 4. Honeypot ausgefüllt: wird stillschweigend als "erfolg" behandelt.
         $csrfToken = $detailWith->formField('csrf_token') ?? '';
@@ -88,7 +104,7 @@ class DeckanfragePluginTest extends FunctionalTestCase {
             'message' => 'Spam',
             'webseite' => 'https://spam.example',
         ]);
-        $this->assertSame("/hengst?id={$horseWithStation}&deckanfrage=erfolg", $honeypotResponse->location());
+        $this->assertSame("/horse?id={$horseWithStation}&deckanfrage=erfolg", $honeypotResponse->location());
 
         // 5. Echte Anfrage: CSRF-, Validierungs- und Versandpfad durchlaufen -
         // Versand schlägt mangels SMTP-Konfiguration kontrolliert fehl.
@@ -99,9 +115,9 @@ class DeckanfragePluginTest extends FunctionalTestCase {
             'requester_email' => 'interessent@example.test',
             'message' => 'Ist der Hengst noch für die Decksaison verfügbar?',
         ]);
-        $this->assertSame("/hengst?id={$horseWithStation}&deckanfrage=fehler", $realResponse->location());
+        $this->assertSame("/horse?id={$horseWithStation}&deckanfrage=fehler", $realResponse->location());
 
-        $detailAfter = $visitor->get("/hengst?id={$horseWithStation}&deckanfrage=fehler");
+        $detailAfter = $visitor->get("/horse?id={$horseWithStation}&deckanfrage=fehler");
         $this->assertStringContainsString('konnte nicht versendet werden', $detailAfter->body);
 
         // 6. Regression zu Issue #26: Ein UNVERÖFFENTLICHTES Pferd (auch mit
@@ -121,7 +137,7 @@ class DeckanfragePluginTest extends FunctionalTestCase {
             'message' => 'Gibt es dieses Pferd?',
         ]);
         $this->assertSame(
-            "/hengst?id={$unpublishedHorse}&deckanfrage=erfolg",
+            "/horse?id={$unpublishedHorse}&deckanfrage=erfolg",
             $unpublishedResponse->location(),
             'Unveröffentlichte Pferde müssen denselben Status wie der Honeypot-Pfad liefern (kein Existenz-Orakel).'
         );
@@ -157,7 +173,7 @@ class DeckanfragePluginTest extends FunctionalTestCase {
             'message' => 'Anfrage an eine unveröffentlichte Station.',
         ]);
         $this->assertSame(
-            "/hengst?id={$horseWithHiddenStation}&deckanfrage=erfolg",
+            "/horse?id={$horseWithHiddenStation}&deckanfrage=erfolg",
             $hiddenStationPost->location(),
             'Eine unveröffentlichte Station darf per Direkt-POST nicht erreichbar sein - '
             . 'stillschweigend verwerfen wie beim Honeypot, kein Versand, kein Orakel.'

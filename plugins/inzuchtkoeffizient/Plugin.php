@@ -192,12 +192,36 @@ class RechnerController extends BaseController {
     public function show(): void {
         $db = Database::getInstance();
         $horses = $db->query(
-            "SELECT id, name, birth_year FROM horses WHERE deleted_at IS NULL ORDER BY name ASC"
+            "SELECT id, name, birth_year, sex FROM horses WHERE deleted_at IS NULL ORDER BY name ASC"
         )->fetchAll(PDO::FETCH_ASSOC);
+
+        // Geschlechtsabhängige Auswahllisten (#54): "Hengst (Vater)" bietet nur
+        // Hengste, "Stute (Mutter)" nur Stuten an - Pferde ohne Geschlechts-
+        // angabe (NULL, Altbestand) bleiben in beiden Listen wählbar,
+        // konsistent zur NULL-Regel des Kerns (Framework #165).
+        $sireOptions = array_values(array_filter($horses,
+            static fn(array $h) => !in_array($h['sex'] ?? null, ['mare', 'gelding'], true)));
+        $damOptions = array_values(array_filter($horses,
+            static fn(array $h) => !in_array($h['sex'] ?? null, ['stallion', 'gelding'], true)));
 
         $sireId = isset($_GET['sire_id']) && $_GET['sire_id'] !== '' ? (int) $_GET['sire_id'] : null;
         $damId = isset($_GET['dam_id']) && $_GET['dam_id'] !== '' ? (int) $_GET['dam_id'] : null;
         $depth = isset($_GET['depth']) ? max(1, min(self::MAX_DEPTH, (int) $_GET['depth'])) : self::DEFAULT_DEPTH;
+
+        // Serverseitige Prüfung (#54): Die Beschriftung "Hengst/Stute" darf
+        // keine Prüfung suggerieren, die nicht stattfindet - rollen-widrige
+        // IDs (Stute als Vater, Hengst/Wallach als Mutter) werden verworfen,
+        // egal was der Client schickt. NULL-Geschlecht besteht die Prüfung.
+        $sexErrors = [];
+        $sexById = array_column($horses, 'sex', 'id');
+        if ($sireId !== null && in_array($sexById[$sireId] ?? null, ['mare', 'gelding'], true)) {
+            $sexErrors[] = 'Das als Hengst (Vater) gewählte Pferd ist als ' . (($sexById[$sireId] === 'mare') ? 'Stute' : 'Wallach') . ' erfasst.';
+            $sireId = null;
+        }
+        if ($damId !== null && in_array($sexById[$damId] ?? null, ['stallion', 'gelding'], true)) {
+            $sexErrors[] = 'Das als Stute (Mutter) gewählte Pferd ist als ' . (($sexById[$damId] === 'stallion') ? 'Hengst' : 'Wallach') . ' erfasst.';
+            $damId = null;
+        }
 
         $result = null;
         if ($sireId && $damId) {
@@ -231,9 +255,14 @@ class RechnerController extends BaseController {
         echo '<p>Schätzt den voraussichtlichen Inzuchtkoeffizienten eines Fohlens aus zwei ausgewählten Elterntieren.</p>';
         echo '<form method="GET">';
 
+        if ($sexErrors !== []) {
+            echo '<p style="color:var(--danger-fg);background:var(--danger-soft-bg);padding:0.6rem 0.8rem;border-radius:4px;">'
+                . htmlspecialchars(implode(' ', $sexErrors), ENT_QUOTES, 'UTF-8') . ' Die Auswahl wurde verworfen.</p>';
+        }
+
         echo '<label for="sire_id">Hengst (Vater)</label><select name="sire_id" id="sire_id">';
         echo '<option value="">– auswählen –</option>';
-        foreach ($horses as $h) {
+        foreach ($sireOptions as $h) {
             $selected = ($sireId === (int) $h['id']) ? ' selected' : '';
             echo '<option value="' . (int) $h['id'] . '"' . $selected . '>'
                 . htmlspecialchars($h['name'] . ($h['birth_year'] ? ' (' . $h['birth_year'] . ')' : ''), ENT_QUOTES, 'UTF-8')
@@ -243,7 +272,7 @@ class RechnerController extends BaseController {
 
         echo '<label for="dam_id">Stute (Mutter)</label><select name="dam_id" id="dam_id">';
         echo '<option value="">– auswählen –</option>';
-        foreach ($horses as $h) {
+        foreach ($damOptions as $h) {
             $selected = ($damId === (int) $h['id']) ? ' selected' : '';
             echo '<option value="' . (int) $h['id'] . '"' . $selected . '>'
                 . htmlspecialchars($h['name'] . ($h['birth_year'] ? ' (' . $h['birth_year'] . ')' : ''), ENT_QUOTES, 'UTF-8')

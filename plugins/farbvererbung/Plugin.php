@@ -38,14 +38,36 @@ class Plugin {
             return $sections;
         }
 
+        // Rasse-Gate (#50, seit Framework #163 möglich): Bei EXPLIZIT anderer
+        // Rasse keine Fjord-Aussage - auch dann nicht, wenn der Farbtext wie
+        // ein Falb-Begriff aussieht. Ohne Rassenangabe (NULL, Altbestand)
+        // bleibt die vorsichtige Deutung, die der Farbtext ohnehin nur noch
+        // bei echten Falb-Begriffen auslöst.
+        $breed = trim((string) ($horse['breed'] ?? ''));
+        $isFjord = $breed !== '' && str_contains(mb_strtolower($breed, 'UTF-8'), 'fjord');
+        if ($breed !== '' && !$isFjord) {
+            return $sections;
+        }
+
         $label = FjordColor::label($key);
         $genotype = FjordColor::genotypeHint($key);
 
-        // Formulierung bewusst konditional (#50): Solange das Framework kein
-        // Rassefeld kennt, ist die Zuordnung eine Fjord-spezifische Deutung des
-        // Farbtexts, keine gesicherte Aussage über das Pferd. Nach Einführung
-        // des Rassefelds (Framework #163) wird hier zusätzlich auf die Rasse
-        // Fjordpferd gegatet (siehe Tracking #55).
+        if ($isFjord) {
+            // Rasse ist bestätigt Fjordpferd: die Einordnung darf als Aussage
+            // formuliert sein.
+            $sections[] = '<div style="margin-top:0.5rem;padding:0.75rem 1rem;background:var(--surface-muted);border-radius:6px;">'
+                . '<strong>🎨 Falbfarbe:</strong> ' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8')
+                . '<p style="margin:0.4rem 0 0 0;color:var(--text-muted);font-size:0.85em;">'
+                . 'Genetische Einordnung: ' . htmlspecialchars($genotype, ENT_QUOTES, 'UTF-8') . '. '
+                . 'Alle Fjordpferde tragen das Dun-(Falb-)Gen; die Farbunterschiede entstehen '
+                . 'aus der Grundfarbe (Extension/Agouti) und ggf. dem Cream-Gen.'
+                . '</p></div>';
+            return $sections;
+        }
+
+        // Rasse unbekannt: Formulierung bewusst konditional - die Zuordnung ist
+        // eine Fjord-spezifische Deutung des Farbtexts, keine gesicherte
+        // Aussage über das Pferd.
         $sections[] = '<div style="margin-top:0.5rem;padding:0.75rem 1rem;background:var(--surface-muted);border-radius:6px;">'
             . '<strong>🎨 Falbfarbe (Fjord-Deutung):</strong> ' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8')
             . '<p style="margin:0.4rem 0 0 0;color:var(--text-muted);font-size:0.85em;">'

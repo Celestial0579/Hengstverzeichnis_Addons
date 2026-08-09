@@ -35,7 +35,7 @@ class QrCodePluginTest extends FunctionalTestCase {
         // 1. Öffentliche Detailseite enthält den QR-Code-Bereich, den Link zum
         // Aushang und lädt die core-vendorte qrcode.js (unangemeldeter Besucher).
         $visitor = $this->newClient();
-        $detailPage = $visitor->get("/hengst?id={$horseId}");
+        $detailPage = $visitor->get("/horse?id={$horseId}");
         $this->assertSame(200, $detailPage->statusCode);
         $this->assertStringContainsString('QR-Code anzeigen', $detailPage->body);
         $this->assertStringContainsString('/js/qrcode.js', $detailPage->body);
@@ -46,7 +46,7 @@ class QrCodePluginTest extends FunctionalTestCase {
         $this->assertSame(200, $aushangPage->statusCode);
         $this->assertStringContainsString($horseName, $aushangPage->body);
         $this->assertStringContainsString('new QRCode(', $aushangPage->body);
-        $this->assertStringContainsString('/hengst?id=' . $horseId, $aushangPage->body);
+        $this->assertStringContainsString('/horse?id=' . $horseId, $aushangPage->body);
 
         // 3. Unbekannte ID liefert 404.
         $notFound = $visitor->get('/plugin/qr-code/aushang?id=0');
@@ -54,11 +54,11 @@ class QrCodePluginTest extends FunctionalTestCase {
 
         // 4. Sicherheit: ein UNVERÖFFENTLICHTES Pferd (is_published = 0) darf über
         // die öffentliche Aushang-Route nicht abrufbar sein - der Kern verbirgt es
-        // ebenfalls (/hengst liefert 404), das Plugin muss dieselbe Grenze wahren.
+        // ebenfalls (/horse liefert 404), das Plugin muss dieselbe Grenze wahren.
         $unpubName = "QrUnpub-{$unique}";
         $unpubId = $this->createHorse($admin, $unpubName, ['status' => 'active', 'is_published' => '0']);
 
-        $coreDetail = $visitor->get("/hengst?id={$unpubId}");
+        $coreDetail = $visitor->get("/horse?id={$unpubId}");
         $this->assertSame(404, $coreDetail->statusCode, 'Kern sollte unveröffentlichtes Pferd verbergen (Vorbedingung).');
 
         $unpubAushang = $visitor->get("/plugin/qr-code/aushang?id={$unpubId}");

@@ -34,6 +34,61 @@ class Plugin {
         $this->ensureTable();
         $hooks->addFilter('horse.detail_sections', [$this, 'addDetailSection']);
         $hooks->addFilter('admin.dashboard_tiles', [$this, 'addDashboardTile']);
+        // Lösch-/Papierkorb-Hooks des Kerns (#51 / Framework #164): Das Inserat
+        // selbst bleibt bei Soft-Delete bewusst UNVERÄNDERT gespeichert - die
+        // öffentliche Sichtbarkeit hängt ohnehin am Pferd (JOIN-Regel, siehe
+        // ListeController), und eine Wiederherstellung bringt das Inserat so
+        // verlustfrei zurück. Die Hooks schreiben stattdessen einen
+        // Audit-Log-Eintrag, damit die Diskrepanz "Verwaltung listet es,
+        // Börse zeigt es nicht" für Admins nachvollziehbar dokumentiert ist
+        // (den Status zeigt zusätzlich die Verwaltungsansicht je Inserat).
+        $hooks->addAction('horse.trashed', [$this, 'onHorseTrashed']);
+        $hooks->addAction('horse.restored', [$this, 'onHorseRestored']);
+        $hooks->addAction('horse.before_delete', [$this, 'onHorseBeforeDelete']);
+    }
+
+    public function onHorseTrashed(int $horseId, array $horse): void {
+        if (!$this->hasActiveListing($horseId)) {
+            return;
+        }
+        \App\Service\AuditLogger::log(
+            'Verkaufsbörse: Inserat durch Papierkorb öffentlich unsichtbar',
+            'plugin',
+            'Pferd ID ' . $horseId . ' (' . ($horse['name'] ?? 'unbekannt') . '): Das Inserat bleibt gespeichert und erscheint wieder, sobald das Pferd wiederhergestellt wird.'
+        );
+    }
+
+    public function onHorseRestored(int $horseId, array $horse): void {
+        if (!$this->hasActiveListing($horseId)) {
+            return;
+        }
+        \App\Service\AuditLogger::log(
+            'Verkaufsbörse: Inserat nach Wiederherstellung wieder sichtbar',
+            'plugin',
+            'Pferd ID ' . $horseId . ' (' . ($horse['name'] ?? 'unbekannt') . '): Das Inserat ist wieder öffentlich (sofern nicht abgelaufen und das Pferd veröffentlicht ist).'
+        );
+    }
+
+    public function onHorseBeforeDelete(int $horseId, array $horse, bool $permanent): void {
+        // Nur das ENDGÜLTIGE Löschen ist hier relevant - danach entfernt der
+        // FK-ON-DELETE-CASCADE die Inserat-Zeile mit, und dieser Eintrag ist
+        // die letzte Spur davon. Den Papierkorb-Fall behandelt onHorseTrashed.
+        if (!$permanent || !$this->hasActiveListing($horseId)) {
+            return;
+        }
+        \App\Service\AuditLogger::log(
+            'Verkaufsbörse: Inserat wird mit dem Pferd endgültig gelöscht',
+            'plugin',
+            'Pferd ID ' . $horseId . ' (' . ($horse['name'] ?? 'unbekannt') . '): Die Inserat-Zeile entfällt über den Fremdschlüssel (ON DELETE CASCADE).'
+        );
+    }
+
+    private function hasActiveListing(int $horseId): bool {
+        $stmt = Database::getInstance()->prepare(
+            'SELECT 1 FROM `plugin_verkaufsboerse_listings` WHERE horse_id = ?'
+        );
+        $stmt->execute([$horseId]);
+        return (bool) $stmt->fetchColumn();
     }
 
     private function ensureTable(): void {
@@ -208,7 +263,7 @@ class ListeController extends BaseController {
                 echo '<img src="' . htmlspecialchars((string) $listing['image_url'], ENT_QUOTES, 'UTF-8') . '" alt="">';
             }
             echo '<div>';
-            echo '<h2><a href="/hengst?id=' . (int) $listing['horse_id'] . '">' . htmlspecialchars((string) $listing['horse_name'], ENT_QUOTES, 'UTF-8') . '</a></h2>';
+            echo '<h2><a href="/horse?id=' . (int) $listing['horse_id'] . '">' . htmlspecialchars((string) $listing['horse_name'], ENT_QUOTES, 'UTF-8') . '</a></h2>';
             echo '<div class="price">' . htmlspecialchars($priceText, ENT_QUOTES, 'UTF-8') . '</div>';
             if (!empty($listing['birth_year'])) {
                 echo '<div>Geburtsjahr: ' . htmlspecialchars((string) $listing['birth_year'], ENT_QUOTES, 'UTF-8') . '</div>';
@@ -471,7 +526,7 @@ class KontaktController extends BaseController {
     }
 
     private function redirectBack(?int $horseId, string $status): void {
-        header('Location: /hengst?id=' . (int) $horseId . '&verkaufsanfrage=' . $status);
+        header('Location: /horse?id=' . (int) $horseId . '&verkaufsanfrage=' . $status);
         exit;
     }
 }

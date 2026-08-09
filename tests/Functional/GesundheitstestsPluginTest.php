@@ -56,7 +56,7 @@ class GesundheitstestsPluginTest extends FunctionalTestCase {
         $this->assertSame('/plugin/gesundheitstests/verwaltung', $storePrivate->location());
 
         $visitor = $this->newClient();
-        $detailPrivate = $visitor->get("/hengst?id={$horseId}");
+        $detailPrivate = $visitor->get("/horse?id={$horseId}");
         $this->assertSame(200, $detailPrivate->statusCode);
         $this->assertStringNotContainsString(
             $privateType,
@@ -76,7 +76,7 @@ class GesundheitstestsPluginTest extends FunctionalTestCase {
         ]);
         $this->assertSame('/plugin/gesundheitstests/verwaltung', $storePublic->location());
 
-        $detailPublic = $visitor->get("/hengst?id={$horseId}");
+        $detailPublic = $visitor->get("/horse?id={$horseId}");
         $this->assertStringContainsString('DNA-/Gesundheitstests', $detailPublic->body);
         $this->assertStringContainsString($publicType, $detailPublic->body);
         $this->assertStringContainsString('Abstammung bestätigt.', $detailPublic->body);
@@ -124,7 +124,7 @@ class GesundheitstestsPluginTest extends FunctionalTestCase {
             $this->assertSame('/plugin/gesundheitstests/verwaltung', $deleteResponse->location());
         }
 
-        $detailAfterDelete = $visitor->get("/hengst?id={$horseId}");
+        $detailAfterDelete = $visitor->get("/horse?id={$horseId}");
         $this->assertStringNotContainsString('DNA-/Gesundheitstests', $detailAfterDelete->body);
     }
 }

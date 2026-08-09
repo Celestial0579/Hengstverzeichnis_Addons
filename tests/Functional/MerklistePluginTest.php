@@ -45,7 +45,7 @@ class MerklistePluginTest extends FunctionalTestCase {
 
         // 1. "Merken"-Button auf der öffentlichen Detailseite - und der
         // "Zur Merkliste"-Link dort als App-Schaltfläche statt nackter Link (#49).
-        $detailPage = $visitor->get("/hengst?id={$publishedId}");
+        $detailPage = $visitor->get("/horse?id={$publishedId}");
         $this->assertSame(200, $detailPage->statusCode);
         $this->assertStringContainsString('data-hv-merkliste="' . $publishedId . '"', $detailPage->body);
         $this->assertSame(
@@ -83,7 +83,7 @@ class MerklistePluginTest extends FunctionalTestCase {
 
         $published = $data[array_search($publishedId, $returnedIds, true)];
         $this->assertSame($publishedName, $published['name']);
-        $this->assertSame('/hengst?id=' . $publishedId, $published['url']);
+        $this->assertSame('/horse?id=' . $publishedId, $published['url']);
 
         // 5. Leere/unsinnige Eingaben liefern ein leeres Array statt Fehler.
         foreach (['', 'abc,-5,0', str_repeat('999999,', 150) . '999999'] as $badIds) {

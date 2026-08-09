@@ -47,7 +47,7 @@ class FarbvererbungPluginTest extends FunctionalTestCase {
             'color' => 'Rotfalbe',
         ]);
         $visitor = $this->newClient();
-        $detailPage = $visitor->get("/hengst?id={$horseId}");
+        $detailPage = $visitor->get("/horse?id={$horseId}");
         $this->assertSame(200, $detailPage->statusCode);
         $this->assertStringContainsString(
             'Rotfalbe (Rødblakk)',
@@ -62,13 +62,40 @@ class FarbvererbungPluginTest extends FunctionalTestCase {
             'status' => 'active',
             'color' => 'Braun',
         ]);
-        $plainPage = $visitor->get("/hengst?id={$plainBrownId}");
+        $plainPage = $visitor->get("/horse?id={$plainBrownId}");
         $this->assertSame(200, $plainPage->statusCode);
         $this->assertStringNotContainsString(
             'Falbfarbe',
             $plainPage->body,
             "Ein braunes Pferd ohne Falb-Hinweis darf keine Fjord-Falbfarben-Box erhalten. Body: {$plainPage->body}"
         );
+
+        // 1c. Rasse-Gate (#50, seit Framework #163): Bei explizit ANDERER Rasse
+        // gibt es trotz Falb-Farbtext keine Fjord-Box; bei bestätigter Rasse
+        // Fjordpferd ist die Aussage nicht mehr als bloße "Deutung" formuliert.
+        $trakId = $this->createHorse($admin, "RotfalbeTrak-{$unique}", [
+            'status' => 'active',
+            'color' => 'Rotfalbe',
+            'breed' => 'Trakehner',
+        ]);
+        $trakPage = $visitor->get("/horse?id={$trakId}");
+        $this->assertStringNotContainsString(
+            'Falbfarbe',
+            $trakPage->body,
+            'Bei Rasse Trakehner darf keine Fjord-Falbfarben-Box erscheinen.'
+        );
+
+        $fjordId = $this->createHorse($admin, "RotfalbeFjord-{$unique}", [
+            'status' => 'active',
+            'color' => 'Rotfalbe',
+            'breed' => 'Norwegisches Fjordpferd',
+        ]);
+        $fjordPage = $visitor->get("/horse?id={$fjordId}");
+        $this->assertStringContainsString('Falbfarbe:</strong>', $fjordPage->body, 'Bei bestätigter Fjord-Rasse erscheint die Box.');
+        $this->assertStringNotContainsString('Fjord-Deutung', $fjordPage->body, 'Bei bestätigter Rasse ist die Einordnung keine bloße Deutung mehr.');
+
+        // Ohne Rassenangabe (Pferd aus Schritt 1) bleibt die vorsichtige Deutung.
+        $this->assertStringContainsString('Fjord-Deutung', $detailPage->body);
 
         // 2. Farbrechner: Rotfalbe × Rotfalbe ergibt exakt 100 % Rotfalbe.
         $calcResponse = $admin->get('/plugin/farbvererbung/rechner?sire_color=rodblakk&dam_color=rodblakk');
