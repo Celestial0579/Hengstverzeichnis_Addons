@@ -161,6 +161,12 @@ class ListeController extends BaseController {
             $this->renderNotFound('Nicht gefunden.');
         }
 
+        // Öffentliche Sichtbarkeitsregel (#51) - Referenz für alle drei
+        // Call-Sites dieses Plugins: sichtbar ist ein Inserat nur, wenn das
+        // Pferd weder im Papierkorb (deleted_at) noch unveröffentlicht ist UND
+        // das Inserat nicht abgelaufen ist. Die Verwaltung listet dagegen
+        // bewusst ALLE Inserate mit ausgewiesenem Status; das Kontaktformular
+        // (KontaktController::submit) prüft exakt diese Regel erneut.
         $listings = Database::getInstance()->query(
             'SELECT l.*, h.name AS horse_name, h.birth_year, h.color, h.image_url
              FROM `plugin_verkaufsboerse_listings` l
@@ -227,8 +233,14 @@ class VerwaltungController extends BaseController {
             'SELECT id, name, birth_year FROM horses WHERE deleted_at IS NULL ORDER BY name ASC'
         )->fetchAll(PDO::FETCH_ASSOC);
 
+        // Bewusst OHNE Sichtbarkeitsfilter (anders als die öffentliche Börse,
+        // siehe ListeController::show()): Die Verwaltung soll ALLE Inserate
+        // zeigen - aber mit ausgewiesenem Status (#51), damit die Diskrepanz
+        // "Verwaltung listet es, Börse zeigt es nicht" sichtbar wird, statt
+        // still nebeneinander zu existieren (Pferd im Papierkorb/unveröffentlicht,
+        // Inserat abgelaufen).
         $listings = $db->query(
-            'SELECT l.*, h.name AS horse_name
+            'SELECT l.*, h.name AS horse_name, h.deleted_at AS horse_deleted_at, h.is_published AS horse_is_published
              FROM `plugin_verkaufsboerse_listings` l
              JOIN horses h ON h.id = l.horse_id
              ORDER BY l.listed_at DESC'
@@ -272,13 +284,27 @@ class VerwaltungController extends BaseController {
         echo '</form>';
 
         echo '<h2>Aktuelle Inserate</h2>';
-        echo '<table><thead><tr><th>Pferd</th><th>Preis</th><th>Kontakt</th><th>Gelistet bis</th><th></th></tr></thead><tbody>';
+        echo '<table><thead><tr><th>Pferd</th><th>Sichtbarkeit</th><th>Preis</th><th>Kontakt</th><th>Gelistet bis</th><th></th></tr></thead><tbody>';
         foreach ($listings as $row) {
             $priceText = !empty($row['price_on_request']) || $row['price'] === null
                 ? 'auf Anfrage'
                 : number_format((float) $row['price'], 2, ',', '.') . ' €';
+
+            // Warum die öffentliche Börse dieses Inserat ggf. NICHT zeigt (#51) -
+            // dieselben Bedingungen wie im JOIN von ListeController::show().
+            if ($row['horse_deleted_at'] !== null) {
+                $visibility = '<span style="color:var(--danger-fg);font-weight:bold;">im Papierkorb - öffentlich unsichtbar</span>';
+            } elseif (empty($row['horse_is_published'])) {
+                $visibility = '<span style="color:var(--warning-fg);font-weight:bold;">Pferd unveröffentlicht - öffentlich unsichtbar</span>';
+            } elseif (!empty($row['listed_until']) && $row['listed_until'] < date('Y-m-d')) {
+                $visibility = '<span style="color:var(--warning-fg);font-weight:bold;">abgelaufen - öffentlich unsichtbar</span>';
+            } else {
+                $visibility = '<span style="color:var(--success-fg);">öffentlich sichtbar</span>';
+            }
+
             echo '<tr>';
             echo '<td>' . htmlspecialchars((string) $row['horse_name'], ENT_QUOTES, 'UTF-8') . '</td>';
+            echo '<td>' . $visibility . '</td>';
             echo '<td>' . htmlspecialchars($priceText, ENT_QUOTES, 'UTF-8') . '</td>';
             echo '<td>' . htmlspecialchars((string) $row['contact_email'], ENT_QUOTES, 'UTF-8') . '</td>';
             echo '<td>' . htmlspecialchars((string) ($row['listed_until'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
@@ -289,7 +315,7 @@ class VerwaltungController extends BaseController {
             echo '</tr>';
         }
         if (empty($listings)) {
-            echo '<tr><td colspan="5">Noch keine Inserate erfasst.</td></tr>';
+            echo '<tr><td colspan="6">Noch keine Inserate erfasst.</td></tr>';
         }
         echo '</tbody></table>';
 

@@ -53,6 +53,10 @@ class KatalogExportPluginTest extends FunctionalTestCase {
         $this->assertSame(200, $csvResponse->statusCode);
         $this->assertStringContainsString('text/csv', (string) $csvResponse->header('Content-Type'));
         $this->assertStringContainsString('attachment', (string) $csvResponse->header('Content-Disposition'));
+        // Dateiname "verzeichnis-*" statt "hengstkatalog-*" (#57): der Export
+        // enthält alle Pferde, nicht nur Hengste.
+        $this->assertStringContainsString('filename="verzeichnis-', (string) $csvResponse->header('Content-Disposition'));
+        $this->assertStringNotContainsString('hengstkatalog', (string) $csvResponse->header('Content-Disposition'));
         $this->assertStringContainsString($horseName, $csvResponse->body);
         $this->assertStringContainsString('Fuchs', $csvResponse->body);
 

@@ -167,5 +167,38 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
 
         $detailAfterDelete = $visitor->get("/hengst?id={$horseId}");
         $this->assertStringNotContainsString('Zum Verkauf', $detailAfterDelete->body);
+
+        // 12. Sichtbarkeits-Status in der Verwaltung (#51): Die Verwaltung
+        // listet bewusst ALLE Inserate, weist aber aus, warum eines öffentlich
+        // fehlt - vorher zeigten Verwaltung und Börse still Verschiedenes.
+        // 12a. Das Inserat des unveröffentlichten Pferds (aus 5b) ist markiert.
+        $verwaltungStatus = $admin->get('/plugin/verkaufsboerse/verwaltung');
+        $this->assertStringContainsString('Pferd unveröffentlicht - öffentlich unsichtbar', $verwaltungStatus->body);
+
+        // 12b. Pferd mit aktivem Inserat in den Papierkorb verschieben: aus der
+        // öffentlichen Börse verschwindet es, die Verwaltung markiert es.
+        $trashedName = "PapierkorbVerkauf-{$unique}";
+        $trashedId = $this->createHorse($admin, $trashedName, ['status' => 'active']);
+        $trashedStore = $admin->post('/plugin/verkaufsboerse/verwaltung/store', [
+            'csrf_token' => $verwaltungStatus->formField('csrf_token') ?? '',
+            'horse_id' => (string) $trashedId,
+            'price' => '15000.00',
+            'contact_email' => $contactEmail,
+        ]);
+        $this->assertSame('/plugin/verkaufsboerse/verwaltung', $trashedStore->location());
+
+        $adminHorses = $admin->get('/admin/horses');
+        $trashResponse = $admin->post('/admin/horses/delete', [
+            'csrf_token' => $adminHorses->formField('csrf_token') ?? '',
+            'id' => (string) $trashedId,
+        ]);
+        $this->assertSame('/admin/horses?success=deleted', $trashResponse->location());
+
+        $listeAfterTrash = $visitor->get('/plugin/verkaufsboerse/liste');
+        $this->assertStringNotContainsString($trashedName, $listeAfterTrash->body, 'Papierkorb-Pferd darf nicht in der öffentlichen Börse erscheinen.');
+
+        $verwaltungAfterTrash = $admin->get('/plugin/verkaufsboerse/verwaltung');
+        $this->assertStringContainsString($trashedName, $verwaltungAfterTrash->body, 'Die Verwaltung soll das Inserat weiter listen.');
+        $this->assertStringContainsString('im Papierkorb - öffentlich unsichtbar', $verwaltungAfterTrash->body);
     }
 }

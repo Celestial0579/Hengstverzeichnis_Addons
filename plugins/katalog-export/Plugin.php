@@ -240,7 +240,10 @@ class ExportController extends BaseController {
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         header('Content-Type: text/csv; charset=utf-8');
-        header('Content-Disposition: attachment; filename="hengstkatalog-' . date('Y-m-d') . '.csv"');
+        // "verzeichnis-" statt "hengstkatalog-" (#57): exportiert werden ALLE
+        // Pferde des Katalogs, nicht nur Hengste - analog zur Katalog-
+        // Umbenennung im Framework (dort #170).
+        header('Content-Disposition: attachment; filename="verzeichnis-' . date('Y-m-d') . '.csv"');
 
         // UTF-8 BOM, damit Excel unter Windows Umlaute korrekt erkennt statt
         // die Datei fälschlich als ANSI zu interpretieren.

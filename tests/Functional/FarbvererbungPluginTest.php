@@ -55,6 +55,21 @@ class FarbvererbungPluginTest extends FunctionalTestCase {
             "Detailseite sollte die erkannte Falbfarbe anzeigen. Body: {$detailPage->body}"
         );
 
+        // 1b. Generische Grundfarben lösen KEINE Falb-Einordnung mehr aus (#50):
+        // ein schlicht braunes Pferd ist ohne Dun-Gen kein Braunfalbe. Vor dem
+        // Fix ordnete das Addon jedem "Braun" die Fjord-Farbe Brunblakk zu.
+        $plainBrownId = $this->createHorse($admin, "Braunes-{$unique}", [
+            'status' => 'active',
+            'color' => 'Braun',
+        ]);
+        $plainPage = $visitor->get("/hengst?id={$plainBrownId}");
+        $this->assertSame(200, $plainPage->statusCode);
+        $this->assertStringNotContainsString(
+            'Falbfarbe',
+            $plainPage->body,
+            "Ein braunes Pferd ohne Falb-Hinweis darf keine Fjord-Falbfarben-Box erhalten. Body: {$plainPage->body}"
+        );
+
         // 2. Farbrechner: Rotfalbe × Rotfalbe ergibt exakt 100 % Rotfalbe.
         $calcResponse = $admin->get('/plugin/farbvererbung/rechner?sire_color=rodblakk&dam_color=rodblakk');
         $this->assertSame(200, $calcResponse->statusCode);
