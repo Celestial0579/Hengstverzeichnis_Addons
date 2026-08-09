@@ -210,7 +210,20 @@ class RechnerController extends BaseController {
         }
 
         echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Verpaarungsrechner</title>';
-        echo '<style>body{font-family:sans-serif;padding:2rem;max-width:700px;margin:0 auto;}';
+        echo '<link rel="stylesheet" href="/css/style.css">';
+        echo <<<'HTML'
+        <script>
+        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
+        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
+        (function () {
+            var stored = localStorage.getItem('theme');
+            if (stored === 'dark' || stored === 'light') {
+                document.documentElement.setAttribute('data-theme', stored);
+            }
+        })();
+        </script>
+        HTML;
+        echo '<style>body{font-family:sans-serif;padding:2rem;max-width:700px;margin:0 auto;background:var(--bg-color);}';
         echo 'label{display:block;margin-top:1rem;font-weight:bold;} select,input{width:100%;padding:0.5rem;margin-top:0.3rem;}';
         echo '.result{margin-top:1.5rem;padding:1rem;background:var(--surface-muted);border-radius:6px;font-size:1.1rem;}</style>';
         echo '</head><body>';
