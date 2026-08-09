@@ -96,6 +96,19 @@ class ExportController extends BaseController {
         $generatedAt = htmlspecialchars(date('d.m.Y H:i'), ENT_QUOTES, 'UTF-8');
 
         echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Stammbaum ' . htmlspecialchars($title, ENT_QUOTES, 'UTF-8') . '</title>';
+        echo '<link rel="stylesheet" href="/css/style.css">';
+        echo <<<'HTML'
+        <script>
+        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
+        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
+        (function () {
+            var stored = localStorage.getItem('theme');
+            if (stored === 'dark' || stored === 'light') {
+                document.documentElement.setAttribute('data-theme', stored);
+            }
+        })();
+        </script>
+        HTML;
         echo $this->styles();
         echo '</head><body>';
 
@@ -152,16 +165,16 @@ class ExportController extends BaseController {
         return <<<CSS
 <style>
     * { box-sizing: border-box; }
-    body { font-family: sans-serif; padding: 1.5rem; color: #222; }
+    body { font-family: sans-serif; padding: 1.5rem; color: var(--text-color); background: var(--bg-color); }
     h1 { margin: 0 0 0.2rem 0; }
     .meta { color: var(--text-muted); font-size: 0.9rem; margin: 0 0 1.5rem 0; }
-    .toolbar { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; padding: 0.8rem; background: #f0f0f0; border-radius: 6px; }
+    .toolbar { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; padding: 0.8rem; background: var(--surface-muted); border-radius: 6px; }
     .toolbar button { padding: 0.5rem 1rem; font-size: 1rem; cursor: pointer; }
     .toolbar span { color: var(--text-muted); font-size: 0.85rem; }
 
     .pedigree { display: flex; overflow-x: auto; }
     .node { display: flex; align-items: center; }
-    .box { border: 1px solid #999; border-radius: 6px; padding: 0.4rem 0.7rem; white-space: nowrap; background: #fff; text-align: center; min-width: 120px; }
+    .box { border: 1px solid var(--border-color); border-radius: 6px; padding: 0.4rem 0.7rem; white-space: nowrap; background: var(--card-bg); text-align: center; min-width: 120px; }
     .box.placeholder { border-style: dashed; color: var(--text-muted); background: var(--surface-muted); }
     .box-name { font-weight: bold; font-size: 0.9rem; }
     .box-meta { font-size: 0.75rem; color: var(--text-muted); }
@@ -171,7 +184,11 @@ class ExportController extends BaseController {
 
     @media print {
         .no-print { display: none !important; }
-        body { padding: 0; }
+        /* Druck-/PDF-Ansicht bleibt bewusst hell, auch wenn data-theme=dark aktiv ist. */
+        body { padding: 0; background: #fff; color: #222; }
+        .box { background: #fff; border-color: #999; }
+        .box.placeholder { background: #f0f0f0; color: #555; }
+        .meta, .box-meta { color: #555; }
         @page { size: A3 landscape; margin: 1cm; }
     }
 </style>

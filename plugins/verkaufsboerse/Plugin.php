@@ -76,7 +76,7 @@ class Plugin {
             : number_format((float) $listing['price'], 2, ',', '.') . ' €';
         $csrfToken = htmlspecialchars(Router::generateCsrfToken(), ENT_QUOTES, 'UTF-8');
 
-        $html = '<div style="margin-top:1rem;padding:1rem;background:var(--info-soft-bg);border:1px solid #f0d78c;border-radius:6px;">';
+        $html = '<div style="margin-top:1rem;padding:1rem;background:var(--info-soft-bg);border:1px solid var(--warning-fg);border-radius:6px;">';
         $html .= '<h3 style="margin-top:0;">🏷️ Zum Verkauf - ' . htmlspecialchars($priceText, ENT_QUOTES, 'UTF-8') . '</h3>';
 
         if (!empty($listing['description'])) {
@@ -176,12 +176,25 @@ class ListeController extends BaseController {
         )->fetchAll(PDO::FETCH_ASSOC);
 
         echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Verkaufsbörse</title>';
+        echo '<link rel="stylesheet" href="/css/style.css">';
+        echo <<<'HTML'
+        <script>
+        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
+        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
+        (function () {
+            var stored = localStorage.getItem('theme');
+            if (stored === 'dark' || stored === 'light') {
+                document.documentElement.setAttribute('data-theme', stored);
+            }
+        })();
+        </script>
+        HTML;
         echo '<style>
-            body{font-family:sans-serif;padding:2rem;max-width:900px;margin:0 auto;}
-            .listing{display:flex;gap:1rem;padding:1rem;border-bottom:1px solid #ddd;align-items:center;}
+            body{font-family:sans-serif;padding:2rem;max-width:900px;margin:0 auto;background:var(--bg-color);}
+            .listing{display:flex;gap:1rem;padding:1rem;border-bottom:1px solid var(--border-color);align-items:center;}
             .listing img{width:100px;height:100px;object-fit:cover;border-radius:6px;}
             .listing h2{margin:0 0 0.3rem 0;font-size:1.1rem;}
-            .price{font-weight:bold;color:#8a6d00;}
+            .price{font-weight:bold;color:var(--warning-fg);}
         </style></head><body>';
         echo '<h1>🏷️ Verkaufs-/Vermittlungsbörse</h1>';
 
@@ -249,10 +262,23 @@ class VerwaltungController extends BaseController {
         $csrfToken = Router::generateCsrfToken();
 
         echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Verkaufsbörse verwalten</title>';
+        echo '<link rel="stylesheet" href="/css/style.css">';
+        echo <<<'HTML'
+        <script>
+        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
+        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
+        (function () {
+            var stored = localStorage.getItem('theme');
+            if (stored === 'dark' || stored === 'light') {
+                document.documentElement.setAttribute('data-theme', stored);
+            }
+        })();
+        </script>
+        HTML;
         echo '<style>
-            body{font-family:sans-serif;padding:2rem;max-width:900px;margin:0 auto;}
+            body{font-family:sans-serif;padding:2rem;max-width:900px;margin:0 auto;background:var(--bg-color);}
             table{width:100%;border-collapse:collapse;margin-top:1.5rem;}
-            th,td{text-align:left;padding:0.5rem;border-bottom:1px solid #ddd;font-size:0.9rem;}
+            th,td{text-align:left;padding:0.5rem;border-bottom:1px solid var(--border-color);font-size:0.9rem;}
             label{display:block;margin-top:0.8rem;font-weight:bold;font-size:0.9rem;}
             input,select,textarea{width:100%;padding:0.4rem;margin-top:0.2rem;}
             .row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}

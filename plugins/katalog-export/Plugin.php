@@ -87,7 +87,20 @@ class ExportController extends BaseController {
         $stations = $db->query("SELECT DISTINCT name FROM breeding_stations WHERE deleted_at IS NULL ORDER BY name ASC")->fetchAll(PDO::FETCH_COLUMN);
 
         echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Katalog-Export</title>';
-        echo '<style>body{font-family:sans-serif;padding:2rem;max-width:700px;margin:0 auto;}
+        echo '<link rel="stylesheet" href="/css/style.css">';
+        echo <<<'HTML'
+        <script>
+        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
+        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
+        (function () {
+            var stored = localStorage.getItem('theme');
+            if (stored === 'dark' || stored === 'light') {
+                document.documentElement.setAttribute('data-theme', stored);
+            }
+        })();
+        </script>
+        HTML;
+        echo '<style>body{font-family:sans-serif;padding:2rem;max-width:700px;margin:0 auto;background:var(--bg-color);}
             label{display:block;margin-top:0.9rem;font-weight:bold;font-size:0.9rem;}
             input,select{width:100%;padding:0.4rem;margin-top:0.2rem;}
             .row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}</style>';

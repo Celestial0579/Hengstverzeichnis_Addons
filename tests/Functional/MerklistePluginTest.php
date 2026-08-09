@@ -43,15 +43,27 @@ class MerklistePluginTest extends FunctionalTestCase {
 
         $visitor = $this->newClient();
 
-        // 1. "Merken"-Button auf der öffentlichen Detailseite.
+        // 1. "Merken"-Button auf der öffentlichen Detailseite - und der
+        // "Zur Merkliste"-Link dort als App-Schaltfläche statt nackter Link (#49).
         $detailPage = $visitor->get("/hengst?id={$publishedId}");
         $this->assertSame(200, $detailPage->statusCode);
         $this->assertStringContainsString('data-hv-merkliste="' . $publishedId . '"', $detailPage->body);
+        $this->assertSame(
+            1,
+            preg_match('/<a href="\/plugin\/merkliste" class="btn btn-secondary"[^>]*>Zur Merkliste<\/a>/', $detailPage->body),
+            'Der "Zur Merkliste"-Link muss als .btn btn-secondary gerendert werden'
+        );
 
-        // 2. Kompakter Button auf den Katalogkarten (catalog.card_sections).
+        // 2. Kompakter Button auf den Katalogkarten (catalog.card_sections) und
+        // der Katalog-Einstieg zur Merkliste (#49): das idempotente Skript hängt
+        // clientseitig GENAU EINEN Einstiegs-Link neben den Trefferzahl-Badge -
+        // serverseitig prüfbar ist, dass der Einfüge-Code mit ausgeliefert wird
+        // und das Ziel-Element (hit-count-badge) auf der Seite existiert.
         $catalogPage = $visitor->get('/katalog');
         $this->assertSame(200, $catalogPage->statusCode);
         $this->assertStringContainsString('data-hv-merkliste=', $catalogPage->body);
+        $this->assertStringContainsString('hv-merkliste-entry', $catalogPage->body, 'Katalog-Einstiegs-Skript fehlt');
+        $this->assertStringContainsString('id="hit-count-badge"', $catalogPage->body, 'Ankerelement für den Einstieg fehlt');
 
         // 3. Merklisten-Seite ist anonym erreichbar.
         $listPage = $visitor->get('/plugin/merkliste');

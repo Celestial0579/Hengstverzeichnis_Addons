@@ -51,11 +51,14 @@ class Plugin {
 
         $html = '<button type="button" data-hv-merkliste="' . $horseId . '" '
             . 'onclick="hvMerklisteToggle(this)" '
-            . 'style="' . $style . 'margin-top:0.5rem;border:1px solid #c9971b;background:var(--info-soft-bg);border-radius:4px;cursor:pointer;">'
+            . 'style="' . $style . 'margin-top:0.5rem;border:1px solid var(--warning-fg);background:var(--info-soft-bg);border-radius:4px;cursor:pointer;">'
             . '☆ Merken</button>';
 
         if (!$compact) {
-            $html .= ' <a href="/plugin/merkliste" style="margin-left:0.5rem;font-size:0.9em;">Zur Merkliste</a>';
+            // Als App-Schaltfläche statt nackter Browser-Link (#49): die Klassen
+            // kommen aus dem Framework-CSS, das im Detailseiten-Kontext geladen
+            // ist - damit stimmen auch die Theme-Farben im Darkmode (#48).
+            $html .= ' <a href="/plugin/merkliste" class="btn btn-secondary" style="margin-left:0.5rem;padding:0.5rem 1rem;">Zur Merkliste</a>';
         }
 
         $html .= '<script>
@@ -83,6 +86,27 @@ class Plugin {
                             // sind - also auf jedem befuellten Katalog und jeder Detailseite.
                             if (btn.textContent !== next) { btn.textContent = next; }
                         });
+                        window.hvMerkliste.ensureCatalogEntry(ids);
+                    },
+                    // Genau EIN "Zur Merkliste"-Einstieg auf der Katalogseite (#49):
+                    // neben dem Trefferzahl-Badge, den es nur dort gibt - die
+                    // Detailseite hat ihren eigenen Link. Einfuegen ist idempotent
+                    // (ID-Guard), der Zaehler-Text folgt demselben textContent-
+                    // Guard wie syncButtons (sonst Observer-Endlosschleife, #47).
+                    ensureCatalogEntry: function (ids) {
+                        var badge = document.getElementById("hit-count-badge");
+                        if (!badge) { return; }
+                        var entry = document.getElementById("hv-merkliste-entry");
+                        if (!entry) {
+                            entry = document.createElement("a");
+                            entry.id = "hv-merkliste-entry";
+                            entry.href = "/plugin/merkliste";
+                            entry.className = "btn btn-secondary";
+                            entry.style.cssText = "padding:0.3rem 0.8rem;font-size:0.9rem;";
+                            badge.parentNode.insertBefore(entry, badge);
+                        }
+                        var next = "★ Merkliste (" + ids.length + ")";
+                        if (entry.textContent !== next) { entry.textContent = next; }
                     }
                 };
                 window.hvMerklisteToggle = function (btn) {
@@ -143,10 +167,23 @@ class MerklisteController extends BaseController {
 
     public function show(): void {
         echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Meine Merkliste</title>';
+        echo '<link rel="stylesheet" href="/css/style.css">';
+        echo <<<'HTML'
+        <script>
+        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
+        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
+        (function () {
+            var stored = localStorage.getItem('theme');
+            if (stored === 'dark' || stored === 'light') {
+                document.documentElement.setAttribute('data-theme', stored);
+            }
+        })();
+        </script>
+        HTML;
         echo '<meta name="viewport" content="width=device-width, initial-scale=1">';
         echo '<style>
-            body{font-family:sans-serif;padding:2rem;max-width:900px;margin:0 auto;}
-            .card{display:flex;gap:1rem;padding:1rem;border-bottom:1px solid #ddd;align-items:center;}
+            body{font-family:sans-serif;padding:2rem;max-width:900px;margin:0 auto;background:var(--bg-color);}
+            .card{display:flex;gap:1rem;padding:1rem;border-bottom:1px solid var(--border-color);align-items:center;}
             .card img{width:80px;height:80px;object-fit:cover;border-radius:6px;}
             .card h2{margin:0 0 0.3rem 0;font-size:1.05rem;}
             .remove{color:var(--danger-fg);background:none;border:none;cursor:pointer;padding:0.3rem 0.6rem;}
