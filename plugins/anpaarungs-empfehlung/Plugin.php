@@ -195,12 +195,25 @@ class EmpfehlungController extends BaseController {
         echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8">';
         echo '<meta name="viewport" content="width=device-width, initial-scale=1">';
         echo '<title>Anpaarungs-Empfehlung</title>';
-        echo '<style>body{font-family:sans-serif;padding:2rem;max-width:820px;margin:0 auto;}';
+        echo '<link rel="stylesheet" href="/css/style.css">';
+        echo <<<'HTML'
+        <script>
+        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
+        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
+        (function () {
+            var stored = localStorage.getItem('theme');
+            if (stored === 'dark' || stored === 'light') {
+                document.documentElement.setAttribute('data-theme', stored);
+            }
+        })();
+        </script>
+        HTML;
+        echo '<style>body{font-family:sans-serif;padding:2rem;max-width:820px;margin:0 auto;background:var(--bg-color);}';
         echo 'label{display:block;margin-top:1rem;font-weight:bold;} select,input{width:100%;padding:0.5rem;margin-top:0.3rem;}';
         echo '.inline{display:flex;gap:1rem;flex-wrap:wrap;} .inline > div{flex:1;min-width:140px;}';
-        echo 'table{width:100%;border-collapse:collapse;margin-top:1.2rem;} th,td{padding:0.45rem 0.6rem;border-bottom:1px solid #eee;text-align:left;}';
+        echo 'table{width:100%;border-collapse:collapse;margin-top:1.2rem;} th,td{padding:0.45rem 0.6rem;border-bottom:1px solid var(--border-color);text-align:left;}';
         echo 'th{background:var(--surface-muted);} td.num{text-align:right;font-variant-numeric:tabular-nums;}';
-        echo 'tr.best td{background:#eafaf0;} tr.warn td{background:#fdf3f3;}';
+        echo 'tr.best td{background:var(--success-soft-bg);} tr.warn td{background:var(--danger-soft-bg);}';
         echo '.muted{color:var(--text-muted);font-size:0.85em;}</style></head><body>';
         echo '<h1>💞 Anpaarungs-Empfehlung</h1>';
         echo '<p>Wählt für ein Basispferd (z. B. eine Stute) die genetisch vielfältigsten Partner: '

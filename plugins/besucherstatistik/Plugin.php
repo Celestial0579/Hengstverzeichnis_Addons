@@ -175,8 +175,21 @@ class StatistikController extends BaseController {
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Besucherstatistik</title>';
-        echo '<style>body{font-family:sans-serif;padding:2rem;max-width:800px;margin:0 auto;}';
-        echo 'table{width:100%;border-collapse:collapse;} th,td{text-align:left;padding:0.5rem;border-bottom:1px solid #ddd;}</style>';
+        echo '<link rel="stylesheet" href="/css/style.css">';
+        echo <<<'HTML'
+        <script>
+        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
+        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
+        (function () {
+            var stored = localStorage.getItem('theme');
+            if (stored === 'dark' || stored === 'light') {
+                document.documentElement.setAttribute('data-theme', stored);
+            }
+        })();
+        </script>
+        HTML;
+        echo '<style>body{font-family:sans-serif;padding:2rem;max-width:800px;margin:0 auto;background:var(--bg-color);}';
+        echo 'table{width:100%;border-collapse:collapse;} th,td{text-align:left;padding:0.5rem;border-bottom:1px solid var(--border-color);}</style>';
         echo '</head><body>';
         echo '<h1>📊 Besucherstatistik</h1>';
         echo '<p>Meistaufgerufene Pferde-Profile der öffentlichen Detailseite.</p>';
