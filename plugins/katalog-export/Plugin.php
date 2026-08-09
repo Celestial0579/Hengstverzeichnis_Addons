@@ -84,6 +84,7 @@ class ExportController extends BaseController {
     public function form(): void {
         $db = Database::getInstance();
         $colors = $db->query("SELECT DISTINCT color FROM horses WHERE color IS NOT NULL AND color != '' AND deleted_at IS NULL ORDER BY color ASC")->fetchAll(PDO::FETCH_COLUMN);
+        $breeds = $db->query("SELECT DISTINCT breed FROM horses WHERE breed IS NOT NULL AND breed != '' AND deleted_at IS NULL ORDER BY breed ASC")->fetchAll(PDO::FETCH_COLUMN);
         $stations = $db->query("SELECT DISTINCT name FROM breeding_stations WHERE deleted_at IS NULL ORDER BY name ASC")->fetchAll(PDO::FETCH_COLUMN);
 
         echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Katalog-Export</title>';
@@ -120,6 +121,19 @@ class ExportController extends BaseController {
         echo '<div><label for="birth_year_from">Geburtsjahr von</label><input type="number" name="birth_year_from" id="birth_year_from"></div>';
         echo '<div><label for="birth_year_to">Geburtsjahr bis</label><input type="number" name="birth_year_to" id="birth_year_to"></div>';
         echo '</div>';
+
+        // Geschlecht/Rasse (#172-Felder, wie auf der Katalogseite).
+        echo '<label for="q_sex">Geschlecht</label><select name="q_sex" id="q_sex"><option value="">– alle –</option>';
+        foreach (['stallion' => 'Hengst', 'mare' => 'Stute', 'gelding' => 'Wallach'] as $value => $labelText) {
+            echo '<option value="' . $value . '">' . $labelText . '</option>';
+        }
+        echo '</select>';
+
+        echo '<label for="q_breed">Rasse</label><select name="q_breed" id="q_breed"><option value="">– alle –</option>';
+        foreach ($breeds as $breed) {
+            echo '<option value="' . htmlspecialchars((string) $breed, ENT_QUOTES, 'UTF-8') . '">' . htmlspecialchars((string) $breed, ENT_QUOTES, 'UTF-8') . '</option>';
+        }
+        echo '</select>';
 
         echo '<label for="q_color">Farbe</label><select name="q_color" id="q_color"><option value="">– alle –</option>';
         foreach ($colors as $color) {
@@ -183,6 +197,10 @@ class ExportController extends BaseController {
         if (($_GET['q_status'] ?? '') === 'deceased') {
             $qDeceased = '1';
         }
+        // Geschlecht/Rasse wie auf der Katalogseite: q_sex Whitelist gegen die
+        // ENUM-Werte, q_breed Teilstring-Suche.
+        $qSex = in_array($_GET['q_sex'] ?? '', ['stallion', 'mare', 'gelding'], true) ? $_GET['q_sex'] : '';
+        $qBreed = trim($_GET['q_breed'] ?? '');
         $qBreeder = trim($_GET['q_breeder'] ?? '');
         $qOwner = trim($_GET['q_owner'] ?? '');
         $qStation = trim($_GET['q_station'] ?? '');
@@ -214,6 +232,14 @@ class ExportController extends BaseController {
         if ($qColor !== '') {
             $where[] = "h.color LIKE ?";
             $params[] = '%' . $qColor . '%';
+        }
+        if ($qSex !== '') {
+            $where[] = "h.sex = ?";
+            $params[] = $qSex;
+        }
+        if ($qBreed !== '') {
+            $where[] = "h.breed LIKE ?";
+            $params[] = '%' . $qBreed . '%';
         }
         if ($qStatus !== '') {
             $where[] = "h.status = ?";
@@ -251,7 +277,7 @@ class ExportController extends BaseController {
 
         $sql = "
             SELECT DISTINCT
-                h.id, h.name, h.ueln, h.foreign_ueln, h.birth_year, h.birth_date, h.color, h.height_cm, h.status, h.is_deceased, h.death_year,
+                h.id, h.name, h.ueln, h.foreign_ueln, h.birth_year, h.birth_date, h.color, h.sex, h.breed, h.height_cm, h.status, h.is_deceased, h.death_year,
                 COALESCE(bs.name, h.breeding_station) AS station_name,
                 COALESCE(sire.name, h.sire_name) AS sire_display,
                 COALESCE(dam.name, h.dam_name) AS dam_display,
@@ -292,7 +318,9 @@ class ExportController extends BaseController {
         // der Wert bleibt ein Feld. PHP 8.4+ verlangt den Parameter ohnehin
         // ausdrücklich (Deprecation), weil sich die Vorgabe ändern wird.
         $out = fopen('php://output', 'w');
-        fputcsv($out, ['ID', 'Name', 'UELN', 'Fremd-UELN', 'Geburtsjahr', 'Geburtsdatum', 'Farbe', 'Stockmaß (cm)', 'Status', 'Verstorben', 'Todesjahr', 'Deckstation', 'Vater', 'Mutter', 'Züchter', 'Besitzer'], ';', '"', '');
+        // Geschlecht als kanonischer ENUM-Wert (stallion/mare/gelding) wie die
+        // Status-Spalte - der CSV-Import des Frameworks nimmt ihn direkt an.
+        fputcsv($out, ['ID', 'Name', 'UELN', 'Fremd-UELN', 'Geburtsjahr', 'Geburtsdatum', 'Farbe', 'Geschlecht', 'Rasse', 'Stockmaß (cm)', 'Status', 'Verstorben', 'Todesjahr', 'Deckstation', 'Vater', 'Mutter', 'Züchter', 'Besitzer'], ';', '"', '');
         foreach ($rows as $row) {
             fputcsv($out, array_map([self::class, 'csvSafe'], [
                 $row['id'],
@@ -302,6 +330,8 @@ class ExportController extends BaseController {
                 $row['birth_year'],
                 $row['birth_date'],
                 $row['color'],
+                $row['sex'],
+                $row['breed'],
                 $row['height_cm'],
                 $row['status'],
                 $row['is_deceased'] ? 'ja' : 'nein',

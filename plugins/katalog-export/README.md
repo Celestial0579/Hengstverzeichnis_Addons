@@ -38,11 +38,12 @@ der gewünschten Gruppe unter `/admin/groups` die Berechtigung
 1. Über die Dashboard-Kachel "📤 Katalog-Export" zu
    `/plugin/katalog-export/formular` navigieren.
 2. Optional Filter setzen (allgemeine Suche, Name, UELN, Geburtsjahr-Bereich,
-   Farbe, Zuchtstatus [aktiv/inaktiv], Lebensstatus [lebend/verstorben],
-   Deckstation, Vater, Mutter, Züchter, Besitzer) - ohne
+   Geschlecht, Rasse, Farbe, Zuchtstatus [aktiv/inaktiv], Lebensstatus
+   [lebend/verstorben], Deckstation, Vater, Mutter, Züchter, Besitzer) - ohne
    Filter wird der komplette Bestand exportiert. Die CSV enthält seit dem
    Status-Split des Frameworks (#188) zusätzlich die Spalten Geburtsdatum,
-   Stockmaß (cm), Verstorben (ja/nein) und Todesjahr.
+   Stockmaß (cm), Verstorben (ja/nein) und Todesjahr sowie Geschlecht
+   (kanonisch stallion/mare/gelding, direkt re-importierbar) und Rasse.
 3. "⬇️ Als CSV herunterladen" klicken.
 
 Zum Format: Trennzeichen ist das Semikolon (auf deutsche Excel-Installationen
@@ -53,7 +54,7 @@ Tabellenkalkulationen).
 
 Die Export-Route `/plugin/katalog-export/csv` akzeptiert dieselben
 Query-Parameter wie die öffentliche Katalogseite (`search`, `q_name`,
-`q_ueln`, `birth_year_from`, `birth_year_to`, `q_color`, `q_status`
+`q_ueln`, `birth_year_from`, `birth_year_to`, `q_sex`, `q_breed`, `q_color`, `q_status`
 [nur noch `active`/`inactive`, siehe Status-Split #188], `q_breeder`,
 `q_owner`, `q_station`, `q_sire`, `q_dam`) plus `q_deceased` (`0`/`1`,
 Lebensstatus) und lässt sich daher
