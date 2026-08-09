@@ -75,13 +75,13 @@ class Plugin {
         $html = '<div style="margin-top:0.5rem;">';
         $html .= '<h3 style="margin-bottom:0.5rem;">🏆 Zuchtschau-/Körungsergebnisse</h3>';
         $html .= '<table style="width:100%;border-collapse:collapse;">';
-        $html .= '<thead><tr style="text-align:left;border-bottom:2px solid #ddd;">'
+        $html .= '<thead><tr style="text-align:left;border-bottom:2px solid var(--border-color);">'
             . '<th style="padding:0.4rem;">Veranstaltung</th><th style="padding:0.4rem;">Datum</th>'
             . '<th style="padding:0.4rem;">Kategorie</th><th style="padding:0.4rem;">Note</th>'
             . '<th style="padding:0.4rem;">Platzierung</th><th style="padding:0.4rem;">Richter</th></tr></thead><tbody>';
 
         foreach ($results as $row) {
-            $html .= '<tr style="border-bottom:1px solid #eee;">';
+            $html .= '<tr style="border-bottom:1px solid var(--border-color);">';
             $html .= '<td style="padding:0.4rem;">' . htmlspecialchars((string) $row['event_name'], ENT_QUOTES, 'UTF-8') . '</td>';
             $html .= '<td style="padding:0.4rem;">' . htmlspecialchars((string) ($row['event_date'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
             $html .= '<td style="padding:0.4rem;">' . htmlspecialchars((string) ($row['category'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
@@ -90,7 +90,7 @@ class Plugin {
             $html .= '<td style="padding:0.4rem;">' . htmlspecialchars((string) ($row['judge'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
             $html .= '</tr>';
             if (!empty($row['comment'])) {
-                $html .= '<tr style="border-bottom:1px solid #eee;"><td colspan="6" style="padding:0 0.4rem 0.5rem 0.4rem;color:var(--text-muted);font-size:0.9em;">'
+                $html .= '<tr style="border-bottom:1px solid var(--border-color);"><td colspan="6" style="padding:0 0.4rem 0.5rem 0.4rem;color:var(--text-muted);font-size:0.9em;">'
                     . htmlspecialchars((string) $row['comment'], ENT_QUOTES, 'UTF-8') . '</td></tr>';
             }
         }
@@ -169,10 +169,23 @@ class ErgebnisseController extends BaseController {
         $csrfToken = Router::generateCsrfToken();
 
         echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Zuchtschau-Ergebnisse verwalten</title>';
+        echo '<link rel="stylesheet" href="/css/style.css">';
+        echo <<<'HTML'
+        <script>
+        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
+        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
+        (function () {
+            var stored = localStorage.getItem('theme');
+            if (stored === 'dark' || stored === 'light') {
+                document.documentElement.setAttribute('data-theme', stored);
+            }
+        })();
+        </script>
+        HTML;
         echo '<style>
-            body{font-family:sans-serif;padding:2rem;max-width:900px;margin:0 auto;}
+            body{font-family:sans-serif;padding:2rem;max-width:900px;margin:0 auto;background:var(--bg-color);}
             table{width:100%;border-collapse:collapse;margin-top:1.5rem;}
-            th,td{text-align:left;padding:0.5rem;border-bottom:1px solid #ddd;font-size:0.9rem;}
+            th,td{text-align:left;padding:0.5rem;border-bottom:1px solid var(--border-color);font-size:0.9rem;}
             label{display:block;margin-top:0.8rem;font-weight:bold;font-size:0.9rem;}
             input,select,textarea{width:100%;padding:0.4rem;margin-top:0.2rem;}
             .row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}

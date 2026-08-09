@@ -51,7 +51,7 @@ class Plugin {
 
         $html = '<button type="button" data-hv-merkliste="' . $horseId . '" '
             . 'onclick="hvMerklisteToggle(this)" '
-            . 'style="' . $style . 'margin-top:0.5rem;border:1px solid #c9971b;background:var(--info-soft-bg);border-radius:4px;cursor:pointer;">'
+            . 'style="' . $style . 'margin-top:0.5rem;border:1px solid var(--warning-fg);background:var(--info-soft-bg);border-radius:4px;cursor:pointer;">'
             . '☆ Merken</button>';
 
         if (!$compact) {
@@ -167,10 +167,23 @@ class MerklisteController extends BaseController {
 
     public function show(): void {
         echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Meine Merkliste</title>';
+        echo '<link rel="stylesheet" href="/css/style.css">';
+        echo <<<'HTML'
+        <script>
+        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
+        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
+        (function () {
+            var stored = localStorage.getItem('theme');
+            if (stored === 'dark' || stored === 'light') {
+                document.documentElement.setAttribute('data-theme', stored);
+            }
+        })();
+        </script>
+        HTML;
         echo '<meta name="viewport" content="width=device-width, initial-scale=1">';
         echo '<style>
-            body{font-family:sans-serif;padding:2rem;max-width:900px;margin:0 auto;}
-            .card{display:flex;gap:1rem;padding:1rem;border-bottom:1px solid #ddd;align-items:center;}
+            body{font-family:sans-serif;padding:2rem;max-width:900px;margin:0 auto;background:var(--bg-color);}
+            .card{display:flex;gap:1rem;padding:1rem;border-bottom:1px solid var(--border-color);align-items:center;}
             .card img{width:80px;height:80px;object-fit:cover;border-radius:6px;}
             .card h2{margin:0 0 0.3rem 0;font-size:1.05rem;}
             .remove{color:var(--danger-fg);background:none;border:none;cursor:pointer;padding:0.3rem 0.6rem;}

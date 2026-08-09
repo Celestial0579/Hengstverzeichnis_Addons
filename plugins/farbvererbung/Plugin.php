@@ -279,10 +279,23 @@ class RechnerController extends BaseController {
         echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8">';
         echo '<meta name="viewport" content="width=device-width, initial-scale=1">';
         echo '<title>Fjord-Farbvererbungsrechner</title>';
-        echo '<style>body{font-family:sans-serif;padding:2rem;max-width:720px;margin:0 auto;}';
+        echo '<link rel="stylesheet" href="/css/style.css">';
+        echo <<<'HTML'
+        <script>
+        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
+        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
+        (function () {
+            var stored = localStorage.getItem('theme');
+            if (stored === 'dark' || stored === 'light') {
+                document.documentElement.setAttribute('data-theme', stored);
+            }
+        })();
+        </script>
+        HTML;
+        echo '<style>body{font-family:sans-serif;padding:2rem;max-width:720px;margin:0 auto;background:var(--bg-color);}';
         echo 'label{display:block;margin-top:1rem;font-weight:bold;} select{width:100%;padding:0.5rem;margin-top:0.3rem;}';
         echo '.result{margin-top:1.5rem;padding:1rem;background:var(--surface-muted);border-radius:6px;}';
-        echo '.bar{height:1.1rem;background:#4a7;border-radius:3px;}';
+        echo '.bar{height:1.1rem;background:var(--secondary-color);border-radius:3px;}';
         echo 'table{width:100%;border-collapse:collapse;margin-top:0.5rem;} td{padding:0.35rem 0.5rem;vertical-align:middle;}';
         echo '.muted{color:var(--text-muted);font-size:0.85em;}</style></head><body>';
         echo '<h1>🎨 Fjord-Farbvererbungsrechner</h1>';

@@ -110,6 +110,19 @@ class VergleichController extends BaseController {
         }
 
         echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Genealogie-Vergleich</title>';
+        echo '<link rel="stylesheet" href="/css/style.css">';
+        echo <<<'HTML'
+        <script>
+        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
+        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
+        (function () {
+            var stored = localStorage.getItem('theme');
+            if (stored === 'dark' || stored === 'light') {
+                document.documentElement.setAttribute('data-theme', stored);
+            }
+        })();
+        </script>
+        HTML;
         echo $this->styles();
         echo '</head><body>';
         echo '<h1>🔬 Genealogie-Vergleichstool</h1>';
@@ -210,9 +223,9 @@ class VergleichController extends BaseController {
         return <<<CSS
 <style>
     * { box-sizing: border-box; }
-    body { font-family: sans-serif; padding: 1.5rem; color: #222; }
+    body { font-family: sans-serif; padding: 1.5rem; color: var(--text-color); background: var(--bg-color); }
     .meta { color: var(--text-muted); }
-    form { background: #f0f0f0; padding: 1rem; border-radius: 6px; margin-bottom: 1.5rem; }
+    form { background: var(--surface-muted); padding: 1rem; border-radius: 6px; margin-bottom: 1.5rem; }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
     label { display: block; margin-top: 0.6rem; font-weight: bold; font-size: 0.9rem; }
     select, input { width: 100%; padding: 0.4rem; margin-top: 0.2rem; }
@@ -221,9 +234,9 @@ class VergleichController extends BaseController {
     .pedigree-col h2 { font-size: 1.1rem; }
     .pedigree { overflow-x: auto; }
     .node { display: flex; align-items: center; }
-    .box { border: 1px solid #999; border-radius: 6px; padding: 0.4rem 0.7rem; white-space: nowrap; background: #fff; text-align: center; min-width: 100px; }
+    .box { border: 1px solid var(--border-color); border-radius: 6px; padding: 0.4rem 0.7rem; white-space: nowrap; background: var(--card-bg); text-align: center; min-width: 100px; }
     .box.placeholder { border-style: dashed; color: var(--text-muted); background: var(--surface-muted); }
-    .box.shared { border: 2px solid #c9971b; background: var(--info-soft-bg); font-weight: bold; }
+    .box.shared { border: 2px solid var(--warning-fg); background: var(--info-soft-bg); font-weight: bold; }
     .box-name { font-weight: bold; font-size: 0.85rem; }
     .box.shared .box-name { font-weight: bold; }
     .box-meta { font-size: 0.7rem; color: var(--text-muted); }
