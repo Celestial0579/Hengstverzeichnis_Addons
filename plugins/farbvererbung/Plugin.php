@@ -41,12 +41,17 @@ class Plugin {
         $label = FjordColor::label($key);
         $genotype = FjordColor::genotypeHint($key);
 
+        // Formulierung bewusst konditional (#50): Solange das Framework kein
+        // Rassefeld kennt, ist die Zuordnung eine Fjord-spezifische Deutung des
+        // Farbtexts, keine gesicherte Aussage über das Pferd. Nach Einführung
+        // des Rassefelds (Framework #163) wird hier zusätzlich auf die Rasse
+        // Fjordpferd gegatet (siehe Tracking #55).
         $sections[] = '<div style="margin-top:0.5rem;padding:0.75rem 1rem;background:var(--surface-muted);border-radius:6px;">'
-            . '<strong>🎨 Falbfarbe:</strong> ' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8')
+            . '<strong>🎨 Falbfarbe (Fjord-Deutung):</strong> ' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8')
             . '<p style="margin:0.4rem 0 0 0;color:var(--text-muted);font-size:0.85em;">'
             . 'Genetische Einordnung: ' . htmlspecialchars($genotype, ENT_QUOTES, 'UTF-8') . '. '
-            . 'Alle Fjordpferde tragen das Dun-(Falb-)Gen; die Farbunterschiede entstehen '
-            . 'aus der Grundfarbe (Extension/Agouti) und ggf. dem Cream-Gen.'
+            . 'Einordnung nach der Farbgenetik des Norwegischen Fjordpferds - '
+            . 'aussagekräftig nur, sofern es sich um ein Fjordpferd handelt.'
             . '</p></div>';
 
         return $sections;
@@ -222,14 +227,19 @@ class FjordColor {
             return null;
         }
 
+        // Nur echte Fjord-/Falb-Begriffe (#50): Die früheren generischen Nadeln
+        // (braun/brown, rot/red, grau/grey/gray, gelb) ordneten JEDEM braunen,
+        // roten, grauen oder gelben Pferd eine Fjord-Falbfarbe zu - genetisch
+        // falsch, denn "braun" ohne Dun-Gen ist kein Braunfalbe. Ein Pferd ohne
+        // expliziten Falb-Hinweis in der Farbe erzeugt jetzt keine Zuordnung.
         // Reihenfolge: spezifische (Cream-)Farben zuerst, damit z. B. "gelbfalbe"
         // nicht fälschlich über ein enthaltenes "falbe" o. ä. woanders greift.
         $needles = [
-            'ulsblakk' => ['ulsblakk', 'uls', 'hellfalbe', 'weissfalbe', 'weisfalbe'],
-            'gulblakk' => ['gulblakk', 'gelbfalbe', 'gelb'],
-            'brunblakk' => ['brunblakk', 'braunfalbe', 'braun', 'brown'],
-            'rodblakk' => ['rodblakk', 'rotfalbe', 'rot', 'red'],
-            'graa' => ['graablakk', 'grablakk', 'graufalbe', 'grau', 'graa', 'gra', 'grey', 'gray', 'grullo'],
+            'ulsblakk' => ['ulsblakk', 'hellfalbe', 'weissfalbe', 'weisfalbe'],
+            'gulblakk' => ['gulblakk', 'gelbfalbe'],
+            'brunblakk' => ['brunblakk', 'braunfalbe'],
+            'rodblakk' => ['rodblakk', 'rotfalbe'],
+            'graa' => ['graablakk', 'grablakk', 'graufalbe', 'grullo'],
         ];
 
         foreach ($needles as $key => $variants) {
@@ -239,6 +249,14 @@ class FjordColor {
                 }
             }
         }
+
+        // Die nackten norwegischen Namen "Grå"/"Graa" sind offizielle
+        // Fjord-Farbbezeichnungen - aber nur als EXAKTE Angabe, nicht als
+        // Substring ('gra' träfe sonst z. B. "Grauschimmel").
+        if ($t === 'graa' || $t === 'gra') {
+            return 'graa';
+        }
+
         return null;
     }
 
@@ -300,7 +318,9 @@ class RechnerController extends BaseController {
         echo '.muted{color:var(--text-muted);font-size:0.85em;}</style></head><body>';
         echo '<h1>🎨 Fjord-Farbvererbungsrechner</h1>';
         echo '<p>Schätzt die voraussichtliche Fohlenfarbe aus den Farben von Vater und Mutter '
-            . 'anhand der Farbgenetik des Norwegischen Fjordpferds.</p>';
+            . 'anhand der Farbgenetik des Norwegischen Fjordpferds. '
+            . '<span class="muted">Fjord-spezifische Annahme (#50): Das Dun-(Falb-)Gen wird als fest '
+            . 'vorhanden vorausgesetzt - für Pferde anderer Rassen ist das Ergebnis nicht aussagekräftig.</span></p>';
 
         echo '<form method="GET">';
         echo self::colorSelect('sire_color', 'Farbe des Vaters (Hengst)', $sireColor);
