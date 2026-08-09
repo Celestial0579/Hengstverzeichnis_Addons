@@ -38,8 +38,11 @@ der gewünschten Gruppe unter `/admin/groups` die Berechtigung
 1. Über die Dashboard-Kachel "📤 Katalog-Export" zu
    `/plugin/katalog-export/formular` navigieren.
 2. Optional Filter setzen (allgemeine Suche, Name, UELN, Geburtsjahr-Bereich,
-   Farbe, Status, Deckstation, Vater, Mutter, Züchter, Besitzer) - ohne
-   Filter wird der komplette Bestand exportiert.
+   Farbe, Zuchtstatus [aktiv/inaktiv], Lebensstatus [lebend/verstorben],
+   Deckstation, Vater, Mutter, Züchter, Besitzer) - ohne
+   Filter wird der komplette Bestand exportiert. Die CSV enthält seit dem
+   Status-Split des Frameworks (#188) zusätzlich die Spalten Geburtsdatum,
+   Stockmaß (cm), Verstorben (ja/nein) und Todesjahr.
 3. "⬇️ Als CSV herunterladen" klicken.
 
 Zum Format: Trennzeichen ist das Semikolon (auf deutsche Excel-Installationen
@@ -50,9 +53,14 @@ Tabellenkalkulationen).
 
 Die Export-Route `/plugin/katalog-export/csv` akzeptiert dieselben
 Query-Parameter wie die öffentliche Katalogseite (`search`, `q_name`,
-`q_ueln`, `birth_year_from`, `birth_year_to`, `q_color`, `q_status`,
-`q_breeder`, `q_owner`, `q_station`, `q_sire`, `q_dam`) und lässt sich daher
+`q_ueln`, `birth_year_from`, `birth_year_to`, `q_color`, `q_status`
+[nur noch `active`/`inactive`, siehe Status-Split #188], `q_breeder`,
+`q_owner`, `q_station`, `q_sire`, `q_dam`) plus `q_deceased` (`0`/`1`,
+Lebensstatus) und lässt sich daher
 auch direkt mit einer kopierten `/katalog?...`-Query-String aufrufen.
+Der Alt-Wert `q_status=deceased` mappt wie auf der Katalogseite auf
+`q_deceased=1` - kopierte Filter-URLs aus der Zeit vor dem Split bleiben
+damit funktional.
 
 ## Berechtigungen
 

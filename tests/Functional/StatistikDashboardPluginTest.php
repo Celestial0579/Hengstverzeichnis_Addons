@@ -77,6 +77,34 @@ class StatistikDashboardPluginTest extends FunctionalTestCase {
             'Erwartete Zeile für das aktuelle Jahr im Wachstumsverlauf nicht gefunden.'
         );
 
+        // 2b. Status-Split (Framework #188): Verstorben ist orthogonal zum
+        // Zuchtstatus. Kacheln vorher/nachher vergleichen (absolute Zahlen
+        // wären fragil, die DB ist über die Suite geteilt): ein verstorbenes,
+        // zuchtinaktives Pferd erhöht Gesamt, Inaktiv und Verstorben um je 1;
+        // die Invariante Gesamt = Aktiv + Inaktiv gilt in beiden Messungen.
+        $readTiles = function (string $body): array {
+            $tiles = [];
+            foreach (['Pferde gesamt', 'Aktiv \(Zucht\)', 'Inaktiv \(Zucht\)', 'Verstorben'] as $label) {
+                $this->assertSame(1, preg_match(
+                    '/<div class="num">(\d+)<\/div><div class="label">' . $label . '<\/div>/',
+                    $body,
+                    $m
+                ), "Kachel '{$label}' nicht gefunden");
+                $tiles[stripslashes($label)] = (int) $m[1];
+            }
+            return $tiles;
+        };
+        $before = $readTiles($statsPage->body);
+        $this->assertSame($before['Pferde gesamt'], $before['Aktiv (Zucht)'] + $before['Inaktiv (Zucht)'], 'Zuchtstatus muss den Bestand partitionieren');
+
+        $this->createHorse($admin, "Verstorben-{$unique}", ['status' => 'inactive', 'death_year' => '2018', 'birth_year' => '1994']);
+        $after = $readTiles($admin->get('/plugin/statistik-dashboard/statistik')->body);
+        $this->assertSame($before['Pferde gesamt'] + 1, $after['Pferde gesamt']);
+        $this->assertSame($before['Aktiv (Zucht)'], $after['Aktiv (Zucht)']);
+        $this->assertSame($before['Inaktiv (Zucht)'] + 1, $after['Inaktiv (Zucht)']);
+        $this->assertSame($before['Verstorben'] + 1, $after['Verstorben'], 'Todesjahr muss das Pferd als verstorben zählen');
+        $this->assertSame($after['Pferde gesamt'], $after['Aktiv (Zucht)'] + $after['Inaktiv (Zucht)']);
+
         // 3. Berechtigungsdurchsetzung: Editor ohne statistik-dashboard.view wird abgewiesen ...
         $editorGroupId = $this->findBuiltinGroupId($admin, 'Editor');
         $editor = $this->createAndLoginEditor(

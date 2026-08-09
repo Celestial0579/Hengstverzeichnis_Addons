@@ -18,9 +18,11 @@ der gewünschten Gruppe unter `/admin/groups` die Berechtigung
 
 ## Enthaltene Kennzahlen (`/plugin/statistik-dashboard/statistik`)
 
-- Anzahl aktiver/inaktiver/verstorbener Pferde je Status; die Kachel
-  "Pferde gesamt" summiert genau diese drei Status - Datensätze mit
-  abweichendem oder leerem Status zählen dort nicht mit
+- Anzahl aktiver/inaktiver Pferde nach Zuchtstatus; die Kachel
+  "Pferde gesamt" summiert genau diese beiden Status. "Verstorben" zählt
+  seit dem Status-Split des Frameworks (#188) quer dazu (`is_deceased`) -
+  ein verstorbenes Tier steckt also zusätzlich in einer der beiden
+  Zuchtstatus-Kacheln
 - Verteilung nach Deckstation (Top 15)
 - Wachstum der Datenbank über Zeit (neu angelegte Pferde je Jahr, basierend
   auf `created_at`)

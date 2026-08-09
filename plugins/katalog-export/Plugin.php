@@ -127,8 +127,16 @@ class ExportController extends BaseController {
         }
         echo '</select>';
 
-        echo '<label for="q_status">Status</label><select name="q_status" id="q_status"><option value="">– alle –</option>';
-        foreach (['active' => 'Aktiv', 'inactive' => 'Inaktiv', 'deceased' => 'Verstorben'] as $value => $labelText) {
+        // Status-Split im Framework (#188): status ist nur noch der Zuchtstatus,
+        // der Lebensstatus (is_deceased) bekommt ein eigenes Filterfeld.
+        echo '<label for="q_status">Zuchtstatus</label><select name="q_status" id="q_status"><option value="">– alle –</option>';
+        foreach (['active' => 'Aktiv', 'inactive' => 'Inaktiv'] as $value => $labelText) {
+            echo '<option value="' . $value . '">' . $labelText . '</option>';
+        }
+        echo '</select>';
+
+        echo '<label for="q_deceased">Lebensstatus</label><select name="q_deceased" id="q_deceased"><option value="">– alle –</option>';
+        foreach (['0' => 'Nur lebende', '1' => 'Nur verstorbene'] as $value => $labelText) {
             echo '<option value="' . $value . '">' . $labelText . '</option>';
         }
         echo '</select>';
@@ -165,7 +173,16 @@ class ExportController extends BaseController {
         $birthYearFrom = !empty($_GET['birth_year_from']) ? (int) $_GET['birth_year_from'] : null;
         $birthYearTo = !empty($_GET['birth_year_to']) ? (int) $_GET['birth_year_to'] : null;
         $qColor = trim($_GET['q_color'] ?? '');
-        $qStatus = trim($_GET['q_status'] ?? '');
+        // Zuchtstatus-Whitelist seit dem Status-Split (Framework #188);
+        // der Lebensstatus filtert separat über q_deceased. Der Alt-Wert
+        // q_status=deceased mappt wie auf der Katalogseite (PublicController)
+        // auf den Lebensstatus - kopierte /katalog?...-Query-Strings bleiben
+        // damit funktional.
+        $qStatus = in_array($_GET['q_status'] ?? '', ['active', 'inactive'], true) ? $_GET['q_status'] : '';
+        $qDeceased = ($_GET['q_deceased'] ?? '') === '0' || ($_GET['q_deceased'] ?? '') === '1' ? $_GET['q_deceased'] : '';
+        if (($_GET['q_status'] ?? '') === 'deceased') {
+            $qDeceased = '1';
+        }
         $qBreeder = trim($_GET['q_breeder'] ?? '');
         $qOwner = trim($_GET['q_owner'] ?? '');
         $qStation = trim($_GET['q_station'] ?? '');
@@ -202,6 +219,10 @@ class ExportController extends BaseController {
             $where[] = "h.status = ?";
             $params[] = $qStatus;
         }
+        if ($qDeceased !== '') {
+            $where[] = "h.is_deceased = ?";
+            $params[] = (int) $qDeceased;
+        }
         if ($qBreeder !== '') {
             $where[] = "p_breeder.name LIKE ?";
             $params[] = '%' . $qBreeder . '%';
@@ -230,7 +251,7 @@ class ExportController extends BaseController {
 
         $sql = "
             SELECT DISTINCT
-                h.id, h.name, h.ueln, h.foreign_ueln, h.birth_year, h.color, h.status,
+                h.id, h.name, h.ueln, h.foreign_ueln, h.birth_year, h.birth_date, h.color, h.height_cm, h.status, h.is_deceased, h.death_year,
                 COALESCE(bs.name, h.breeding_station) AS station_name,
                 COALESCE(sire.name, h.sire_name) AS sire_display,
                 COALESCE(dam.name, h.dam_name) AS dam_display,
@@ -271,7 +292,7 @@ class ExportController extends BaseController {
         // der Wert bleibt ein Feld. PHP 8.4+ verlangt den Parameter ohnehin
         // ausdrücklich (Deprecation), weil sich die Vorgabe ändern wird.
         $out = fopen('php://output', 'w');
-        fputcsv($out, ['ID', 'Name', 'UELN', 'Fremd-UELN', 'Geburtsjahr', 'Farbe', 'Status', 'Deckstation', 'Vater', 'Mutter', 'Züchter', 'Besitzer'], ';', '"', '');
+        fputcsv($out, ['ID', 'Name', 'UELN', 'Fremd-UELN', 'Geburtsjahr', 'Geburtsdatum', 'Farbe', 'Stockmaß (cm)', 'Status', 'Verstorben', 'Todesjahr', 'Deckstation', 'Vater', 'Mutter', 'Züchter', 'Besitzer'], ';', '"', '');
         foreach ($rows as $row) {
             fputcsv($out, array_map([self::class, 'csvSafe'], [
                 $row['id'],
@@ -279,8 +300,12 @@ class ExportController extends BaseController {
                 $row['ueln'],
                 $row['foreign_ueln'],
                 $row['birth_year'],
+                $row['birth_date'],
                 $row['color'],
+                $row['height_cm'],
                 $row['status'],
+                $row['is_deceased'] ? 'ja' : 'nein',
+                $row['death_year'],
                 $row['station_name'],
                 $row['sire_display'],
                 $row['dam_display'],
