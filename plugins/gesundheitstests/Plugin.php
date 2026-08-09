@@ -187,7 +187,7 @@ class VerwaltungController extends BaseController {
             input,select,textarea{width:100%;padding:0.4rem;margin-top:0.2rem;}
             input[type=checkbox]{width:auto;}
             .row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}
-            .hint{color:#666;font-size:0.85em;margin-top:0.3rem;}
+            .hint{color:var(--text-muted);font-size:0.85em;margin-top:0.3rem;}
         </style></head><body>';
         echo '<h1>🩺 DNA-/Gesundheitstest-Verwaltung</h1>';
 
@@ -241,7 +241,7 @@ class VerwaltungController extends BaseController {
             echo '<td><form method="POST" action="/plugin/gesundheitstests/verwaltung/delete" style="margin:0;" onsubmit="return confirm(\'Eintrag (inkl. Dokument) wirklich löschen?\');">'
                 . '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">'
                 . '<input type="hidden" name="id" value="' . (int) $row['id'] . '">'
-                . '<button type="submit" style="color:#dc3545;">Löschen</button></form></td>';
+                . '<button type="submit" style="color:var(--danger-fg);">Löschen</button></form></td>';
             echo '</tr>';
         }
         if (empty($entries)) {

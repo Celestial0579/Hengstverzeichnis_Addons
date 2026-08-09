@@ -44,9 +44,9 @@ class Plugin {
         $coi = CoiCalculator::fromParentTrees($pedigree['sire'] ?? null, $pedigree['dam'] ?? null);
         $percent = number_format($coi * 100, 2, ',', '.');
 
-        $sections[] = '<div style="margin-top:0.5rem;padding:0.75rem 1rem;background:#f8f9fa;border-radius:6px;">'
+        $sections[] = '<div style="margin-top:0.5rem;padding:0.75rem 1rem;background:var(--surface-muted);border-radius:6px;">'
             . '<strong>🧬 Inzuchtkoeffizient (Wright\'s COI):</strong> ' . $percent . ' %'
-            . '<p style="margin:0.4rem 0 0 0;color:#666;font-size:0.85em;">'
+            . '<p style="margin:0.4rem 0 0 0;color:var(--text-muted);font-size:0.85em;">'
             . 'Berechnet aus dem verfügbaren, bis zu 6 Generationen tiefen Stammbaum. '
             . 'Vereinfachte Formel (gemeinsame Vorfahren selbst als nicht ingezüchtet angenommen).'
             . '</p></div>';
@@ -212,7 +212,7 @@ class RechnerController extends BaseController {
         echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Verpaarungsrechner</title>';
         echo '<style>body{font-family:sans-serif;padding:2rem;max-width:700px;margin:0 auto;}';
         echo 'label{display:block;margin-top:1rem;font-weight:bold;} select,input{width:100%;padding:0.5rem;margin-top:0.3rem;}';
-        echo '.result{margin-top:1.5rem;padding:1rem;background:#f8f9fa;border-radius:6px;font-size:1.1rem;}</style>';
+        echo '.result{margin-top:1.5rem;padding:1rem;background:var(--surface-muted);border-radius:6px;font-size:1.1rem;}</style>';
         echo '</head><body>';
         echo '<h1>🧬 Verpaarungsrechner</h1>';
         echo '<p>Schätzt den voraussichtlichen Inzuchtkoeffizienten eines Fohlens aus zwei ausgewählten Elterntieren.</p>';

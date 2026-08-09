@@ -199,9 +199,9 @@ class EmpfehlungController extends BaseController {
         echo 'label{display:block;margin-top:1rem;font-weight:bold;} select,input{width:100%;padding:0.5rem;margin-top:0.3rem;}';
         echo '.inline{display:flex;gap:1rem;flex-wrap:wrap;} .inline > div{flex:1;min-width:140px;}';
         echo 'table{width:100%;border-collapse:collapse;margin-top:1.2rem;} th,td{padding:0.45rem 0.6rem;border-bottom:1px solid #eee;text-align:left;}';
-        echo 'th{background:#f8f9fa;} td.num{text-align:right;font-variant-numeric:tabular-nums;}';
+        echo 'th{background:var(--surface-muted);} td.num{text-align:right;font-variant-numeric:tabular-nums;}';
         echo 'tr.best td{background:#eafaf0;} tr.warn td{background:#fdf3f3;}';
-        echo '.muted{color:#666;font-size:0.85em;}</style></head><body>';
+        echo '.muted{color:var(--text-muted);font-size:0.85em;}</style></head><body>';
         echo '<h1>💞 Anpaarungs-Empfehlung</h1>';
         echo '<p>Wählt für ein Basispferd (z. B. eine Stute) die genetisch vielfältigsten Partner: '
             . 'Alle anderen Pferde werden nach dem voraussichtlichen Inzuchtkoeffizienten (COI) eines '

@@ -51,7 +51,7 @@ class Plugin {
 
         $html = '<button type="button" data-hv-merkliste="' . $horseId . '" '
             . 'onclick="hvMerklisteToggle(this)" '
-            . 'style="' . $style . 'margin-top:0.5rem;border:1px solid #c9971b;background:#fff8e6;border-radius:4px;cursor:pointer;">'
+            . 'style="' . $style . 'margin-top:0.5rem;border:1px solid #c9971b;background:var(--info-soft-bg);border-radius:4px;cursor:pointer;">'
             . '☆ Merken</button>';
 
         if (!$compact) {
@@ -149,11 +149,11 @@ class MerklisteController extends BaseController {
             .card{display:flex;gap:1rem;padding:1rem;border-bottom:1px solid #ddd;align-items:center;}
             .card img{width:80px;height:80px;object-fit:cover;border-radius:6px;}
             .card h2{margin:0 0 0.3rem 0;font-size:1.05rem;}
-            .remove{color:#dc3545;background:none;border:none;cursor:pointer;padding:0.3rem 0.6rem;}
-            #leer{color:#666;}
+            .remove{color:var(--danger-fg);background:none;border:none;cursor:pointer;padding:0.3rem 0.6rem;}
+            #leer{color:var(--text-muted);}
         </style></head><body>';
         echo '<h1>⭐ Meine Merkliste</h1>';
-        echo '<p style="color:#666;font-size:0.9em;">Die Merkliste wird nur in diesem Browser gespeichert (localStorage) - ohne Account, ohne Server-Speicherung.</p>';
+        echo '<p style="color:var(--text-muted);font-size:0.9em;">Die Merkliste wird nur in diesem Browser gespeichert (localStorage) - ohne Account, ohne Server-Speicherung.</p>';
         echo '<div id="liste"></div>';
         echo '<p id="leer" style="display:none;">Noch keine Pferde gemerkt. Im <a href="/katalog">Katalog</a> stöbern und "☆ Merken" klicken.</p>';
 

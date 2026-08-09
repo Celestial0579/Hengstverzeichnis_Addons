@@ -76,7 +76,7 @@ class Plugin {
             : number_format((float) $listing['price'], 2, ',', '.') . ' €';
         $csrfToken = htmlspecialchars(Router::generateCsrfToken(), ENT_QUOTES, 'UTF-8');
 
-        $html = '<div style="margin-top:1rem;padding:1rem;background:#fff8e6;border:1px solid #f0d78c;border-radius:6px;">';
+        $html = '<div style="margin-top:1rem;padding:1rem;background:var(--info-soft-bg);border:1px solid #f0d78c;border-radius:6px;">';
         $html .= '<h3 style="margin-top:0;">🏷️ Zum Verkauf - ' . htmlspecialchars($priceText, ENT_QUOTES, 'UTF-8') . '</h3>';
 
         if (!empty($listing['description'])) {
@@ -84,9 +84,9 @@ class Plugin {
         }
 
         if (($_GET['verkaufsanfrage'] ?? '') === 'erfolg') {
-            $html .= '<p style="color:#155724;background:#d4edda;padding:0.6rem;border-radius:4px;">Ihre Anfrage wurde erfolgreich versendet.</p>';
+            $html .= '<p style="color:var(--success-fg);background:var(--success-soft-bg);padding:0.6rem;border-radius:4px;">Ihre Anfrage wurde erfolgreich versendet.</p>';
         } elseif (($_GET['verkaufsanfrage'] ?? '') === 'fehler') {
-            $html .= '<p style="color:#721c24;background:#f8d7da;padding:0.6rem;border-radius:4px;">Ihre Anfrage konnte nicht versendet werden. Bitte versuchen Sie es später erneut.</p>';
+            $html .= '<p style="color:var(--danger-fg);background:var(--danger-soft-bg);padding:0.6rem;border-radius:4px;">Ihre Anfrage konnte nicht versendet werden. Bitte versuchen Sie es später erneut.</p>';
         }
 
         $html .= '<form method="POST" action="/plugin/verkaufsboerse/kontakt">';
@@ -285,7 +285,7 @@ class VerwaltungController extends BaseController {
             echo '<td><form method="POST" action="/plugin/verkaufsboerse/verwaltung/delete" style="margin:0;" onsubmit="return confirm(\'Inserat wirklich entfernen?\');">'
                 . '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">'
                 . '<input type="hidden" name="id" value="' . (int) $row['id'] . '">'
-                . '<button type="submit" style="color:#dc3545;">Entfernen</button></form></td>';
+                . '<button type="submit" style="color:var(--danger-fg);">Entfernen</button></form></td>';
             echo '</tr>';
         }
         if (empty($listings)) {

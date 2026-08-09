@@ -107,7 +107,7 @@ class Plugin {
                     . '<img src="' . $src . '" alt="' . $caption . '" loading="lazy" '
                     . 'style="width:100%;height:120px;object-fit:cover;border-radius:6px;cursor:zoom-in;" '
                     . 'onclick="hvGalerieLightbox(this.src, this.alt)">'
-                    . ($caption !== '' ? '<figcaption style="font-size:0.8em;color:#666;">' . $caption . '</figcaption>' : '')
+                    . ($caption !== '' ? '<figcaption style="font-size:0.8em;color:var(--text-muted);">' . $caption . '</figcaption>' : '')
                     . '</figure>';
             } elseif ($item['type'] === 'video' && !empty($item['video_url'])) {
                 $url = htmlspecialchars((string) $item['video_url'], ENT_QUOTES, 'UTF-8');
@@ -220,7 +220,7 @@ class VerwaltungController extends BaseController {
             label{display:block;margin-top:0.8rem;font-weight:bold;font-size:0.9rem;}
             input,select{width:100%;padding:0.4rem;margin-top:0.2rem;}
             .row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}
-            .hint{color:#666;font-size:0.85em;margin-top:0.3rem;}
+            .hint{color:var(--text-muted);font-size:0.85em;margin-top:0.3rem;}
             .thumb{width:60px;height:45px;object-fit:cover;border-radius:4px;}
         </style></head><body>';
         echo '<h1>🖼️ Foto-/Video-Galerie verwalten</h1>';
@@ -273,7 +273,7 @@ class VerwaltungController extends BaseController {
             echo '<td><form method="POST" action="/plugin/galerie/verwaltung/delete" style="margin:0;" onsubmit="return confirm(\'Medium wirklich entfernen?\');">'
                 . '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">'
                 . '<input type="hidden" name="id" value="' . (int) $row['id'] . '">'
-                . '<button type="submit" style="color:#dc3545;">Entfernen</button></form></td>';
+                . '<button type="submit" style="color:var(--danger-fg);">Entfernen</button></form></td>';
             echo '</tr>';
         }
         if (empty($media)) {

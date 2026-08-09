@@ -90,7 +90,7 @@ class Plugin {
             $html .= '<td style="padding:0.4rem;">' . htmlspecialchars((string) ($row['judge'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
             $html .= '</tr>';
             if (!empty($row['comment'])) {
-                $html .= '<tr style="border-bottom:1px solid #eee;"><td colspan="6" style="padding:0 0.4rem 0.5rem 0.4rem;color:#666;font-size:0.9em;">'
+                $html .= '<tr style="border-bottom:1px solid #eee;"><td colspan="6" style="padding:0 0.4rem 0.5rem 0.4rem;color:var(--text-muted);font-size:0.9em;">'
                     . htmlspecialchars((string) $row['comment'], ENT_QUOTES, 'UTF-8') . '</td></tr>';
             }
         }
@@ -224,7 +224,7 @@ class ErgebnisseController extends BaseController {
             echo '<td><form method="POST" action="/plugin/zuchtschau-ergebnisse/ergebnisse/delete" style="margin:0;" onsubmit="return confirm(\'Ergebnis wirklich löschen?\');">'
                 . '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">'
                 . '<input type="hidden" name="id" value="' . (int) $row['id'] . '">'
-                . '<button type="submit" style="color:#dc3545;">Löschen</button></form></td>';
+                . '<button type="submit" style="color:var(--danger-fg);">Löschen</button></form></td>';
             echo '</tr>';
         }
         if (empty($results)) {

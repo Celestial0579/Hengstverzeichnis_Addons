@@ -44,7 +44,7 @@ class Plugin {
     public function addDetailSection(array $sections, array $horse, array $horsePersons, ?array $pedigree): array {
         $horseId = (int) $horse['id'];
         $sections[] = '<p><a href="/plugin/genealogie-vergleich?horse_a=' . $horseId . '" '
-            . 'style="display:inline-block;padding:0.5rem 1rem;background:#f8f9fa;border-radius:6px;text-decoration:none;color:inherit;">'
+            . 'style="display:inline-block;padding:0.5rem 1rem;background:var(--surface-muted);border-radius:6px;text-decoration:none;color:inherit;">'
             . '🔬 Stammbaum mit einem anderen Pferd vergleichen</a></p>';
         return $sections;
     }
@@ -211,7 +211,7 @@ class VergleichController extends BaseController {
 <style>
     * { box-sizing: border-box; }
     body { font-family: sans-serif; padding: 1.5rem; color: #222; }
-    .meta { color: #555; }
+    .meta { color: var(--text-muted); }
     form { background: #f0f0f0; padding: 1rem; border-radius: 6px; margin-bottom: 1.5rem; }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
     label { display: block; margin-top: 0.6rem; font-weight: bold; font-size: 0.9rem; }
@@ -222,11 +222,11 @@ class VergleichController extends BaseController {
     .pedigree { overflow-x: auto; }
     .node { display: flex; align-items: center; }
     .box { border: 1px solid #999; border-radius: 6px; padding: 0.4rem 0.7rem; white-space: nowrap; background: #fff; text-align: center; min-width: 100px; }
-    .box.placeholder { border-style: dashed; color: #888; background: #fafafa; }
-    .box.shared { border: 2px solid #c9971b; background: #fff8e6; font-weight: bold; }
+    .box.placeholder { border-style: dashed; color: var(--text-muted); background: var(--surface-muted); }
+    .box.shared { border: 2px solid #c9971b; background: var(--info-soft-bg); font-weight: bold; }
     .box-name { font-weight: bold; font-size: 0.85rem; }
     .box.shared .box-name { font-weight: bold; }
-    .box-meta { font-size: 0.7rem; color: #666; }
+    .box-meta { font-size: 0.7rem; color: var(--text-muted); }
     .children { display: flex; flex-direction: column; justify-content: space-around; margin-left: 1rem; gap: 0.5rem; }
     .child { display: flex; align-items: center; }
     .child:empty { display: none; }
