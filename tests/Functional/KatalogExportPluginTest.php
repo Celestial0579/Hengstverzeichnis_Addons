@@ -44,6 +44,8 @@ class KatalogExportPluginTest extends FunctionalTestCase {
             'name' => $horseName,
             'status' => 'active',
             'color' => 'Fuchs',
+            'sex' => 'mare',
+            'breed' => 'Fjordpferd',
             'birth_year' => '2021',
         ]);
         $this->assertSame('/admin/horses?success=created', $createResponse->location());
@@ -81,7 +83,17 @@ class KatalogExportPluginTest extends FunctionalTestCase {
 
         $csvAll = $admin->get('/plugin/katalog-export/csv');
         $this->assertStringContainsString('Verstorben;Todesjahr', $csvAll->body, 'CSV-Kopfzeile muss die neuen Lebensstatus-Spalten enthalten');
-        $this->assertStringContainsString("{$deceasedName};;;1994;;;;inactive;ja;2018", $csvAll->body, "Verstorbenen-Zeile unvollständig, Body: {$csvAll->body}");
+        $this->assertStringContainsString('Geschlecht;Rasse', $csvAll->body, 'CSV-Kopfzeile muss Geschlecht/Rasse enthalten (#172-Felder)');
+        $this->assertStringContainsString("{$deceasedName};;;1994;;;;;;inactive;ja;2018", $csvAll->body, "Verstorbenen-Zeile unvollständig, Body: {$csvAll->body}");
+        $this->assertStringContainsString(";Fuchs;mare;Fjordpferd;", $csvAll->body, 'Geschlecht/Rasse müssen als Spaltenwerte exportiert werden');
+
+        // Geschlechts-/Rasse-Filter wie auf der Katalogseite.
+        $csvSexed = $admin->get('/plugin/katalog-export/csv?q_sex=mare');
+        $this->assertStringContainsString($horseName, $csvSexed->body);
+        $this->assertStringNotContainsString($deceasedName, $csvSexed->body, 'q_sex=mare darf Pferde ohne Geschlechtsangabe nicht enthalten');
+        $csvBreedFiltered = $admin->get('/plugin/katalog-export/csv?q_breed=Fjord');
+        $this->assertStringContainsString($horseName, $csvBreedFiltered->body);
+        $this->assertStringNotContainsString($deceasedName, $csvBreedFiltered->body);
 
         $csvDeceased = $admin->get('/plugin/katalog-export/csv?q_deceased=1');
         $this->assertStringContainsString($deceasedName, $csvDeceased->body);
@@ -177,10 +189,11 @@ class KatalogExportPluginTest extends FunctionalTestCase {
         $this->assertNotNull($row, 'Das Testpferd muss im Export auftauchen.');
 
         $this->assertCount(
-            16,
+            18,
             $row,
-            'Der Export hat 16 Spalten (seit #188: + Geburtsdatum, Stockmaß, '
-            . 'Verstorben, Todesjahr). Mehr Felder heißt: ein Zellwert ist aus seinem '
+            'Der Export hat 18 Spalten (seit #188: + Geburtsdatum, Stockmaß, '
+            . 'Verstorben, Todesjahr; danach + Geschlecht, Rasse). Mehr Felder heißt: '
+            . 'ein Zellwert ist aus seinem '
             . 'Feld ausgebrochen - dann stimmt die Spaltenzuordnung nicht mehr und '
             . 'csvSafe() greift für die entstandenen Felder nicht.'
         );
