@@ -199,7 +199,7 @@ class StatistikController extends BaseController {
         foreach ($rows as $row) {
             echo '<tr>';
             echo '<td>' . $rank++ . '</td>';
-            echo '<td><a href="/hengst?id=' . (int) $row['id'] . '">' . htmlspecialchars((string) $row['name'], ENT_QUOTES, 'UTF-8') . '</a></td>';
+            echo '<td><a href="/horse?id=' . (int) $row['id'] . '">' . htmlspecialchars((string) $row['name'], ENT_QUOTES, 'UTF-8') . '</a></td>';
             echo '<td>' . htmlspecialchars((string) ($row['birth_year'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
             echo '<td>' . (int) $row['views'] . '</td>';
             echo '</tr>';

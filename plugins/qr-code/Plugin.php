@@ -39,7 +39,7 @@ class Plugin {
      */
     public function addDetailSection(array $sections, array $horse, array $horsePersons, ?array $pedigree): array {
         $horseId = (int) $horse['id'];
-        $detailPath = '/hengst?id=' . $horseId;
+        $detailPath = '/horse?id=' . $horseId;
         $detailPathJson = json_encode($detailPath, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
         $canvasId = 'qr-code-plugin-canvas-' . $horseId;
 
@@ -82,7 +82,7 @@ class Plugin {
 /**
  * Druckfertige Aushang-Ansicht (großer QR-Code + Name + Foto), z. B. zum
  * Ausdrucken und Aufhängen am Stall. Bewusst ohne Zugriffsschutz - zeigt
- * exakt dieselben, bereits öffentlich über /hengst?id=... einsehbaren Daten
+ * exakt dieselben, bereits öffentlich über /horse?id=... einsehbaren Daten
  * in anderer Aufbereitung, analog zum pedigree-export-Addon.
  */
 class AushangController extends BaseController {
@@ -115,7 +115,7 @@ class AushangController extends BaseController {
         $name = htmlspecialchars((string) $horse['name'], ENT_QUOTES, 'UTF-8');
         $year = !empty($horse['birth_year']) ? htmlspecialchars((string) $horse['birth_year'], ENT_QUOTES, 'UTF-8') : '';
         $imageUrl = !empty($horse['image_url']) ? htmlspecialchars((string) $horse['image_url'], ENT_QUOTES, 'UTF-8') : null;
-        $detailPathJson = json_encode('/hengst?id=' . (int) $horse['id'], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+        $detailPathJson = json_encode('/horse?id=' . (int) $horse['id'], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
 
         echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Aushang ' . $name . '</title>';
         echo '<link rel="stylesheet" href="/css/style.css">';

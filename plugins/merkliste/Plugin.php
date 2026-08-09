@@ -313,7 +313,7 @@ class MerklisteController extends BaseController {
                 'name' => (string) $row['name'],
                 'birth_year' => $row['birth_year'] !== null ? (int) $row['birth_year'] : null,
                 'image_url' => $row['image_url'] !== null ? (string) $row['image_url'] : null,
-                'url' => '/hengst?id=' . (int) $row['id'],
+                'url' => '/horse?id=' . (int) $row['id'],
             ];
         }
 

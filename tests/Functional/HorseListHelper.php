@@ -28,7 +28,7 @@ trait HorseListHelper {
     /**
      * @param array<string, string> $extra Zusätzliche POST-Felder (z. B. sire_id, status, breeding_station).
      *   Standardmäßig wird das Pferd veröffentlicht (`is_published => '1'`), da die
-     *   meisten Plugin-Tests die öffentliche Sichtbarkeit (/hengst, öffentliche
+     *   meisten Plugin-Tests die öffentliche Sichtbarkeit (/horse, öffentliche
      *   Plugin-Routen) prüfen und der Kern diese seit der Status/Veröffentlichungs-
      *   Entkopplung an `is_published = 1` bindet. Ein Test kann über
      *   `['is_published' => '0']` bewusst ein unveröffentlichtes Pferd anlegen

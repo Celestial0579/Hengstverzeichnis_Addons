@@ -56,7 +56,7 @@ class BesucherstatistikPluginTest extends FunctionalTestCase {
             'breeding_station' => 'Testgestüt',
             'birth_year' => '2020',
             'status' => 'active',
-            // Veröffentlichen, damit die öffentliche Detailseite (/hengst) sichtbar
+            // Veröffentlichen, damit die öffentliche Detailseite (/horse) sichtbar
             // ist - der Kern bindet die öffentliche Sichtbarkeit an is_published = 1.
             'is_published' => '1',
         ]);
@@ -75,7 +75,7 @@ class BesucherstatistikPluginTest extends FunctionalTestCase {
         // (horse.detail_sections-Filter zählt und zeigt die Aufrufzahl an).
         $visitor = $this->newClient();
         for ($i = 0; $i < 3; $i++) {
-            $detailPage = $visitor->get("/hengst?id={$horseId}");
+            $detailPage = $visitor->get("/horse?id={$horseId}");
             $this->assertSame(200, $detailPage->statusCode);
         }
         $this->assertStringContainsString(

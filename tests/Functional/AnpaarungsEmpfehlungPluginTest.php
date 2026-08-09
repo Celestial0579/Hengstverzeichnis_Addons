@@ -73,6 +73,29 @@ class AnpaarungsEmpfehlungPluginTest extends FunctionalTestCase {
             'Ranking muss die genetisch vielfältigste (COI 0 %) Verpaarung vor der Vollgeschwister-Verpaarung (25 %) listen.'
         );
 
+        // Geschlechtsfilter (#52): Für eine STUTE als Basispferd erscheinen nur
+        // Hengste und Pferde ohne Geschlechtsangabe als Partner - keine Stuten,
+        // keine Wallache. Pferde ohne Angabe sind gekennzeichnet.
+        $mareBase = $this->createHorse($admin, "GfStuteBasis-{$unique}", ['status' => 'active', 'sex' => 'mare']);
+        $mareOther = $this->createHorse($admin, "GfStuteAndere-{$unique}", ['status' => 'active', 'sex' => 'mare']);
+        $stallionPartner = $this->createHorse($admin, "GfHengst-{$unique}", ['status' => 'active', 'sex' => 'stallion']);
+        $geldingId = $this->createHorse($admin, "GfWallach-{$unique}", ['status' => 'active', 'sex' => 'gelding']);
+        $this->assertGreaterThan(0, $mareOther);
+        $this->assertGreaterThan(0, $geldingId);
+
+        $sexResponse = $admin->get("/plugin/anpaarungs-empfehlung/empfehlung?base_id={$mareBase}&limit=100");
+        $sexTable = strstr($sexResponse->body, '<tbody>');
+        $this->assertIsString($sexTable, "Ergebnistabelle für Stuten-Basis nicht gefunden. Body: {$sexResponse->body}");
+        $this->assertStringContainsString("GfHengst-{$unique}", $sexTable, 'Hengst muss als Partner einer Stute vorgeschlagen werden.');
+        $this->assertStringNotContainsString("GfStuteAndere-{$unique}", $sexTable, 'Stute × Stute darf nicht vorgeschlagen werden.');
+        $this->assertStringNotContainsString("GfWallach-{$unique}", $sexTable, 'Wallache sind keine Zuchtpartner.');
+        $this->assertStringContainsString('(Geschlecht unbekannt)', $sexTable, 'Pferde ohne Geschlechtsangabe bleiben gekennzeichnet in der Liste.');
+
+        // Ein Wallach als Basispferd bekommt gar keine Empfehlung.
+        $geldingResponse = $admin->get("/plugin/anpaarungs-empfehlung/empfehlung?base_id={$geldingId}");
+        $this->assertStringContainsString('Wallach erfasst', $geldingResponse->body);
+        $this->assertStringNotContainsString('<tbody>', $geldingResponse->body, 'Für einen Wallach darf kein Ranking berechnet werden.');
+
         // Das Basispferd selbst darf nicht als Partner-Vorschlag erscheinen.
         $this->assertStringNotContainsString(
             "Base-{$unique}",

@@ -34,7 +34,7 @@ class ZuchtschauErgebnissePluginTest extends FunctionalTestCase {
 
         // 1. Vor dem Erfassen eines Ergebnisses: kein Ergebnis-Abschnitt auf der Detailseite.
         $visitor = $this->newClient();
-        $detailBefore = $visitor->get("/hengst?id={$horseId}");
+        $detailBefore = $visitor->get("/horse?id={$horseId}");
         $this->assertStringNotContainsString('Zuchtschau-/Körungsergebnisse', $detailBefore->body);
 
         // 2. Ergebnis über die Admin-Route erfassen.
@@ -61,7 +61,7 @@ class ZuchtschauErgebnissePluginTest extends FunctionalTestCase {
         $this->assertStringContainsString($horseName, $indexAfter->body);
 
         // 4. Öffentliche Detailseite zeigt das Ergebnis jetzt automatisch an.
-        $detailAfter = $visitor->get("/hengst?id={$horseId}");
+        $detailAfter = $visitor->get("/horse?id={$horseId}");
         $this->assertStringContainsString('Zuchtschau-/Körungsergebnisse', $detailAfter->body);
         $this->assertStringContainsString($eventName, $detailAfter->body);
         $this->assertStringContainsString('Dr. Testrichter', $detailAfter->body);
@@ -97,7 +97,7 @@ class ZuchtschauErgebnissePluginTest extends FunctionalTestCase {
         ]);
         $this->assertSame('/plugin/zuchtschau-ergebnisse/ergebnisse', $deleteResponse->location());
 
-        $detailAfterDelete = $visitor->get("/hengst?id={$horseId}");
+        $detailAfterDelete = $visitor->get("/horse?id={$horseId}");
         $this->assertStringNotContainsString('Zuchtschau-/Körungsergebnisse', $detailAfterDelete->body);
     }
 }

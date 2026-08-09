@@ -63,7 +63,7 @@ class InzuchtkoeffizientPluginTest extends FunctionalTestCase {
 
         // 1. Öffentliche Detailseite des Fohlens E zeigt automatisch 25,00 %.
         $visitor = $this->newClient();
-        $detailPage = $visitor->get("/hengst?id={$eId}");
+        $detailPage = $visitor->get("/horse?id={$eId}");
         $this->assertSame(200, $detailPage->statusCode);
         $this->assertStringContainsString(
             '25,00 %',
@@ -72,10 +72,28 @@ class InzuchtkoeffizientPluginTest extends FunctionalTestCase {
         );
 
         // 2. Ein Pferd ohne gemeinsame Vorfahren beider Elternseiten (A) hat COI 0,00 %.
-        $unrelatedDetail = $visitor->get("/hengst?id={$aId}");
+        $unrelatedDetail = $visitor->get("/horse?id={$aId}");
         $this->assertStringContainsString('0,00 %', $unrelatedDetail->body);
 
         // 3. Verpaarungsrechner: Admin hat serverseitig immer alle Berechtigungen.
+        // Geschlechtsabhängige Dropdowns + Serverprüfung (#54): "Hengst (Vater)"
+        // bietet keine Stuten an, "Stute (Mutter)" keine Hengste; eine
+        // rollen-widrige ID im Request wird serverseitig verworfen.
+        $sexMare = $this->createHorse($admin, "IkStute-{$unique}", ['status' => 'active', 'sex' => 'mare']);
+        $sexStallion = $this->createHorse($admin, "IkHengst-{$unique}", ['status' => 'active', 'sex' => 'stallion']);
+
+        $formPage = $admin->get('/plugin/inzuchtkoeffizient/rechner');
+        $this->assertSame(1, preg_match('/<select name="sire_id".*?<\/select>/s', $formPage->body, $sireSelect), 'Hengst-Select nicht gefunden');
+        $this->assertSame(1, preg_match('/<select name="dam_id".*?<\/select>/s', $formPage->body, $damSelect), 'Stuten-Select nicht gefunden');
+        $this->assertStringContainsString("IkHengst-{$unique}", $sireSelect[0]);
+        $this->assertStringNotContainsString("IkStute-{$unique}", $sireSelect[0], 'Stute darf nicht als "Hengst (Vater)" wählbar sein.');
+        $this->assertStringContainsString("IkStute-{$unique}", $damSelect[0]);
+        $this->assertStringNotContainsString("IkHengst-{$unique}", $damSelect[0], 'Hengst darf nicht als "Stute (Mutter)" wählbar sein.');
+
+        $mismatchResponse = $admin->get("/plugin/inzuchtkoeffizient/rechner?sire_id={$sexMare}&dam_id={$sexStallion}");
+        $this->assertStringContainsString('als Stute erfasst', $mismatchResponse->body, 'Rollen-widrige Auswahl muss serverseitig gemeldet und verworfen werden.');
+        $this->assertStringNotContainsString('Voraussichtlicher Inzuchtkoeffizient', $mismatchResponse->body, 'Mit verworfener Auswahl darf kein Ergebnis erscheinen.');
+
         $calcResponse = $admin->get("/plugin/inzuchtkoeffizient/rechner?sire_id={$cId}&dam_id={$dId}");
         $this->assertSame(200, $calcResponse->statusCode);
         $this->assertStringContainsString('25,00 %', $calcResponse->body);

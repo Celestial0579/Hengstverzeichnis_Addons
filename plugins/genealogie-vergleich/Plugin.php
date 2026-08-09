@@ -65,14 +65,14 @@ class Plugin {
 
 /**
  * Öffentliches Vergleichstool - zeigt exakt dieselben, bereits über
- * /hengst?id=... einsehbaren Pedigree-Daten zweier Pferde nur anders
+ * /horse?id=... einsehbaren Pedigree-Daten zweier Pferde nur anders
  * (nebeneinander) aufbereitet, daher bewusst ohne Zugriffsschutz, analog zum
  * pedigree-export-Addon.
  */
 class VergleichController extends BaseController {
 
     private const DEFAULT_DEPTH = 5;
-    // Gedeckelt auf die Kern-Tiefe von /hengst (6 Generationen): die Route ist
+    // Gedeckelt auf die Kern-Tiefe von /horse (6 Generationen): die Route ist
     // anonym erreichbar und baut zwei Bäume pro Request auf - eine größere
     // wählbare Tiefe würde exponentiell mehr Datenbank-Abfragen erlauben als
     // der Kern selbst.

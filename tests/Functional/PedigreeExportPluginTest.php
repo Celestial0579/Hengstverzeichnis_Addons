@@ -39,7 +39,7 @@ class PedigreeExportPluginTest extends FunctionalTestCase {
         // 2. Öffentliche Detailseite des Fohlens enthält den Export-Link
         // (unangemeldeter Besucher, wie auf der echten Detailseite üblich).
         $visitor = $this->newClient();
-        $detailPage = $visitor->get("/hengst?id={$foalId}");
+        $detailPage = $visitor->get("/horse?id={$foalId}");
         $this->assertSame(200, $detailPage->statusCode);
         $this->assertStringContainsString(
             "/plugin/pedigree-export/export?id={$foalId}",
@@ -61,11 +61,11 @@ class PedigreeExportPluginTest extends FunctionalTestCase {
 
         // 5. Sicherheit: ein UNVERÖFFENTLICHTES Pferd (is_published = 0) darf über
         // die öffentliche Export-Route nicht abrufbar sein - der Kern verbirgt es
-        // ebenfalls (/hengst liefert 404).
+        // ebenfalls (/horse liefert 404).
         $unpubName = "PdfUnpub-{$unique}";
         $unpubId = $this->createHorse($admin, $unpubName, ['status' => 'active', 'is_published' => '0']);
 
-        $coreDetail = $visitor->get("/hengst?id={$unpubId}");
+        $coreDetail = $visitor->get("/horse?id={$unpubId}");
         $this->assertSame(404, $coreDetail->statusCode, 'Kern sollte unveröffentlichtes Pferd verbergen (Vorbedingung).');
 
         $unpubExport = $visitor->get("/plugin/pedigree-export/export?id={$unpubId}");

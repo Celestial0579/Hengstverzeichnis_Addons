@@ -42,7 +42,7 @@ class GenealogieVergleichPluginTest extends FunctionalTestCase {
         $visitor = $this->newClient();
 
         // 1. Detailseite von C enthält den Link zum Vergleichstool, vorbelegt mit C.
-        $detailC = $visitor->get("/hengst?id={$cId}");
+        $detailC = $visitor->get("/horse?id={$cId}");
         $this->assertStringContainsString("/plugin/genealogie-vergleich?horse_a={$cId}", $detailC->body);
 
         // 2. Ohne beide Auswahlen: Hinweistext, kein Vergleich.

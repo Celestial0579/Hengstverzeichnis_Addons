@@ -152,7 +152,7 @@ class EmpfehlungController extends BaseController {
     public function show(): void {
         $db = Database::getInstance();
         $horses = $db->query(
-            "SELECT id, name, birth_year FROM horses WHERE deleted_at IS NULL ORDER BY name ASC"
+            "SELECT id, name, birth_year, sex FROM horses WHERE deleted_at IS NULL ORDER BY name ASC"
         )->fetchAll(PDO::FETCH_ASSOC);
 
         $baseId = isset($_GET['base_id']) && $_GET['base_id'] !== '' ? (int) $_GET['base_id'] : null;
@@ -170,11 +170,35 @@ class EmpfehlungController extends BaseController {
             }
         }
 
+        // Geschlechtsfilter (#52): Zuchtpartner ist nur das jeweils
+        // gegengeschlechtliche Tier; Wallache scheiden immer aus. Pferde OHNE
+        // Geschlechtsangabe (NULL = unbekannt, Altbestand) bleiben in der Liste
+        // und werden in der Tabelle gekennzeichnet - konsistent zur NULL-Regel
+        // des Kerns (Framework #165). Ist das BASISPFERD ohne Angabe, kann
+        // nicht gefiltert werden; das sagt die Seite dann ausdrücklich.
+        $oppositeSex = ['stallion' => 'mare', 'mare' => 'stallion'];
+        $baseSex = $baseHorse['sex'] ?? null;
+
+        if ($baseHorse !== null && $baseSex === 'gelding') {
+            // Ein Wallach ist kein Zuchtpartner - gar keine Empfehlung rechnen.
+            $baseHorse = null;
+            $geldingBase = true;
+        } else {
+            $geldingBase = false;
+        }
+
         if ($baseHorse !== null) {
             $baseTree = PedigreeBuilder::build($baseId, $depth);
             foreach ($horses as $h) {
                 $candidateId = (int) $h['id'];
                 if ($candidateId === $baseId) {
+                    continue;
+                }
+                $candidateSex = $h['sex'] ?? null;
+                if ($candidateSex === 'gelding') {
+                    continue;
+                }
+                if ($baseSex !== null && $candidateSex !== null && $candidateSex !== $oppositeSex[$baseSex]) {
                     continue;
                 }
                 $candidateTree = PedigreeBuilder::build($candidateId, $depth);
@@ -183,6 +207,7 @@ class EmpfehlungController extends BaseController {
                     'id' => $candidateId,
                     'name' => (string) $h['name'],
                     'birth_year' => $h['birth_year'] !== null ? (int) $h['birth_year'] : null,
+                    'sex' => $candidateSex,
                     'coi' => $coi,
                 ];
             }
@@ -241,10 +266,17 @@ class EmpfehlungController extends BaseController {
         echo '<p><button type="submit" style="margin-top:1rem;padding:0.6rem 1.2rem;">Empfehlungen berechnen</button></p>';
         echo '</form>';
 
+        if ($geldingBase) {
+            echo '<p class="muted">Das gewählte Basispferd ist als Wallach erfasst - für Wallache wird keine Anpaarungs-Empfehlung berechnet.</p>';
+        }
+
         if ($baseHorse !== null) {
             $baseName = htmlspecialchars((string) $baseHorse['name'], ENT_QUOTES, 'UTF-8');
+            if ($baseSex === null) {
+                echo '<p class="muted">⚠️ Für „' . $baseName . '" ist kein Geschlecht hinterlegt - die Partnerliste kann deshalb nicht nach Geschlecht gefiltert werden.</p>';
+            }
             if (empty($ranking)) {
-                echo '<p class="muted">Für „' . $baseName . '" gibt es derzeit keine weiteren Pferde im Register.</p>';
+                echo '<p class="muted">Für „' . $baseName . '" gibt es derzeit keine passenden Partner im Register.</p>';
             } else {
                 echo '<h2>Empfehlungen für „' . $baseName . '"</h2>';
                 echo '<table><thead><tr><th>#</th><th>Partner</th><th>Jahrgang</th>'
@@ -261,7 +293,9 @@ class EmpfehlungController extends BaseController {
                     }
                     echo '<tr' . $cls . '>';
                     echo '<td>' . $rank . '</td>';
-                    echo '<td>' . htmlspecialchars($row['name'], ENT_QUOTES, 'UTF-8') . '</td>';
+                    echo '<td>' . htmlspecialchars($row['name'], ENT_QUOTES, 'UTF-8')
+                        . ($row['sex'] === null ? ' <span class="muted">(Geschlecht unbekannt)</span>' : '')
+                        . '</td>';
                     echo '<td>' . ($row['birth_year'] !== null ? (int) $row['birth_year'] : '—') . '</td>';
                     echo '<td class="num"><strong>' . $percent . ' %</strong></td>';
                     echo '</tr>';

@@ -45,7 +45,7 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
         // 2. Vor dem Anlegen eines Inserats: kein Badge auf der Detailseite,
         // keine Einträge in der öffentlichen Übersicht.
         $visitor = $this->newClient();
-        $detailBefore = $visitor->get("/hengst?id={$horseId}");
+        $detailBefore = $visitor->get("/horse?id={$horseId}");
         $this->assertStringNotContainsString('Zum Verkauf', $detailBefore->body);
 
         // 3. Inserat über die Admin-Route anlegen.
@@ -74,7 +74,7 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
         $this->assertStringContainsString('1.500,00 €', $listePage->body);
 
         // 5b. Regression zu Issue #24: Ein Inserat für ein UNVERÖFFENTLICHTES
-        // Pferd darf in der öffentlichen Übersicht nicht erscheinen - /hengst
+        // Pferd darf in der öffentlichen Übersicht nicht erscheinen - /horse
         // liefert für dieses Pferd 404, die Börse darf Name/Preis nicht doch
         // preisgeben.
         $unpublishedName = "UnveroeffentlichtVerkauf-{$unique}";
@@ -98,7 +98,7 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
         );
 
         // 6. Detailseite zeigt jetzt automatisch das Badge inkl. Preis und Formular.
-        $detailAfter = $visitor->get("/hengst?id={$horseId}");
+        $detailAfter = $visitor->get("/horse?id={$horseId}");
         $this->assertStringContainsString('Zum Verkauf', $detailAfter->body);
         $this->assertStringContainsString('1.500,00 €', $detailAfter->body);
         $this->assertStringContainsString('Verkauf wegen Bestandsreduzierung.', $detailAfter->body);
@@ -114,7 +114,7 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
             'message' => 'Spam',
             'webseite' => 'https://spam.example',
         ]);
-        $this->assertSame("/hengst?id={$horseId}&verkaufsanfrage=erfolg", $honeypotResponse->location());
+        $this->assertSame("/horse?id={$horseId}&verkaufsanfrage=erfolg", $honeypotResponse->location());
 
         // 8. Echte Anfrage: Versand schlägt mangels SMTP-Konfiguration kontrolliert fehl.
         $realResponse = $visitor->post('/plugin/verkaufsboerse/kontakt', [
@@ -124,7 +124,7 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
             'requester_email' => 'kaufinteressent@example.test',
             'message' => 'Ist der Preis verhandelbar?',
         ]);
-        $this->assertSame("/hengst?id={$horseId}&verkaufsanfrage=fehler", $realResponse->location());
+        $this->assertSame("/horse?id={$horseId}&verkaufsanfrage=fehler", $realResponse->location());
 
         // 9. CSRF-Schutz.
         $csrfRejected = $visitor->post('/plugin/verkaufsboerse/kontakt', [
@@ -165,7 +165,7 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
         ]);
         $this->assertSame('/plugin/verkaufsboerse/verwaltung', $deleteResponse->location());
 
-        $detailAfterDelete = $visitor->get("/hengst?id={$horseId}");
+        $detailAfterDelete = $visitor->get("/horse?id={$horseId}");
         $this->assertStringNotContainsString('Zum Verkauf', $detailAfterDelete->body);
 
         // 12. Sichtbarkeits-Status in der Verwaltung (#51): Die Verwaltung
@@ -200,5 +200,31 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
         $verwaltungAfterTrash = $admin->get('/plugin/verkaufsboerse/verwaltung');
         $this->assertStringContainsString($trashedName, $verwaltungAfterTrash->body, 'Die Verwaltung soll das Inserat weiter listen.');
         $this->assertStringContainsString('im Papierkorb - öffentlich unsichtbar', $verwaltungAfterTrash->body);
+
+        // 12c. Papierkorb-Hook (#51 / Framework #164): Das Plugin reagiert auf
+        // horse.trashed mit einem Audit-Log-Eintrag - die Diskrepanz zwischen
+        // Verwaltung und Börse ist damit dokumentiert, nicht nur sichtbar.
+        $auditStmt = \App\Database::getInstance()->prepare(
+            "SELECT COUNT(*) FROM audit_logs WHERE action = 'Verkaufsbörse: Inserat durch Papierkorb öffentlich unsichtbar' AND details LIKE ?"
+        );
+        $auditStmt->execute(['%' . $trashedName . '%']);
+        $this->assertGreaterThan(0, (int) $auditStmt->fetchColumn(), 'horse.trashed muss einen Audit-Log-Eintrag des Börsen-Plugins auslösen.');
+
+        // 12d. Wiederherstellen löst das Gegenstück aus.
+        $trashPage = $admin->get('/admin/trash');
+        $restoreResponse = $admin->post('/admin/trash/restore', [
+            'csrf_token' => $trashPage->formField('csrf_token') ?? '',
+            'type' => 'horse',
+            'id' => (string) $trashedId,
+        ]);
+        $this->assertSame('/admin/trash?success=restored', $restoreResponse->location());
+        $auditStmt = \App\Database::getInstance()->prepare(
+            "SELECT COUNT(*) FROM audit_logs WHERE action = 'Verkaufsbörse: Inserat nach Wiederherstellung wieder sichtbar' AND details LIKE ?"
+        );
+        $auditStmt->execute(['%' . $trashedName . '%']);
+        $this->assertGreaterThan(0, (int) $auditStmt->fetchColumn(), 'horse.restored muss einen Audit-Log-Eintrag des Börsen-Plugins auslösen.');
+
+        $listeAfterRestore = $visitor->get('/plugin/verkaufsboerse/liste');
+        $this->assertStringContainsString($trashedName, $listeAfterRestore->body, 'Nach der Wiederherstellung ist das Inserat wieder öffentlich.');
     }
 }
