@@ -46,9 +46,9 @@ class Plugin {
         $html = '<div style="margin-top:0.5rem;">';
         $html .= '<button type="button" onclick="document.getElementById(\'' . $canvasId . '\').style.display = '
             . '(document.getElementById(\'' . $canvasId . '\').style.display === \'none\' ? \'inline-block\' : \'none\')" '
-            . 'style="padding:0.5rem 1rem;background:#f8f9fa;border:1px solid #ccc;border-radius:6px;cursor:pointer;">📱 QR-Code anzeigen</button> ';
+            . 'style="padding:0.5rem 1rem;background:var(--surface-muted);border:1px solid #ccc;border-radius:6px;cursor:pointer;">📱 QR-Code anzeigen</button> ';
         $html .= '<a href="/plugin/qr-code/aushang?id=' . $horseId . '" target="_blank" rel="noopener" '
-            . 'style="padding:0.5rem 1rem;background:#f8f9fa;border:1px solid #ccc;border-radius:6px;text-decoration:none;color:inherit;display:inline-block;">🖨️ Aushang drucken</a>';
+            . 'style="padding:0.5rem 1rem;background:var(--surface-muted);border:1px solid #ccc;border-radius:6px;text-decoration:none;color:inherit;display:inline-block;">🖨️ Aushang drucken</a>';
         $html .= '<div id="' . $canvasId . '" style="display:none;margin-top:0.7rem;"></div>';
         $html .= '<script src="/js/qrcode.js"></script>';
         $html .= '<script>

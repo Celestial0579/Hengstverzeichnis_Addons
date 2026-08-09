@@ -131,9 +131,9 @@ class StatistikController extends BaseController {
             body{font-family:sans-serif;padding:2rem;max-width:1000px;margin:0 auto;color:#222;}
             h1{margin-top:0;}
             .tiles{display:grid;grid-template-columns:repeat(auto-fit, minmax(160px, 1fr));gap:1rem;margin-bottom:2rem;}
-            .tile{background:#f8f9fa;border-radius:8px;padding:1rem;text-align:center;}
+            .tile{background:var(--surface-muted);border-radius:8px;padding:1rem;text-align:center;}
             .tile .num{font-size:1.8rem;font-weight:bold;}
-            .tile .label{color:#666;font-size:0.85rem;}
+            .tile .label{color:var(--text-muted);font-size:0.85rem;}
             table{width:100%;border-collapse:collapse;margin-bottom:2rem;}
             th,td{text-align:left;padding:0.5rem;border-bottom:1px solid #ddd;}
             h2{border-bottom:2px solid #18bc9c;padding-bottom:0.3rem;}

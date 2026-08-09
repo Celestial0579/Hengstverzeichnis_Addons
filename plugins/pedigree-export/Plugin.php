@@ -38,7 +38,7 @@ class Plugin {
     public function addDetailSection(array $sections, array $horse, array $horsePersons, ?array $pedigree): array {
         $horseId = (int) $horse['id'];
         $sections[] = '<p><a href="/plugin/pedigree-export/export?id=' . $horseId . '" target="_blank" rel="noopener" '
-            . 'style="display:inline-block;padding:0.5rem 1rem;background:#f8f9fa;border-radius:6px;text-decoration:none;color:inherit;">'
+            . 'style="display:inline-block;padding:0.5rem 1rem;background:var(--surface-muted);border-radius:6px;text-decoration:none;color:inherit;">'
             . '🖨️ Stammbaum drucken / als PDF exportieren</a></p>';
         return $sections;
     }
@@ -154,17 +154,17 @@ class ExportController extends BaseController {
     * { box-sizing: border-box; }
     body { font-family: sans-serif; padding: 1.5rem; color: #222; }
     h1 { margin: 0 0 0.2rem 0; }
-    .meta { color: #666; font-size: 0.9rem; margin: 0 0 1.5rem 0; }
+    .meta { color: var(--text-muted); font-size: 0.9rem; margin: 0 0 1.5rem 0; }
     .toolbar { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; padding: 0.8rem; background: #f0f0f0; border-radius: 6px; }
     .toolbar button { padding: 0.5rem 1rem; font-size: 1rem; cursor: pointer; }
-    .toolbar span { color: #555; font-size: 0.85rem; }
+    .toolbar span { color: var(--text-muted); font-size: 0.85rem; }
 
     .pedigree { display: flex; overflow-x: auto; }
     .node { display: flex; align-items: center; }
     .box { border: 1px solid #999; border-radius: 6px; padding: 0.4rem 0.7rem; white-space: nowrap; background: #fff; text-align: center; min-width: 120px; }
-    .box.placeholder { border-style: dashed; color: #888; background: #fafafa; }
+    .box.placeholder { border-style: dashed; color: var(--text-muted); background: var(--surface-muted); }
     .box-name { font-weight: bold; font-size: 0.9rem; }
-    .box-meta { font-size: 0.75rem; color: #666; }
+    .box-meta { font-size: 0.75rem; color: var(--text-muted); }
     .children { display: flex; flex-direction: column; justify-content: space-around; margin-left: 1.2rem; gap: 0.6rem; }
     .child { display: flex; align-items: center; }
     .child:empty { display: none; }

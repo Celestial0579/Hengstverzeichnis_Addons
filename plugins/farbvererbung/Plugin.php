@@ -41,9 +41,9 @@ class Plugin {
         $label = FjordColor::label($key);
         $genotype = FjordColor::genotypeHint($key);
 
-        $sections[] = '<div style="margin-top:0.5rem;padding:0.75rem 1rem;background:#f8f9fa;border-radius:6px;">'
+        $sections[] = '<div style="margin-top:0.5rem;padding:0.75rem 1rem;background:var(--surface-muted);border-radius:6px;">'
             . '<strong>🎨 Falbfarbe:</strong> ' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8')
-            . '<p style="margin:0.4rem 0 0 0;color:#666;font-size:0.85em;">'
+            . '<p style="margin:0.4rem 0 0 0;color:var(--text-muted);font-size:0.85em;">'
             . 'Genetische Einordnung: ' . htmlspecialchars($genotype, ENT_QUOTES, 'UTF-8') . '. '
             . 'Alle Fjordpferde tragen das Dun-(Falb-)Gen; die Farbunterschiede entstehen '
             . 'aus der Grundfarbe (Extension/Agouti) und ggf. dem Cream-Gen.'
@@ -281,10 +281,10 @@ class RechnerController extends BaseController {
         echo '<title>Fjord-Farbvererbungsrechner</title>';
         echo '<style>body{font-family:sans-serif;padding:2rem;max-width:720px;margin:0 auto;}';
         echo 'label{display:block;margin-top:1rem;font-weight:bold;} select{width:100%;padding:0.5rem;margin-top:0.3rem;}';
-        echo '.result{margin-top:1.5rem;padding:1rem;background:#f8f9fa;border-radius:6px;}';
+        echo '.result{margin-top:1.5rem;padding:1rem;background:var(--surface-muted);border-radius:6px;}';
         echo '.bar{height:1.1rem;background:#4a7;border-radius:3px;}';
         echo 'table{width:100%;border-collapse:collapse;margin-top:0.5rem;} td{padding:0.35rem 0.5rem;vertical-align:middle;}';
-        echo '.muted{color:#666;font-size:0.85em;}</style></head><body>';
+        echo '.muted{color:var(--text-muted);font-size:0.85em;}</style></head><body>';
         echo '<h1>🎨 Fjord-Farbvererbungsrechner</h1>';
         echo '<p>Schätzt die voraussichtliche Fohlenfarbe aus den Farben von Vater und Mutter '
             . 'anhand der Farbgenetik des Norwegischen Fjordpferds.</p>';

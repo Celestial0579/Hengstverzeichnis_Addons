@@ -72,7 +72,7 @@ class Plugin {
         $stmt->execute(['id' => $horseId]);
         $views = (int) $stmt->fetchColumn();
 
-        $sections[] = '<p style="color:#666;font-size:0.9em;">👁 Dieses Profil wurde ' . $views . ' mal aufgerufen.</p>';
+        $sections[] = '<p style="color:var(--text-muted);font-size:0.9em;">👁 Dieses Profil wurde ' . $views . ' mal aufgerufen.</p>';
         return $sections;
     }
 

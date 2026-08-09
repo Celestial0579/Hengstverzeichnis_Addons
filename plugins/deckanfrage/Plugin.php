@@ -69,13 +69,13 @@ class Plugin {
         $horseId = (int) $horse['id'];
         $csrfToken = htmlspecialchars(Router::generateCsrfToken(), ENT_QUOTES, 'UTF-8');
 
-        $html = '<div style="margin-top:1rem;padding:1rem;background:#f8f9fa;border-radius:6px;">';
+        $html = '<div style="margin-top:1rem;padding:1rem;background:var(--surface-muted);border-radius:6px;">';
         $html .= '<h3 style="margin-top:0;">📨 Deckanfrage stellen</h3>';
 
         if (($_GET['deckanfrage'] ?? '') === 'erfolg') {
-            $html .= '<p style="color:#155724;background:#d4edda;padding:0.6rem;border-radius:4px;">Ihre Anfrage wurde erfolgreich versendet.</p>';
+            $html .= '<p style="color:var(--success-fg);background:var(--success-soft-bg);padding:0.6rem;border-radius:4px;">Ihre Anfrage wurde erfolgreich versendet.</p>';
         } elseif (($_GET['deckanfrage'] ?? '') === 'fehler') {
-            $html .= '<p style="color:#721c24;background:#f8d7da;padding:0.6rem;border-radius:4px;">Ihre Anfrage konnte nicht versendet werden. Bitte versuchen Sie es später erneut.</p>';
+            $html .= '<p style="color:var(--danger-fg);background:var(--danger-soft-bg);padding:0.6rem;border-radius:4px;">Ihre Anfrage konnte nicht versendet werden. Bitte versuchen Sie es später erneut.</p>';
         }
 
         $html .= '<form method="POST" action="/plugin/deckanfrage/anfrage">';
@@ -94,7 +94,7 @@ class Plugin {
             . '<input type="email" name="requester_email" required style="width:100%;padding:0.4rem;margin-top:0.2rem;"></label>';
         $html .= '<label style="display:block;margin-top:0.5rem;font-size:0.9em;">Nachricht<br>'
             . '<textarea name="message" required rows="4" style="width:100%;padding:0.4rem;margin-top:0.2rem;"></textarea></label>';
-        $html .= '<p style="font-size:0.8em;color:#666;margin-top:0.4rem;">Ihre Angaben werden zur Bearbeitung der Deckanfrage an die Deckstation weitergeleitet.</p>';
+        $html .= '<p style="font-size:0.8em;color:var(--text-muted);margin-top:0.4rem;">Ihre Angaben werden zur Bearbeitung der Deckanfrage an die Deckstation weitergeleitet.</p>';
         $html .= '<button type="submit" style="margin-top:0.5rem;padding:0.6rem 1.2rem;">Anfrage senden</button>';
         $html .= '</form></div>';
 
