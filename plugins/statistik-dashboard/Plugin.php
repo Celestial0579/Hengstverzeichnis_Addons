@@ -81,6 +81,12 @@ class StatistikController extends BaseController {
             "SELECT status, COUNT(*) AS total FROM horses WHERE deleted_at IS NULL GROUP BY status"
         )->fetchAll(PDO::FETCH_KEY_PAIR);
 
+        // Lebensstatus ist seit dem Status-Split (Framework #188) orthogonal
+        // zum Zuchtstatus - eigene Zählung statt eines status-Enum-Werts.
+        $totalDeceased = (int) $db->query(
+            "SELECT COUNT(*) FROM horses WHERE deleted_at IS NULL AND is_deceased = 1"
+        )->fetchColumn();
+
         $stationDistribution = $db->query(
             "SELECT COALESCE(bs.name, NULLIF(h.breeding_station, ''), 'Unbekannt') AS station, COUNT(*) AS total
              FROM horses h
@@ -121,10 +127,12 @@ class StatistikController extends BaseController {
              LIMIT 10"
         )->fetchAll(PDO::FETCH_ASSOC);
 
+        // Der Zuchtstatus (active/inactive) partitioniert weiterhin den
+        // Gesamtbestand; Verstorben zählt quer dazu und darf NICHT in die
+        // Summe eingehen (sonst zählten verstorbene Tiere doppelt).
         $totalActive = (int) ($statusCounts['active'] ?? 0);
         $totalInactive = (int) ($statusCounts['inactive'] ?? 0);
-        $totalDeceased = (int) ($statusCounts['deceased'] ?? 0);
-        $totalAll = $totalActive + $totalInactive + $totalDeceased;
+        $totalAll = $totalActive + $totalInactive;
 
         echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Statistik-Dashboard</title>';
         echo '<link rel="stylesheet" href="/css/style.css">';
@@ -155,8 +163,8 @@ class StatistikController extends BaseController {
 
         echo '<div class="tiles">';
         echo '<div class="tile"><div class="num">' . $totalAll . '</div><div class="label">Pferde gesamt</div></div>';
-        echo '<div class="tile"><div class="num">' . $totalActive . '</div><div class="label">Aktiv</div></div>';
-        echo '<div class="tile"><div class="num">' . $totalInactive . '</div><div class="label">Inaktiv</div></div>';
+        echo '<div class="tile"><div class="num">' . $totalActive . '</div><div class="label">Aktiv (Zucht)</div></div>';
+        echo '<div class="tile"><div class="num">' . $totalInactive . '</div><div class="label">Inaktiv (Zucht)</div></div>';
         echo '<div class="tile"><div class="num">' . $totalDeceased . '</div><div class="label">Verstorben</div></div>';
         echo '</div>';
 

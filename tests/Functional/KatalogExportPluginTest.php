@@ -66,6 +66,41 @@ class KatalogExportPluginTest extends FunctionalTestCase {
         $this->assertSame(200, $filteredResponse->statusCode);
         $this->assertStringNotContainsString($horseName, $filteredResponse->body);
 
+        // 5b. Status-Split (Framework #188): verstorbenes, zuchtinaktives Pferd
+        // anlegen - die CSV bekommt Verstorben/Todesjahr-Spalten, q_deceased
+        // filtert den Lebensstatus, q_status den Zuchtstatus.
+        $deceasedName = "CsvVerstorben-{$unique}";
+        $createResponse = $admin->post('/admin/horses/store', [
+            'csrf_token' => $createForm->formField('csrf_token') ?? '',
+            'name' => $deceasedName,
+            'status' => 'inactive',
+            'birth_year' => '1994',
+            'death_year' => '2018',
+        ]);
+        $this->assertSame('/admin/horses?success=created', $createResponse->location());
+
+        $csvAll = $admin->get('/plugin/katalog-export/csv');
+        $this->assertStringContainsString('Verstorben;Todesjahr', $csvAll->body, 'CSV-Kopfzeile muss die neuen Lebensstatus-Spalten enthalten');
+        $this->assertStringContainsString("{$deceasedName};;;1994;;;;inactive;ja;2018", $csvAll->body, "Verstorbenen-Zeile unvollständig, Body: {$csvAll->body}");
+
+        $csvDeceased = $admin->get('/plugin/katalog-export/csv?q_deceased=1');
+        $this->assertStringContainsString($deceasedName, $csvDeceased->body);
+        $this->assertStringNotContainsString($horseName, $csvDeceased->body, 'q_deceased=1 darf lebende Pferde nicht enthalten');
+
+        $csvLiving = $admin->get('/plugin/katalog-export/csv?q_deceased=0');
+        $this->assertStringContainsString($horseName, $csvLiving->body);
+        $this->assertStringNotContainsString($deceasedName, $csvLiving->body);
+
+        $csvInactive = $admin->get('/plugin/katalog-export/csv?q_status=inactive');
+        $this->assertStringContainsString($deceasedName, $csvInactive->body);
+        $this->assertStringNotContainsString($horseName, $csvInactive->body, 'q_status=inactive darf aktive Pferde nicht enthalten');
+
+        // Alt-Wert q_status=deceased (kopierte Filter-URLs von vor dem Split)
+        // mappt auf den Lebensstatus statt leer zu laufen.
+        $csvLegacy = $admin->get('/plugin/katalog-export/csv?q_status=deceased');
+        $this->assertStringContainsString($deceasedName, $csvLegacy->body, 'q_status=deceased muss wie q_deceased=1 wirken');
+        $this->assertStringNotContainsString($horseName, $csvLegacy->body);
+
         // 6. Berechtigungsdurchsetzung: Editor ohne katalog-export.export wird abgewiesen ...
         $editorGroupId = $this->findBuiltinGroupId($admin, 'Editor');
         $editor = $this->createAndLoginEditor(
@@ -142,9 +177,10 @@ class KatalogExportPluginTest extends FunctionalTestCase {
         $this->assertNotNull($row, 'Das Testpferd muss im Export auftauchen.');
 
         $this->assertCount(
-            12,
+            16,
             $row,
-            'Der Export hat 12 Spalten. Mehr Felder heißt: ein Zellwert ist aus seinem '
+            'Der Export hat 16 Spalten (seit #188: + Geburtsdatum, Stockmaß, '
+            . 'Verstorben, Todesjahr). Mehr Felder heißt: ein Zellwert ist aus seinem '
             . 'Feld ausgebrochen - dann stimmt die Spaltenzuordnung nicht mehr und '
             . 'csvSafe() greift für die entstandenen Felder nicht.'
         );
