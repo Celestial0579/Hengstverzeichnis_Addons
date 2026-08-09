@@ -55,7 +55,10 @@ class Plugin {
             . '☆ Merken</button>';
 
         if (!$compact) {
-            $html .= ' <a href="/plugin/merkliste" style="margin-left:0.5rem;font-size:0.9em;">Zur Merkliste</a>';
+            // Als App-Schaltfläche statt nackter Browser-Link (#49): die Klassen
+            // kommen aus dem Framework-CSS, das im Detailseiten-Kontext geladen
+            // ist - damit stimmen auch die Theme-Farben im Darkmode (#48).
+            $html .= ' <a href="/plugin/merkliste" class="btn btn-secondary" style="margin-left:0.5rem;padding:0.5rem 1rem;">Zur Merkliste</a>';
         }
 
         $html .= '<script>
@@ -83,6 +86,27 @@ class Plugin {
                             // sind - also auf jedem befuellten Katalog und jeder Detailseite.
                             if (btn.textContent !== next) { btn.textContent = next; }
                         });
+                        window.hvMerkliste.ensureCatalogEntry(ids);
+                    },
+                    // Genau EIN "Zur Merkliste"-Einstieg auf der Katalogseite (#49):
+                    // neben dem Trefferzahl-Badge, den es nur dort gibt - die
+                    // Detailseite hat ihren eigenen Link. Einfuegen ist idempotent
+                    // (ID-Guard), der Zaehler-Text folgt demselben textContent-
+                    // Guard wie syncButtons (sonst Observer-Endlosschleife, #47).
+                    ensureCatalogEntry: function (ids) {
+                        var badge = document.getElementById("hit-count-badge");
+                        if (!badge) { return; }
+                        var entry = document.getElementById("hv-merkliste-entry");
+                        if (!entry) {
+                            entry = document.createElement("a");
+                            entry.id = "hv-merkliste-entry";
+                            entry.href = "/plugin/merkliste";
+                            entry.className = "btn btn-secondary";
+                            entry.style.cssText = "padding:0.3rem 0.8rem;font-size:0.9rem;";
+                            badge.parentNode.insertBefore(entry, badge);
+                        }
+                        var next = "★ Merkliste (" + ids.length + ")";
+                        if (entry.textContent !== next) { entry.textContent = next; }
                     }
                 };
                 window.hvMerklisteToggle = function (btn) {
