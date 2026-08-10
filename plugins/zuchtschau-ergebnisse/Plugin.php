@@ -33,7 +33,12 @@ class Plugin {
         $hooks->addFilter('horse.detail_sections', [$this, 'addDetailSection']);
     }
 
-    private function ensureTable(): void {
+    /**
+     * Framework-Hook (#75): Der PluginManager ruft install() bei der
+     * Aktivierung und nach einem Addon-Update genau einmal auf - das
+     * DDL-Statement läuft damit nicht mehr in jedem Request.
+     */
+    public function install(): void {
         Database::getInstance()->exec(
             'CREATE TABLE IF NOT EXISTS `plugin_zuchtschau_ergebnisse` (
                 `id` INT AUTO_INCREMENT PRIMARY KEY,
@@ -49,6 +54,30 @@ class Plugin {
                 FOREIGN KEY (`horse_id`) REFERENCES `horses`(`id`) ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
         );
+    }
+
+    /**
+     * Fallback für ältere Kerne ohne install()-Hook (#75) - bewusst OHNE
+     * Marker-Datei: Der Kern gibt das Plugin-Verzeichnis über einen
+     * Inhalts-Fingerabdruck frei, in den auch Dotfiles einfließen. Jede zur
+     * Laufzeit dorthin geschriebene Datei änderte den Fingerabdruck, und der
+     * Kern deaktivierte das Plugin als unfreigegeben verändert. Statt DDL
+     * pro Request (siehe Issue) läuft deshalb nur noch eine billige
+     * SELECT-Probe je Request; erst wenn sie fehlschlägt, legt install()
+     * die Tabelle an. Auf Kernen mit install()-Hook existiert die Tabelle
+     * ohnehin - dort bleibt es bei der Probe.
+     */
+    private function ensureTable(): void {
+        static $checked = false;
+        if ($checked) {
+            return;
+        }
+        try {
+            Database::getInstance()->query('SELECT 1 FROM `plugin_zuchtschau_ergebnisse` LIMIT 1');
+        } catch (\Throwable $e) {
+            $this->install();
+        }
+        $checked = true;
     }
 
     /**
