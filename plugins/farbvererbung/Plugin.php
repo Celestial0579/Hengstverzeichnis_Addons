@@ -18,6 +18,7 @@ namespace Plugin\Farbvererbung;
 use App\Controllers\BaseController;
 use App\Database;
 use App\Plugin\HookManager;
+use App\Plugin\PluginPage;
 use PDO;
 
 class Plugin {
@@ -55,7 +56,7 @@ class Plugin {
         if ($isFjord) {
             // Rasse ist bestätigt Fjordpferd: die Einordnung darf als Aussage
             // formuliert sein.
-            $sections[] = '<div style="margin-top:0.5rem;padding:0.75rem 1rem;background:var(--surface-muted);border-radius:6px;">'
+            $sections[] = '<div style="margin-top:0.5rem;padding:0.75rem 1rem;background:var(--surface-muted);border-radius:var(--border-radius, 6px);">'
                 . '<strong>🎨 Falbfarbe:</strong> ' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8')
                 . '<p style="margin:0.4rem 0 0 0;color:var(--text-muted);font-size:0.85em;">'
                 . 'Genetische Einordnung: ' . htmlspecialchars($genotype, ENT_QUOTES, 'UTF-8') . '. '
@@ -68,7 +69,7 @@ class Plugin {
         // Rasse unbekannt: Formulierung bewusst konditional - die Zuordnung ist
         // eine Fjord-spezifische Deutung des Farbtexts, keine gesicherte
         // Aussage über das Pferd.
-        $sections[] = '<div style="margin-top:0.5rem;padding:0.75rem 1rem;background:var(--surface-muted);border-radius:6px;">'
+        $sections[] = '<div style="margin-top:0.5rem;padding:0.75rem 1rem;background:var(--surface-muted);border-radius:var(--border-radius, 6px);">'
             . '<strong>🎨 Falbfarbe (Fjord-Deutung):</strong> ' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8')
             . '<p style="margin:0.4rem 0 0 0;color:var(--text-muted);font-size:0.85em;">'
             . 'Genetische Einordnung: ' . htmlspecialchars($genotype, ENT_QUOTES, 'UTF-8') . '. '
@@ -316,72 +317,63 @@ class RechnerController extends BaseController {
             ? FjordColor::predictFoal($sireColor, $damColor)
             : null;
 
-        echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8">';
-        echo '<meta name="viewport" content="width=device-width, initial-scale=1">';
-        echo '<title>Fjord-Farbvererbungsrechner</title>';
-        echo '<link rel="stylesheet" href="/css/style.css">';
-        echo <<<'HTML'
-        <script>
-        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
-        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
-        (function () {
-            var stored = localStorage.getItem('theme');
-            if (stored === 'dark' || stored === 'light') {
-                document.documentElement.setAttribute('data-theme', stored);
-            }
-        })();
-        </script>
-        HTML;
-        echo '<style>body{font-family:sans-serif;padding:2rem;max-width:720px;margin:0 auto;background:var(--bg-color);}';
-        echo 'label{display:block;margin-top:1rem;font-weight:bold;} select{width:100%;padding:0.5rem;margin-top:0.3rem;}';
-        echo '.result{margin-top:1.5rem;padding:1rem;background:var(--surface-muted);border-radius:6px;}';
-        echo '.bar{height:1.1rem;background:var(--secondary-color);border-radius:3px;}';
-        echo 'table{width:100%;border-collapse:collapse;margin-top:0.5rem;} td{padding:0.35rem 0.5rem;vertical-align:middle;}';
-        echo '.muted{color:var(--text-muted);font-size:0.85em;}</style></head><body>';
-        echo '<h1>🎨 Fjord-Farbvererbungsrechner</h1>';
-        echo '<p>Schätzt die voraussichtliche Fohlenfarbe aus den Farben von Vater und Mutter '
+        // Inhalt als Fragment im Haupt-Layout über PluginPage (Addons#66):
+        // Header, Navigation, Theme-Umschalter und Grund-Styling (Tabellen,
+        // Formulare, Schrift) kommen vom Framework. Addon-spezifisch bleibt
+        // nur die Geometrie der Ergebnis-Balken; Farben über Theme-Variablen.
+        $content = '<style>';
+        $content .= '.farbvererbung-result{margin-top:1.5rem;padding:1rem;background:var(--surface-muted);border-radius:var(--border-radius, 6px);}';
+        $content .= '.farbvererbung-bar{height:1.1rem;background:var(--secondary-color);border-radius:var(--border-radius, 3px);}';
+        $content .= '.farbvererbung-muted{color:var(--text-muted);font-size:0.85em;}';
+        $content .= '</style>';
+
+        $content .= '<div class="card">';
+        $content .= '<h1>🎨 Fjord-Farbvererbungsrechner</h1>';
+        $content .= '<p>Schätzt die voraussichtliche Fohlenfarbe aus den Farben von Vater und Mutter '
             . 'anhand der Farbgenetik des Norwegischen Fjordpferds. '
-            . '<span class="muted">Fjord-spezifische Annahme (#50): Das Dun-(Falb-)Gen wird als fest '
+            . '<span class="farbvererbung-muted">Fjord-spezifische Annahme (#50): Das Dun-(Falb-)Gen wird als fest '
             . 'vorhanden vorausgesetzt - für Pferde anderer Rassen ist das Ergebnis nicht aussagekräftig.</span></p>';
 
-        echo '<form method="GET">';
-        echo self::colorSelect('sire_color', 'Farbe des Vaters (Hengst)', $sireColor);
-        echo self::colorSelect('dam_color', 'Farbe der Mutter (Stute)', $damColor);
-        echo '<p><button type="submit" style="margin-top:1rem;padding:0.6rem 1.2rem;">Berechnen</button></p>';
-        echo '</form>';
+        $content .= '<form method="GET">';
+        $content .= self::colorSelect('sire_color', 'Farbe des Vaters (Hengst)', $sireColor);
+        $content .= self::colorSelect('dam_color', 'Farbe der Mutter (Stute)', $damColor);
+        $content .= '<p><button type="submit" class="btn">Berechnen</button></p>';
+        $content .= '</form>';
 
         if ($result !== null) {
-            echo '<div class="result"><strong>Voraussichtliche Fohlenfarbe:</strong><table>';
+            $content .= '<div class="farbvererbung-result"><strong>Voraussichtliche Fohlenfarbe:</strong><table>';
             foreach (self::sortResult($result) as $key => $prob) {
                 $percent = number_format($prob * 100, 2, ',', '.');
                 $width = max(0, min(100, $prob * 100));
-                echo '<tr>';
-                echo '<td style="width:11rem;">' . htmlspecialchars(FjordColor::label($key), ENT_QUOTES, 'UTF-8') . '</td>';
-                echo '<td style="width:4.5rem;text-align:right;"><strong>' . $percent . ' %</strong></td>';
-                echo '<td><div class="bar" style="width:' . number_format($width, 2, '.', '') . '%"></div></td>';
-                echo '</tr>';
+                $content .= '<tr>';
+                $content .= '<td style="width:11rem;">' . htmlspecialchars(FjordColor::label($key), ENT_QUOTES, 'UTF-8') . '</td>';
+                $content .= '<td style="width:4.5rem;text-align:right;"><strong>' . $percent . ' %</strong></td>';
+                $content .= '<td><div class="farbvererbung-bar" style="width:' . number_format($width, 2, '.', '') . '%"></div></td>';
+                $content .= '</tr>';
             }
-            echo '</table>';
-            echo '<p class="muted">Vereinfachtes Modell: unbekannte Anlageträger-Genotypen werden je Locus '
+            $content .= '</table>';
+            $content .= '<p class="farbvererbung-muted">Vereinfachtes Modell: unbekannte Anlageträger-Genotypen werden je Locus '
                 . 'als gleich wahrscheinlich angenommen. Das Dun-(Falb-)Gen gilt bei der Rasse als fest '
                 . 'vorhanden. Werte sind Schätzungen, kein Ersatz für einen Gentest.</p>';
-            echo '</div>';
+            $content .= '</div>';
         }
 
-        echo '<details style="margin-top:1.5rem;"><summary>Farben im Register (zum Nachschlagen)</summary>';
-        echo '<table style="margin-top:0.5rem;">';
+        $content .= '<details style="margin-top:1.5rem;"><summary>Farben im Register (zum Nachschlagen)</summary>';
+        $content .= '<table style="margin-top:0.5rem;">';
         foreach ($horses as $h) {
             $key = FjordColor::keyFromText($h['color'] ?? '');
             $mapped = $key !== null ? FjordColor::label($key) : '—';
-            echo '<tr><td>' . htmlspecialchars((string) $h['name'], ENT_QUOTES, 'UTF-8')
+            $content .= '<tr><td>' . htmlspecialchars((string) $h['name'], ENT_QUOTES, 'UTF-8')
                 . ($h['birth_year'] ? ' (' . (int) $h['birth_year'] . ')' : '') . '</td>'
                 . '<td>' . htmlspecialchars((string) ($h['color'] ?? ''), ENT_QUOTES, 'UTF-8') . '</td>'
-                . '<td class="muted">' . htmlspecialchars($mapped, ENT_QUOTES, 'UTF-8') . '</td></tr>';
+                . '<td class="farbvererbung-muted">' . htmlspecialchars($mapped, ENT_QUOTES, 'UTF-8') . '</td></tr>';
         }
-        echo '</table></details>';
+        $content .= '</table></details>';
 
-        echo '<p style="margin-top:2rem;"><a href="/admin">Zurück zum Dashboard</a></p>';
-        echo '</body></html>';
+        $content .= '<p style="margin-top:2rem;"><a href="/admin" class="btn btn-secondary">Zurück zum Dashboard</a></p>';
+        $content .= '</div>';
+
+        PluginPage::render('Fjord-Farbvererbungsrechner', $content);
     }
 
     private static function readColorParam(string $name): ?string {
@@ -390,15 +382,16 @@ class RechnerController extends BaseController {
     }
 
     private static function colorSelect(string $name, string $label, ?string $selected): string {
-        $html = '<label for="' . $name . '">' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</label>';
-        $html .= '<select name="' . $name . '" id="' . $name . '">';
+        $html = '<div class="form-group">';
+        $html .= '<label for="' . $name . '">' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</label>';
+        $html .= '<select name="' . $name . '" id="' . $name . '" class="form-control">';
         $html .= '<option value="">– auswählen –</option>';
         foreach (FjordColor::options() as $key => $optLabel) {
             $sel = ($selected === $key) ? ' selected' : '';
             $html .= '<option value="' . htmlspecialchars($key, ENT_QUOTES, 'UTF-8') . '"' . $sel . '>'
                 . htmlspecialchars($optLabel, ENT_QUOTES, 'UTF-8') . '</option>';
         }
-        $html .= '</select>';
+        $html .= '</select></div>';
         return $html;
     }
 

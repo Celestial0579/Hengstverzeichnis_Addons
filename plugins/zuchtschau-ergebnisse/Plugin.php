@@ -22,6 +22,7 @@ namespace Plugin\ZuchtschauErgebnisse;
 use App\Controllers\BaseController;
 use App\Database;
 use App\Plugin\HookManager;
+use App\Plugin\PluginPage;
 use App\Router;
 use PDO;
 
@@ -168,85 +169,76 @@ class ErgebnisseController extends BaseController {
 
         $csrfToken = Router::generateCsrfToken();
 
-        echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Zuchtschau-Ergebnisse verwalten</title>';
-        echo '<link rel="stylesheet" href="/css/style.css">';
-        echo <<<'HTML'
-        <script>
-        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
-        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
-        (function () {
-            var stored = localStorage.getItem('theme');
-            if (stored === 'dark' || stored === 'light') {
-                document.documentElement.setAttribute('data-theme', stored);
-            }
-        })();
-        </script>
-        HTML;
-        echo '<style>
-            body{font-family:sans-serif;padding:2rem;max-width:900px;margin:0 auto;background:var(--bg-color);}
-            table{width:100%;border-collapse:collapse;margin-top:1.5rem;}
-            th,td{text-align:left;padding:0.5rem;border-bottom:1px solid var(--border-color);font-size:0.9rem;}
-            label{display:block;margin-top:0.8rem;font-weight:bold;font-size:0.9rem;}
-            input,select,textarea{width:100%;padding:0.4rem;margin-top:0.2rem;}
-            .row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}
-        </style></head><body>';
-        echo '<h1>🏆 Zuchtschau-/Körungs-Ergebnisverwaltung</h1>';
+        // Die Seite rendert als Fragment im Framework-Layout
+        // (App\Plugin\PluginPage, Addons#66) - Header, Navigation,
+        // Theme-Umschalter, Markenfarben und style.css kommen zentral vom
+        // Layout. Hier bleibt nur addon-spezifische Geometrie
+        // (Formular-Raster), Farben ausschließlich über Theme-Variablen.
+        $content = '<style>';
+        $content .= '.zuchtschau-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}';
+        $content .= '</style>';
 
-        echo '<h2>Neues Ergebnis erfassen</h2>';
-        echo '<form method="POST" action="/plugin/zuchtschau-ergebnisse/ergebnisse/store">';
-        echo '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">';
+        $content .= '<div class="card">';
+        $content .= '<h1>🏆 Zuchtschau-/Körungs-Ergebnisverwaltung</h1>';
 
-        echo '<label for="horse_id">Pferd</label><select name="horse_id" id="horse_id" required>';
-        echo '<option value="">– auswählen –</option>';
+        $content .= '<h2>Neues Ergebnis erfassen</h2>';
+        $content .= '<form method="POST" action="/plugin/zuchtschau-ergebnisse/ergebnisse/store">';
+        $content .= '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">';
+
+        $content .= '<div class="form-group"><label for="horse_id">Pferd</label>'
+            . '<select name="horse_id" id="horse_id" class="form-control" required>';
+        $content .= '<option value="">– auswählen –</option>';
         foreach ($horses as $h) {
-            echo '<option value="' . (int) $h['id'] . '">'
+            $content .= '<option value="' . (int) $h['id'] . '">'
                 . htmlspecialchars($h['name'] . ($h['birth_year'] ? ' (' . $h['birth_year'] . ')' : ''), ENT_QUOTES, 'UTF-8')
                 . '</option>';
         }
-        echo '</select>';
+        $content .= '</select></div>';
 
-        echo '<div class="row">';
-        echo '<div><label for="event_name">Veranstaltung</label><input type="text" name="event_name" id="event_name" required></div>';
-        echo '<div><label for="event_date">Datum</label><input type="date" name="event_date" id="event_date"></div>';
-        echo '</div>';
+        $content .= '<div class="zuchtschau-row">';
+        $content .= '<div class="form-group"><label for="event_name">Veranstaltung</label><input type="text" name="event_name" id="event_name" class="form-control" required></div>';
+        $content .= '<div class="form-group"><label for="event_date">Datum</label><input type="date" name="event_date" id="event_date" class="form-control"></div>';
+        $content .= '</div>';
 
-        echo '<div class="row">';
-        echo '<div><label for="category">Kategorie</label><input type="text" name="category" id="category" placeholder="z. B. Körung, Zuchtschau"></div>';
-        echo '<div><label for="score">Note</label><input type="text" name="score" id="score"></div>';
-        echo '</div>';
+        $content .= '<div class="zuchtschau-row">';
+        $content .= '<div class="form-group"><label for="category">Kategorie</label><input type="text" name="category" id="category" class="form-control" placeholder="z. B. Körung, Zuchtschau"></div>';
+        $content .= '<div class="form-group"><label for="score">Note</label><input type="text" name="score" id="score" class="form-control"></div>';
+        $content .= '</div>';
 
-        echo '<div class="row">';
-        echo '<div><label for="placement">Platzierung</label><input type="text" name="placement" id="placement"></div>';
-        echo '<div><label for="judge">Richter</label><input type="text" name="judge" id="judge"></div>';
-        echo '</div>';
+        $content .= '<div class="zuchtschau-row">';
+        $content .= '<div class="form-group"><label for="placement">Platzierung</label><input type="text" name="placement" id="placement" class="form-control"></div>';
+        $content .= '<div class="form-group"><label for="judge">Richter</label><input type="text" name="judge" id="judge" class="form-control"></div>';
+        $content .= '</div>';
 
-        echo '<label for="comment">Kommentar</label><textarea name="comment" id="comment" rows="3"></textarea>';
+        $content .= '<div class="form-group"><label for="comment">Kommentar</label><textarea name="comment" id="comment" class="form-control" rows="3"></textarea></div>';
 
-        echo '<p><button type="submit" style="margin-top:1.2rem;padding:0.6rem 1.2rem;">Speichern</button></p>';
-        echo '</form>';
+        $content .= '<p><button type="submit" class="btn">Speichern</button></p>';
+        $content .= '</form>';
 
-        echo '<h2>Erfasste Ergebnisse</h2>';
-        echo '<table><thead><tr><th>Pferd</th><th>Veranstaltung</th><th>Datum</th><th>Note</th><th>Platzierung</th><th></th></tr></thead><tbody>';
+        $content .= '<h2>Erfasste Ergebnisse</h2>';
+        $content .= '<table><thead><tr><th>Pferd</th><th>Veranstaltung</th><th>Datum</th><th>Note</th><th>Platzierung</th><th></th></tr></thead><tbody>';
         foreach ($results as $row) {
-            echo '<tr>';
-            echo '<td>' . htmlspecialchars((string) $row['horse_name'], ENT_QUOTES, 'UTF-8') . '</td>';
-            echo '<td>' . htmlspecialchars((string) $row['event_name'], ENT_QUOTES, 'UTF-8') . '</td>';
-            echo '<td>' . htmlspecialchars((string) ($row['event_date'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
-            echo '<td>' . htmlspecialchars((string) ($row['score'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
-            echo '<td>' . htmlspecialchars((string) ($row['placement'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
-            echo '<td><form method="POST" action="/plugin/zuchtschau-ergebnisse/ergebnisse/delete" style="margin:0;" onsubmit="return confirm(\'Ergebnis wirklich löschen?\');">'
+            $content .= '<tr>';
+            $content .= '<td>' . htmlspecialchars((string) $row['horse_name'], ENT_QUOTES, 'UTF-8') . '</td>';
+            $content .= '<td>' . htmlspecialchars((string) $row['event_name'], ENT_QUOTES, 'UTF-8') . '</td>';
+            $content .= '<td>' . htmlspecialchars((string) ($row['event_date'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
+            $content .= '<td>' . htmlspecialchars((string) ($row['score'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
+            $content .= '<td>' . htmlspecialchars((string) ($row['placement'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
+            $content .= '<td><form method="POST" action="/plugin/zuchtschau-ergebnisse/ergebnisse/delete" style="margin:0;" onsubmit="return confirm(\'Ergebnis wirklich löschen?\');">'
                 . '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">'
                 . '<input type="hidden" name="id" value="' . (int) $row['id'] . '">'
-                . '<button type="submit" style="color:var(--danger-fg);">Löschen</button></form></td>';
-            echo '</tr>';
+                . '<button type="submit" class="btn btn-secondary" style="color:var(--danger-fg);">Löschen</button></form></td>';
+            $content .= '</tr>';
         }
         if (empty($results)) {
-            echo '<tr><td colspan="6">Noch keine Ergebnisse erfasst.</td></tr>';
+            $content .= '<tr><td colspan="6">Noch keine Ergebnisse erfasst.</td></tr>';
         }
-        echo '</tbody></table>';
+        $content .= '</tbody></table>';
 
-        echo '<p style="margin-top:2rem;"><a href="/admin">Zurück zum Dashboard</a></p>';
-        echo '</body></html>';
+        $content .= '<p><a href="/admin" class="btn btn-secondary">Zurück zum Dashboard</a></p>';
+        $content .= '</div>';
+
+        PluginPage::render('Zuchtschau-Ergebnisse verwalten', $content);
     }
 
     public function store(): void {

@@ -46,9 +46,9 @@ class Plugin {
         $html = '<div style="margin-top:0.5rem;">';
         $html .= '<button type="button" onclick="document.getElementById(\'' . $canvasId . '\').style.display = '
             . '(document.getElementById(\'' . $canvasId . '\').style.display === \'none\' ? \'inline-block\' : \'none\')" '
-            . 'style="padding:0.5rem 1rem;background:var(--surface-muted);border:1px solid var(--border-color);border-radius:6px;cursor:pointer;">📱 QR-Code anzeigen</button> ';
+            . 'style="padding:0.5rem 1rem;background:var(--surface-muted);border:1px solid var(--border-color);border-radius:var(--border-radius, 6px);cursor:pointer;">📱 QR-Code anzeigen</button> ';
         $html .= '<a href="/plugin/qr-code/aushang?id=' . $horseId . '" target="_blank" rel="noopener" '
-            . 'style="padding:0.5rem 1rem;background:var(--surface-muted);border:1px solid var(--border-color);border-radius:6px;text-decoration:none;color:inherit;display:inline-block;">🖨️ Aushang drucken</a>';
+            . 'style="padding:0.5rem 1rem;background:var(--surface-muted);border:1px solid var(--border-color);border-radius:var(--border-radius, 6px);text-decoration:none;color:inherit;display:inline-block;">🖨️ Aushang drucken</a>';
         $html .= '<div id="' . $canvasId . '" style="display:none;margin-top:0.7rem;"></div>';
         $html .= '<script src="/js/qrcode.js"></script>';
         $html .= '<script>
@@ -117,6 +117,9 @@ class AushangController extends BaseController {
         $imageUrl = !empty($horse['image_url']) ? htmlspecialchars((string) $horse['image_url'], ENT_QUOTES, 'UTF-8') : null;
         $detailPathJson = json_encode('/horse?id=' . (int) $horse['id'], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
 
+        // theming-ausnahme: druckfertige Aushang-Ansicht bleibt bewusst ein
+        // eigenständiges Dokument ohne Seiten-Chrome (Addons#66) - keine
+        // Einbettung über PluginPage.
         echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Aushang ' . $name . '</title>';
         echo '<link rel="stylesheet" href="/css/style.css">';
         echo <<<'HTML'
@@ -132,6 +135,7 @@ class AushangController extends BaseController {
         </script>
         HTML;
         echo '<style>
+            /* theming-ausnahme: eigenständige Druckansicht ohne Seiten-Chrome */
             body { font-family: sans-serif; text-align: center; padding: 2rem; background: var(--bg-color); }
             .toolbar { margin-bottom: 2rem; }
             .toolbar button { padding: 0.6rem 1.2rem; font-size: 1rem; cursor: pointer; }
@@ -140,7 +144,7 @@ class AushangController extends BaseController {
             #qrcode-canvas { display: inline-block; margin: 1.5rem 0; }
             @media print {
                 .no-print { display: none !important; }
-                /* Druck-Aushang bleibt bewusst hell, auch wenn data-theme=dark aktiv ist. */
+                /* theming-ausnahme: Druck-Aushang bleibt bewusst hell, auch wenn data-theme=dark aktiv ist */
                 body { background: #fff; color: #222; }
             }
         </style>';

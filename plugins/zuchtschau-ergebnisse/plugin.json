@@ -1,8 +1,9 @@
 {
     "slug": "zuchtschau-ergebnisse",
     "name": "Zuchtschau-/Körungs-Ergebnisverwaltung",
-    "version": "1.0.0",
-    "core_compatibility": ">=0.1.0-beta.1",
+    "version": "1.1.0",
+    "core_compatibility": ">=0.4.0",
+    "core_supported_max": "0.4",
     "description": "Erfasst detaillierte Zuchtschau-/Körungsergebnisse (Note, Richter, Platzierung, Kommentar) pro Pferd im Admin-Bereich und zeigt sie chronologisch auf der öffentlichen Detailseite an.",
     "author": "Hengstverzeichnis_Addons",
     "hooks": ["horse.detail_sections"],

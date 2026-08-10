@@ -20,6 +20,7 @@ namespace Plugin\Inzuchtkoeffizient;
 use App\Controllers\BaseController;
 use App\Database;
 use App\Plugin\HookManager;
+use App\Plugin\PluginPage;
 use App\Service\PedigreeBuilder;
 use PDO;
 
@@ -44,7 +45,7 @@ class Plugin {
         $coi = CoiCalculator::fromParentTrees($pedigree['sire'] ?? null, $pedigree['dam'] ?? null);
         $percent = number_format($coi * 100, 2, ',', '.');
 
-        $sections[] = '<div style="margin-top:0.5rem;padding:0.75rem 1rem;background:var(--surface-muted);border-radius:6px;">'
+        $sections[] = '<div style="margin-top:0.5rem;padding:0.75rem 1rem;background:var(--surface-muted);border-radius:var(--border-radius, 6px);">'
             . '<strong>🧬 Inzuchtkoeffizient (Wright\'s COI):</strong> ' . $percent . ' %'
             . '<p style="margin:0.4rem 0 0 0;color:var(--text-muted);font-size:0.85em;">'
             . 'Berechnet aus dem verfügbaren, bis zu 6 Generationen tiefen Stammbaum. '
@@ -233,66 +234,63 @@ class RechnerController extends BaseController {
             }
         }
 
-        echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Verpaarungsrechner</title>';
-        echo '<link rel="stylesheet" href="/css/style.css">';
-        echo <<<'HTML'
-        <script>
-        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
-        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
-        (function () {
-            var stored = localStorage.getItem('theme');
-            if (stored === 'dark' || stored === 'light') {
-                document.documentElement.setAttribute('data-theme', stored);
-            }
-        })();
-        </script>
-        HTML;
-        echo '<style>body{font-family:sans-serif;padding:2rem;max-width:700px;margin:0 auto;background:var(--bg-color);}';
-        echo 'label{display:block;margin-top:1rem;font-weight:bold;} select,input{width:100%;padding:0.5rem;margin-top:0.3rem;}';
-        echo '.result{margin-top:1.5rem;padding:1rem;background:var(--surface-muted);border-radius:6px;font-size:1.1rem;}</style>';
-        echo '</head><body>';
-        echo '<h1>🧬 Verpaarungsrechner</h1>';
-        echo '<p>Schätzt den voraussichtlichen Inzuchtkoeffizienten eines Fohlens aus zwei ausgewählten Elterntieren.</p>';
-        echo '<form method="GET">';
+        // Inhalt als Fragment im Haupt-Layout über PluginPage (Addons#66):
+        // Header, Navigation, Theme-Umschalter und Grund-Styling (Formulare,
+        // Schrift) kommen vom Framework. Addon-spezifisch bleibt nur die
+        // Ergebnis-Box; Farben über Theme-Variablen.
+        $content = '<style>';
+        $content .= '.inzucht-result{margin-top:1.5rem;padding:1rem;background:var(--surface-muted);border-radius:var(--border-radius, 6px);font-size:1.1rem;}';
+        $content .= '</style>';
+
+        $content .= '<div class="card">';
+        $content .= '<h1>🧬 Verpaarungsrechner</h1>';
+        $content .= '<p>Schätzt den voraussichtlichen Inzuchtkoeffizienten eines Fohlens aus zwei ausgewählten Elterntieren.</p>';
+        $content .= '<form method="GET">';
 
         if ($sexErrors !== []) {
-            echo '<p style="color:var(--danger-fg);background:var(--danger-soft-bg);padding:0.6rem 0.8rem;border-radius:4px;">'
+            $content .= '<p style="color:var(--danger-fg);background:var(--danger-soft-bg);padding:0.6rem 0.8rem;border-radius:var(--border-radius, 4px);">'
                 . htmlspecialchars(implode(' ', $sexErrors), ENT_QUOTES, 'UTF-8') . ' Die Auswahl wurde verworfen.</p>';
         }
 
-        echo '<label for="sire_id">Hengst (Vater)</label><select name="sire_id" id="sire_id">';
-        echo '<option value="">– auswählen –</option>';
+        $content .= '<div class="form-group">';
+        $content .= '<label for="sire_id">Hengst (Vater)</label><select name="sire_id" id="sire_id" class="form-control">';
+        $content .= '<option value="">– auswählen –</option>';
         foreach ($sireOptions as $h) {
             $selected = ($sireId === (int) $h['id']) ? ' selected' : '';
-            echo '<option value="' . (int) $h['id'] . '"' . $selected . '>'
+            $content .= '<option value="' . (int) $h['id'] . '"' . $selected . '>'
                 . htmlspecialchars($h['name'] . ($h['birth_year'] ? ' (' . $h['birth_year'] . ')' : ''), ENT_QUOTES, 'UTF-8')
                 . '</option>';
         }
-        echo '</select>';
+        $content .= '</select></div>';
 
-        echo '<label for="dam_id">Stute (Mutter)</label><select name="dam_id" id="dam_id">';
-        echo '<option value="">– auswählen –</option>';
+        $content .= '<div class="form-group">';
+        $content .= '<label for="dam_id">Stute (Mutter)</label><select name="dam_id" id="dam_id" class="form-control">';
+        $content .= '<option value="">– auswählen –</option>';
         foreach ($damOptions as $h) {
             $selected = ($damId === (int) $h['id']) ? ' selected' : '';
-            echo '<option value="' . (int) $h['id'] . '"' . $selected . '>'
+            $content .= '<option value="' . (int) $h['id'] . '"' . $selected . '>'
                 . htmlspecialchars($h['name'] . ($h['birth_year'] ? ' (' . $h['birth_year'] . ')' : ''), ENT_QUOTES, 'UTF-8')
                 . '</option>';
         }
-        echo '</select>';
+        $content .= '</select></div>';
 
-        echo '<label for="depth">Generationstiefe (1-' . self::MAX_DEPTH . ')</label>';
-        echo '<input type="number" name="depth" id="depth" min="1" max="' . self::MAX_DEPTH . '" value="' . (int) $depth . '">';
+        $content .= '<div class="form-group">';
+        $content .= '<label for="depth">Generationstiefe (1-' . self::MAX_DEPTH . ')</label>';
+        $content .= '<input type="number" name="depth" id="depth" class="form-control" min="1" max="' . self::MAX_DEPTH . '" value="' . (int) $depth . '">';
+        $content .= '</div>';
 
-        echo '<p><button type="submit" style="margin-top:1rem;padding:0.6rem 1.2rem;">Berechnen</button></p>';
-        echo '</form>';
+        $content .= '<p><button type="submit" class="btn">Berechnen</button></p>';
+        $content .= '</form>';
 
         if ($result !== null) {
-            echo '<div class="result">Voraussichtlicher Inzuchtkoeffizient: <strong>' . $result . ' %</strong></div>';
+            $content .= '<div class="inzucht-result">Voraussichtlicher Inzuchtkoeffizient: <strong>' . $result . ' %</strong></div>';
         } elseif ($sireId && $damId) {
-            echo '<div class="result">Für mindestens eines der ausgewählten Pferde konnte kein Stammbaum ermittelt werden.</div>';
+            $content .= '<div class="inzucht-result">Für mindestens eines der ausgewählten Pferde konnte kein Stammbaum ermittelt werden.</div>';
         }
 
-        echo '<p style="margin-top:2rem;"><a href="/admin">Zurück zum Dashboard</a></p>';
-        echo '</body></html>';
+        $content .= '<p style="margin-top:2rem;"><a href="/admin" class="btn btn-secondary">Zurück zum Dashboard</a></p>';
+        $content .= '</div>';
+
+        PluginPage::render('Verpaarungsrechner', $content);
     }
 }

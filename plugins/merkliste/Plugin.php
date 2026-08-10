@@ -28,6 +28,7 @@ namespace Plugin\Merkliste;
 use App\Controllers\BaseController;
 use App\Database;
 use App\Plugin\HookManager;
+use App\Plugin\PluginPage;
 use PDO;
 
 class Plugin {
@@ -51,7 +52,7 @@ class Plugin {
 
         $html = '<button type="button" data-hv-merkliste="' . $horseId . '" '
             . 'onclick="hvMerklisteToggle(this)" '
-            . 'style="' . $style . 'margin-top:0.5rem;border:1px solid var(--warning-fg);background:var(--info-soft-bg);border-radius:4px;cursor:pointer;">'
+            . 'style="' . $style . 'margin-top:0.5rem;border:1px solid var(--warning-fg);background:var(--info-soft-bg);border-radius:var(--border-radius, 4px);cursor:pointer;">'
             . '☆ Merken</button>';
 
         if (!$compact) {
@@ -166,35 +167,24 @@ class MerklisteController extends BaseController {
     private const MAX_IDS = 100;
 
     public function show(): void {
-        echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Meine Merkliste</title>';
-        echo '<link rel="stylesheet" href="/css/style.css">';
-        echo <<<'HTML'
-        <script>
-        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
-        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
-        (function () {
-            var stored = localStorage.getItem('theme');
-            if (stored === 'dark' || stored === 'light') {
-                document.documentElement.setAttribute('data-theme', stored);
-            }
-        })();
-        </script>
-        HTML;
-        echo '<meta name="viewport" content="width=device-width, initial-scale=1">';
-        echo '<style>
-            body{font-family:sans-serif;padding:2rem;max-width:900px;margin:0 auto;background:var(--bg-color);}
-            .card{display:flex;gap:1rem;padding:1rem;border-bottom:1px solid var(--border-color);align-items:center;}
-            .card img{width:80px;height:80px;object-fit:cover;border-radius:6px;}
-            .card h2{margin:0 0 0.3rem 0;font-size:1.05rem;}
-            .remove{color:var(--danger-fg);background:none;border:none;cursor:pointer;padding:0.3rem 0.6rem;}
+        // Inhalt als Fragment im Haupt-Layout über PluginPage (Addons#66):
+        // Header, Navigation, Theme-Umschalter und Grund-Styling kommen vom
+        // Framework, hier steht nur noch der eigentliche Seiteninhalt.
+        // Addon-spezifisch bleibt allein die Geometrie der Merklisten-Zeilen
+        // (Thumbnail-Raster) - Farben ausschließlich über Theme-Variablen.
+        $content = '<style>
+            .merkliste-row{display:flex;gap:1rem;padding:1rem 0;border-bottom:1px solid var(--border-color);align-items:center;}
+            .merkliste-row img{width:80px;height:80px;object-fit:cover;border-radius:var(--border-radius, 6px);}
+            .merkliste-row h2{margin:0 0 0.3rem 0;font-size:1.05rem;}
             #leer{color:var(--text-muted);}
-        </style></head><body>';
-        echo '<h1>⭐ Meine Merkliste</h1>';
-        echo '<p style="color:var(--text-muted);font-size:0.9em;">Die Merkliste wird nur in diesem Browser gespeichert (localStorage) - ohne Account, ohne Server-Speicherung.</p>';
-        echo '<div id="liste"></div>';
-        echo '<p id="leer" style="display:none;">Noch keine Pferde gemerkt. Im <a href="/katalog">Katalog</a> stöbern und "☆ Merken" klicken.</p>';
+        </style>';
+        $content .= '<div class="card">';
+        $content .= '<h1>⭐ Meine Merkliste</h1>';
+        $content .= '<p style="color:var(--text-muted);font-size:0.9em;">Die Merkliste wird nur in diesem Browser gespeichert (localStorage) - ohne Account, ohne Server-Speicherung.</p>';
+        $content .= '<div id="liste"></div>';
+        $content .= '<p id="leer" style="display:none;">Noch keine Pferde gemerkt. Im <a href="/katalog">Katalog</a> stöbern und "☆ Merken" klicken.</p>';
 
-        echo '<script>
+        $content .= '<script>
             (function () {
                 function readIds() {
                     try {
@@ -213,14 +203,14 @@ class MerklisteController extends BaseController {
                     }
                     leer.style.display = "none";
                     horses.forEach(function (horse) {
-                        var card = document.createElement("div");
-                        card.className = "card";
+                        var row = document.createElement("div");
+                        row.className = "merkliste-row";
 
                         if (horse.image_url) {
                             var img = document.createElement("img");
                             img.src = horse.image_url;
                             img.alt = "";
-                            card.appendChild(img);
+                            row.appendChild(img);
                         }
 
                         var info = document.createElement("div");
@@ -235,10 +225,11 @@ class MerklisteController extends BaseController {
                             year.textContent = "Geburtsjahr: " + horse.birth_year;
                             info.appendChild(year);
                         }
-                        card.appendChild(info);
+                        row.appendChild(info);
 
                         var remove = document.createElement("button");
-                        remove.className = "remove";
+                        remove.className = "btn btn-secondary";
+                        remove.style.color = "var(--danger-fg)";
                         remove.type = "button";
                         remove.textContent = "Entfernen";
                         remove.addEventListener("click", function () {
@@ -246,9 +237,9 @@ class MerklisteController extends BaseController {
                             localStorage.setItem("hv_merkliste", JSON.stringify(ids));
                             load();
                         });
-                        card.appendChild(remove);
+                        row.appendChild(remove);
 
-                        liste.appendChild(card);
+                        liste.appendChild(row);
                     });
                 }
 
@@ -267,8 +258,10 @@ class MerklisteController extends BaseController {
                 load();
             })();
         </script>';
-        echo '<p style="margin-top:2rem;"><a href="/katalog">Zurück zum Katalog</a></p>';
-        echo '</body></html>';
+        $content .= '<p style="margin-top:2rem;"><a href="/katalog" class="btn btn-secondary">Zurück zum Katalog</a></p>';
+        $content .= '</div>';
+
+        PluginPage::render('Meine Merkliste', $content);
     }
 
     /**

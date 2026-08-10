@@ -38,7 +38,7 @@ class Plugin {
     public function addDetailSection(array $sections, array $horse, array $horsePersons, ?array $pedigree): array {
         $horseId = (int) $horse['id'];
         $sections[] = '<p><a href="/plugin/pedigree-export/export?id=' . $horseId . '" target="_blank" rel="noopener" '
-            . 'style="display:inline-block;padding:0.5rem 1rem;background:var(--surface-muted);border-radius:6px;text-decoration:none;color:inherit;">'
+            . 'style="display:inline-block;padding:0.5rem 1rem;background:var(--surface-muted);border-radius:var(--border-radius, 6px);text-decoration:none;color:inherit;">'
             . '🖨️ Stammbaum drucken / als PDF exportieren</a></p>';
         return $sections;
     }
@@ -59,7 +59,10 @@ class Plugin {
 
 /**
  * Rendert eine komplett eigenständige HTML-Seite (kein Kern-Layout) mit
- * Bildschirm- UND Druck-Stylesheet. Bewusst ohne Zugriffsschutz: zeigt exakt
+ * Bildschirm- UND Druck-Stylesheet. Bleibt als reine Druck-/Exportansicht
+ * bewusst OHNE das PluginPage-Layout (Theming-Ausnahme, siehe Addons#66):
+ * die Seite ist zum Drucken/PDF-Sichern gedacht und soll ohne Seiten-Chrome
+ * auskommen. Bewusst ohne Zugriffsschutz: zeigt exakt
  * dieselben, bereits öffentlich über /horse?id=... einsehbaren Pedigree-Daten
  * in anderer Aufbereitung - keine zusätzliche Rechteausweitung.
  */
@@ -95,6 +98,7 @@ class ExportController extends BaseController {
         $siteName = htmlspecialchars((string) ($this->settings['site_name'] ?? 'Hengstverzeichnis'), ENT_QUOTES, 'UTF-8');
         $generatedAt = htmlspecialchars(date('d.m.Y H:i'), ENT_QUOTES, 'UTF-8');
 
+        // theming-ausnahme: druck-/pdf-ansicht bleibt bewusst ein eigenstaendiges dokument ohne seiten-chrome (Addons#66)
         echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Stammbaum ' . htmlspecialchars($title, ENT_QUOTES, 'UTF-8') . '</title>';
         echo '<link rel="stylesheet" href="/css/style.css">';
         echo <<<'HTML'
@@ -110,6 +114,7 @@ class ExportController extends BaseController {
         </script>
         HTML;
         echo $this->styles();
+        // theming-ausnahme: eigenes body der druckansicht, siehe marker am dokumentanfang
         echo '</head><body>';
 
         echo '<div class="toolbar no-print">';
@@ -164,17 +169,18 @@ class ExportController extends BaseController {
     private function styles(): string {
         return <<<CSS
 <style>
+    /* theming-ausnahme: eigenständige Druck-/Exportansicht ohne Seiten-Chrome, kein PluginPage-Layout (Addons#66) */
     * { box-sizing: border-box; }
     body { font-family: sans-serif; padding: 1.5rem; color: var(--text-color); background: var(--bg-color); }
     h1 { margin: 0 0 0.2rem 0; }
     .meta { color: var(--text-muted); font-size: 0.9rem; margin: 0 0 1.5rem 0; }
-    .toolbar { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; padding: 0.8rem; background: var(--surface-muted); border-radius: 6px; }
+    .toolbar { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; padding: 0.8rem; background: var(--surface-muted); border-radius: var(--border-radius, 6px); }
     .toolbar button { padding: 0.5rem 1rem; font-size: 1rem; cursor: pointer; }
     .toolbar span { color: var(--text-muted); font-size: 0.85rem; }
 
     .pedigree { display: flex; overflow-x: auto; }
     .node { display: flex; align-items: center; }
-    .box { border: 1px solid var(--border-color); border-radius: 6px; padding: 0.4rem 0.7rem; white-space: nowrap; background: var(--card-bg); text-align: center; min-width: 120px; }
+    .box { border: 1px solid var(--border-color); border-radius: var(--border-radius, 6px); padding: 0.4rem 0.7rem; white-space: nowrap; background: var(--card-bg); text-align: center; min-width: 120px; }
     .box.placeholder { border-style: dashed; color: var(--text-muted); background: var(--surface-muted); }
     .box-name { font-weight: bold; font-size: 0.9rem; }
     .box-meta { font-size: 0.75rem; color: var(--text-muted); }
@@ -184,7 +190,7 @@ class ExportController extends BaseController {
 
     @media print {
         .no-print { display: none !important; }
-        /* Druck-/PDF-Ansicht bleibt bewusst hell, auch wenn data-theme=dark aktiv ist. */
+        /* theming-ausnahme: Druck-/PDF-Ansicht bleibt bewusst hell, auch wenn data-theme=dark aktiv ist. */
         body { padding: 0; background: #fff; color: #222; }
         .box { background: #fff; border-color: #999; }
         .box.placeholder { background: #f0f0f0; color: #555; }
