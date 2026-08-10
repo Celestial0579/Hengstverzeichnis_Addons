@@ -54,7 +54,9 @@ class PluginManifestTest extends TestCase {
     public function testManifestHasRequiredFields(string $slug): void {
         $manifest = $this->readManifest($slug);
 
-        foreach (['slug', 'name', 'version', 'core_compatibility'] as $field) {
+        // core_supported_max ist seit Framework#197 Pflicht - ohne die
+        // Obergrenze verweigert der Kern Installation und Laden.
+        foreach (['slug', 'name', 'version', 'core_compatibility', 'core_supported_max'] as $field) {
             $this->assertArrayHasKey($field, $manifest, "plugin.json von '{$slug}' fehlt Pflichtfeld '{$field}'.");
             $this->assertNotSame(
                 '',
@@ -62,6 +64,25 @@ class PluginManifestTest extends TestCase {
                 "Pflichtfeld '{$field}' in plugin.json von '{$slug}' darf nicht leer sein."
             );
         }
+    }
+
+    /**
+     * Die Pflicht-Obergrenze (Framework#197) muss eine Major.Minor-Angabe
+     * sein - exakt das Format, das PluginManager::validateManifest() und
+     * die Release-Konsistenzprüfung (scripts/check-release-consistency.php)
+     * erwarten.
+     */
+    #[DataProvider('pluginSlugProvider')]
+    public function testCoreSupportedMaxHasValidFormat(string $slug): void {
+        $manifest = $this->readManifest($slug);
+        $value = $manifest['core_supported_max'] ?? null;
+
+        $this->assertIsString($value, "core_supported_max in '{$slug}' muss ein String sein.");
+        $this->assertMatchesRegularExpression(
+            '/^\d+\.\d+$/',
+            $value,
+            "core_supported_max '{$value}' in '{$slug}' muss eine Major.Minor-Angabe wie \"0.4\" sein."
+        );
     }
 
     #[DataProvider('pluginSlugProvider')]

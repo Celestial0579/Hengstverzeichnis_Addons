@@ -20,6 +20,10 @@ on:
     branches: ["main"]
   pull_request:
     branches: ["main"]
+  # Wiederverwendbar als Gate der Release-Pipeline (#65, release.yml) -
+  # Muster wie im Framework-Repo. Die Job-NAMEN bleiben unangetastet:
+  # "Plugin-Manifest-Prüfung" ist ein Required Check der Branch-Protection.
+  workflow_call:
 
 permissions:
   contents: read
