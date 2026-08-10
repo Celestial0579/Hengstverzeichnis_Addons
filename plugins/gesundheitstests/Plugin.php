@@ -25,6 +25,7 @@ namespace Plugin\Gesundheitstests;
 use App\Controllers\BaseController;
 use App\Database;
 use App\Plugin\HookManager;
+use App\Plugin\PluginPage;
 use App\Router;
 use PDO;
 
@@ -178,92 +179,84 @@ class VerwaltungController extends BaseController {
 
         $csrfToken = Router::generateCsrfToken();
 
-        echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Gesundheitstests verwalten</title>';
-        echo '<link rel="stylesheet" href="/css/style.css">';
-        echo <<<'HTML'
-        <script>
-        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
-        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
-        (function () {
-            var stored = localStorage.getItem('theme');
-            if (stored === 'dark' || stored === 'light') {
-                document.documentElement.setAttribute('data-theme', stored);
-            }
-        })();
-        </script>
-        HTML;
-        echo '<style>
-            body{font-family:sans-serif;padding:2rem;max-width:900px;margin:0 auto;background:var(--bg-color);}
-            table{width:100%;border-collapse:collapse;margin-top:1.5rem;}
-            th,td{text-align:left;padding:0.5rem;border-bottom:1px solid var(--border-color);font-size:0.9rem;}
-            label{display:block;margin-top:0.8rem;font-weight:bold;font-size:0.9rem;}
-            input,select,textarea{width:100%;padding:0.4rem;margin-top:0.2rem;}
-            input[type=checkbox]{width:auto;}
-            .row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}
-            .hint{color:var(--text-muted);font-size:0.85em;margin-top:0.3rem;}
-        </style></head><body>';
-        echo '<h1>🩺 DNA-/Gesundheitstest-Verwaltung</h1>';
+        // Die Seite rendert als Fragment im Framework-Layout
+        // (App\Plugin\PluginPage, Addons#66) - Header, Navigation,
+        // Theme-Umschalter, Markenfarben und style.css kommen zentral vom
+        // Layout. Hier bleibt nur addon-spezifische Geometrie
+        // (Formular-Raster), Farben ausschließlich über Theme-Variablen.
+        $content = '<style>';
+        $content .= '.gesundheitstests-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}';
+        $content .= '.gesundheitstests-hint{color:var(--text-muted);font-size:0.85em;margin-top:0.3rem;}';
+        $content .= '</style>';
 
-        echo '<h2>Neuen Eintrag erfassen</h2>';
-        echo '<form method="POST" action="/plugin/gesundheitstests/verwaltung/store" enctype="multipart/form-data">';
-        echo '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">';
+        $content .= '<div class="card">';
+        $content .= '<h1>🩺 DNA-/Gesundheitstest-Verwaltung</h1>';
 
-        echo '<label for="horse_id">Pferd</label><select name="horse_id" id="horse_id" required>';
-        echo '<option value="">– auswählen –</option>';
+        $content .= '<h2>Neuen Eintrag erfassen</h2>';
+        $content .= '<form method="POST" action="/plugin/gesundheitstests/verwaltung/store" enctype="multipart/form-data">';
+        $content .= '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">';
+
+        $content .= '<div class="form-group"><label for="horse_id">Pferd</label>'
+            . '<select name="horse_id" id="horse_id" class="form-control" required>';
+        $content .= '<option value="">– auswählen –</option>';
         foreach ($horses as $h) {
-            echo '<option value="' . (int) $h['id'] . '">'
+            $content .= '<option value="' . (int) $h['id'] . '">'
                 . htmlspecialchars($h['name'] . ($h['birth_year'] ? ' (' . $h['birth_year'] . ')' : ''), ENT_QUOTES, 'UTF-8')
                 . '</option>';
         }
-        echo '</select>';
+        $content .= '</select></div>';
 
-        echo '<div class="row">';
-        echo '<div><label for="test_type">Test-/Untersuchungsart</label>'
-            . '<input type="text" name="test_type" id="test_type" required placeholder="z. B. DNA-Abstammungstest, Röntgen, Gesundheitszeugnis"></div>';
-        echo '<div><label for="issued_at">Ausgestellt am</label><input type="date" name="issued_at" id="issued_at"></div>';
-        echo '</div>';
+        $content .= '<div class="gesundheitstests-row">';
+        $content .= '<div class="form-group"><label for="test_type">Test-/Untersuchungsart</label>'
+            . '<input type="text" name="test_type" id="test_type" class="form-control" required placeholder="z. B. DNA-Abstammungstest, Röntgen, Gesundheitszeugnis"></div>';
+        $content .= '<div class="form-group"><label for="issued_at">Ausgestellt am</label><input type="date" name="issued_at" id="issued_at" class="form-control"></div>';
+        $content .= '</div>';
 
-        echo '<label for="issued_by">Ausgestellt von</label><input type="text" name="issued_by" id="issued_by" placeholder="z. B. Labor, Tierklinik">';
-        echo '<label for="result_summary">Ergebnis-Zusammenfassung</label><textarea name="result_summary" id="result_summary" rows="3"></textarea>';
+        $content .= '<div class="form-group"><label for="issued_by">Ausgestellt von</label>'
+            . '<input type="text" name="issued_by" id="issued_by" class="form-control" placeholder="z. B. Labor, Tierklinik"></div>';
+        $content .= '<div class="form-group"><label for="result_summary">Ergebnis-Zusammenfassung</label>'
+            . '<textarea name="result_summary" id="result_summary" class="form-control" rows="3"></textarea></div>';
 
-        echo '<label for="document">Dokument (PDF oder Bild, max. 10 MB)</label>'
-            . '<input type="file" name="document" id="document" accept="application/pdf,image/jpeg,image/png,image/webp">';
-        echo '<p class="hint">Hochgeladene Dokumente werden außerhalb des Webroots gespeichert und sind nur über die zugriffsgeschützte Download-Route erreichbar.</p>';
+        $content .= '<div class="form-group"><label for="document">Dokument (PDF oder Bild, max. 10 MB)</label>'
+            . '<input type="file" name="document" id="document" class="form-control" accept="application/pdf,image/jpeg,image/png,image/webp"></div>';
+        $content .= '<p class="gesundheitstests-hint">Hochgeladene Dokumente werden außerhalb des Webroots gespeichert und sind nur über die zugriffsgeschützte Download-Route erreichbar.</p>';
 
-        echo '<label><input type="checkbox" name="is_public" value="1"> Öffentlich sichtbar (Opt-in - Gesundheitsdaten erscheinen nie automatisch)</label>';
+        $content .= '<div class="form-group"><label><input type="checkbox" name="is_public" value="1"> Öffentlich sichtbar (Opt-in - Gesundheitsdaten erscheinen nie automatisch)</label></div>';
 
-        echo '<p><button type="submit" style="margin-top:1.2rem;padding:0.6rem 1.2rem;">Speichern</button></p>';
-        echo '</form>';
+        $content .= '<p><button type="submit" class="btn">Speichern</button></p>';
+        $content .= '</form>';
 
-        echo '<h2>Erfasste Einträge</h2>';
-        echo '<table><thead><tr><th>Pferd</th><th>Test</th><th>Datum</th><th>Öffentlich</th><th>Dokument</th><th></th></tr></thead><tbody>';
+        $content .= '<h2>Erfasste Einträge</h2>';
+        $content .= '<table><thead><tr><th>Pferd</th><th>Test</th><th>Datum</th><th>Öffentlich</th><th>Dokument</th><th></th></tr></thead><tbody>';
         foreach ($entries as $row) {
-            echo '<tr>';
-            echo '<td>' . htmlspecialchars((string) $row['horse_name'], ENT_QUOTES, 'UTF-8') . '</td>';
-            echo '<td>' . htmlspecialchars((string) $row['test_type'], ENT_QUOTES, 'UTF-8') . '</td>';
-            echo '<td>' . htmlspecialchars((string) ($row['issued_at'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
-            echo '<td>' . (!empty($row['is_public']) ? 'ja' : 'nein') . '</td>';
-            echo '<td>';
+            $content .= '<tr>';
+            $content .= '<td>' . htmlspecialchars((string) $row['horse_name'], ENT_QUOTES, 'UTF-8') . '</td>';
+            $content .= '<td>' . htmlspecialchars((string) $row['test_type'], ENT_QUOTES, 'UTF-8') . '</td>';
+            $content .= '<td>' . htmlspecialchars((string) ($row['issued_at'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
+            $content .= '<td>' . (!empty($row['is_public']) ? 'ja' : 'nein') . '</td>';
+            $content .= '<td>';
             if (!empty($row['file_name'])) {
-                echo '<a href="/plugin/gesundheitstests/download?id=' . (int) $row['id'] . '">'
+                $content .= '<a href="/plugin/gesundheitstests/download?id=' . (int) $row['id'] . '">'
                     . htmlspecialchars((string) ($row['file_original_name'] ?: 'Dokument'), ENT_QUOTES, 'UTF-8') . '</a>';
             } else {
-                echo '–';
+                $content .= '–';
             }
-            echo '</td>';
-            echo '<td><form method="POST" action="/plugin/gesundheitstests/verwaltung/delete" style="margin:0;" onsubmit="return confirm(\'Eintrag (inkl. Dokument) wirklich löschen?\');">'
+            $content .= '</td>';
+            $content .= '<td><form method="POST" action="/plugin/gesundheitstests/verwaltung/delete" style="margin:0;" onsubmit="return confirm(\'Eintrag (inkl. Dokument) wirklich löschen?\');">'
                 . '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">'
                 . '<input type="hidden" name="id" value="' . (int) $row['id'] . '">'
-                . '<button type="submit" style="color:var(--danger-fg);">Löschen</button></form></td>';
-            echo '</tr>';
+                . '<button type="submit" class="btn btn-secondary" style="color:var(--danger-fg);">Löschen</button></form></td>';
+            $content .= '</tr>';
         }
         if (empty($entries)) {
-            echo '<tr><td colspan="6">Noch keine Einträge erfasst.</td></tr>';
+            $content .= '<tr><td colspan="6">Noch keine Einträge erfasst.</td></tr>';
         }
-        echo '</tbody></table>';
+        $content .= '</tbody></table>';
 
-        echo '<p style="margin-top:2rem;"><a href="/admin">Zurück zum Dashboard</a></p>';
-        echo '</body></html>';
+        $content .= '<p><a href="/admin" class="btn btn-secondary">Zurück zum Dashboard</a></p>';
+        $content .= '</div>';
+
+        PluginPage::render('Gesundheitstests verwalten', $content);
     }
 
     public function store(): void {

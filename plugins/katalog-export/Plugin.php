@@ -24,6 +24,7 @@ use App\Controllers\BaseController;
 use App\Database;
 use PDO;
 use App\Plugin\HookManager;
+use App\Plugin\PluginPage;
 
 class Plugin {
 
@@ -87,94 +88,86 @@ class ExportController extends BaseController {
         $breeds = $db->query("SELECT DISTINCT breed FROM horses WHERE breed IS NOT NULL AND breed != '' AND deleted_at IS NULL ORDER BY breed ASC")->fetchAll(PDO::FETCH_COLUMN);
         $stations = $db->query("SELECT DISTINCT name FROM breeding_stations WHERE deleted_at IS NULL ORDER BY name ASC")->fetchAll(PDO::FETCH_COLUMN);
 
-        echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Katalog-Export</title>';
-        echo '<link rel="stylesheet" href="/css/style.css">';
-        echo <<<'HTML'
-        <script>
-        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
-        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
-        (function () {
-            var stored = localStorage.getItem('theme');
-            if (stored === 'dark' || stored === 'light') {
-                document.documentElement.setAttribute('data-theme', stored);
-            }
-        })();
-        </script>
-        HTML;
-        echo '<style>body{font-family:sans-serif;padding:2rem;max-width:700px;margin:0 auto;background:var(--bg-color);}
-            label{display:block;margin-top:0.9rem;font-weight:bold;font-size:0.9rem;}
-            input,select{width:100%;padding:0.4rem;margin-top:0.2rem;}
-            .row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}</style>';
-        echo '</head><body>';
-        echo '<h1>📤 Katalog-Export (CSV)</h1>';
-        echo '<p>Optional filtern, dann als CSV herunterladen - ohne Filter wird der gesamte Katalog exportiert.</p>';
-        echo '<form method="GET" action="/plugin/katalog-export/csv">';
+        // Die Seite rendert als Fragment im Framework-Layout
+        // (App\Plugin\PluginPage, Addons#66) - Header, Navigation,
+        // Theme-Umschalter, Markenfarben und style.css kommen zentral vom
+        // Layout. Hier bleibt nur addon-spezifische Geometrie (Formular-Raster).
+        $content = '<style>';
+        $content .= '.katalog-export-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}';
+        $content .= '</style>';
 
-        echo '<label for="search">Allgemeine Suche</label><input type="text" name="search" id="search">';
+        $content .= '<div class="card">';
+        $content .= '<h1>📤 Katalog-Export (CSV)</h1>';
+        $content .= '<p>Optional filtern, dann als CSV herunterladen - ohne Filter wird der gesamte Katalog exportiert.</p>';
+        $content .= '<form method="GET" action="/plugin/katalog-export/csv">';
 
-        echo '<div class="row">';
-        echo '<div><label for="q_name">Name</label><input type="text" name="q_name" id="q_name"></div>';
-        echo '<div><label for="q_ueln">UELN</label><input type="text" name="q_ueln" id="q_ueln"></div>';
-        echo '</div>';
+        $content .= '<div class="form-group"><label for="search">Allgemeine Suche</label><input type="text" name="search" id="search" class="form-control"></div>';
 
-        echo '<div class="row">';
-        echo '<div><label for="birth_year_from">Geburtsjahr von</label><input type="number" name="birth_year_from" id="birth_year_from"></div>';
-        echo '<div><label for="birth_year_to">Geburtsjahr bis</label><input type="number" name="birth_year_to" id="birth_year_to"></div>';
-        echo '</div>';
+        $content .= '<div class="katalog-export-row">';
+        $content .= '<div class="form-group"><label for="q_name">Name</label><input type="text" name="q_name" id="q_name" class="form-control"></div>';
+        $content .= '<div class="form-group"><label for="q_ueln">UELN</label><input type="text" name="q_ueln" id="q_ueln" class="form-control"></div>';
+        $content .= '</div>';
+
+        $content .= '<div class="katalog-export-row">';
+        $content .= '<div class="form-group"><label for="birth_year_from">Geburtsjahr von</label><input type="number" name="birth_year_from" id="birth_year_from" class="form-control"></div>';
+        $content .= '<div class="form-group"><label for="birth_year_to">Geburtsjahr bis</label><input type="number" name="birth_year_to" id="birth_year_to" class="form-control"></div>';
+        $content .= '</div>';
 
         // Geschlecht/Rasse (#172-Felder, wie auf der Katalogseite).
-        echo '<label for="q_sex">Geschlecht</label><select name="q_sex" id="q_sex"><option value="">– alle –</option>';
+        $content .= '<div class="form-group"><label for="q_sex">Geschlecht</label><select name="q_sex" id="q_sex" class="form-control"><option value="">– alle –</option>';
         foreach (['stallion' => 'Hengst', 'mare' => 'Stute', 'gelding' => 'Wallach'] as $value => $labelText) {
-            echo '<option value="' . $value . '">' . $labelText . '</option>';
+            $content .= '<option value="' . $value . '">' . $labelText . '</option>';
         }
-        echo '</select>';
+        $content .= '</select></div>';
 
-        echo '<label for="q_breed">Rasse</label><select name="q_breed" id="q_breed"><option value="">– alle –</option>';
+        $content .= '<div class="form-group"><label for="q_breed">Rasse</label><select name="q_breed" id="q_breed" class="form-control"><option value="">– alle –</option>';
         foreach ($breeds as $breed) {
-            echo '<option value="' . htmlspecialchars((string) $breed, ENT_QUOTES, 'UTF-8') . '">' . htmlspecialchars((string) $breed, ENT_QUOTES, 'UTF-8') . '</option>';
+            $content .= '<option value="' . htmlspecialchars((string) $breed, ENT_QUOTES, 'UTF-8') . '">' . htmlspecialchars((string) $breed, ENT_QUOTES, 'UTF-8') . '</option>';
         }
-        echo '</select>';
+        $content .= '</select></div>';
 
-        echo '<label for="q_color">Farbe</label><select name="q_color" id="q_color"><option value="">– alle –</option>';
+        $content .= '<div class="form-group"><label for="q_color">Farbe</label><select name="q_color" id="q_color" class="form-control"><option value="">– alle –</option>';
         foreach ($colors as $color) {
-            echo '<option value="' . htmlspecialchars((string) $color, ENT_QUOTES, 'UTF-8') . '">' . htmlspecialchars((string) $color, ENT_QUOTES, 'UTF-8') . '</option>';
+            $content .= '<option value="' . htmlspecialchars((string) $color, ENT_QUOTES, 'UTF-8') . '">' . htmlspecialchars((string) $color, ENT_QUOTES, 'UTF-8') . '</option>';
         }
-        echo '</select>';
+        $content .= '</select></div>';
 
         // Status-Split im Framework (#188): status ist nur noch der Zuchtstatus,
         // der Lebensstatus (is_deceased) bekommt ein eigenes Filterfeld.
-        echo '<label for="q_status">Zuchtstatus</label><select name="q_status" id="q_status"><option value="">– alle –</option>';
+        $content .= '<div class="form-group"><label for="q_status">Zuchtstatus</label><select name="q_status" id="q_status" class="form-control"><option value="">– alle –</option>';
         foreach (['active' => 'Aktiv', 'inactive' => 'Inaktiv'] as $value => $labelText) {
-            echo '<option value="' . $value . '">' . $labelText . '</option>';
+            $content .= '<option value="' . $value . '">' . $labelText . '</option>';
         }
-        echo '</select>';
+        $content .= '</select></div>';
 
-        echo '<label for="q_deceased">Lebensstatus</label><select name="q_deceased" id="q_deceased"><option value="">– alle –</option>';
+        $content .= '<div class="form-group"><label for="q_deceased">Lebensstatus</label><select name="q_deceased" id="q_deceased" class="form-control"><option value="">– alle –</option>';
         foreach (['0' => 'Nur lebende', '1' => 'Nur verstorbene'] as $value => $labelText) {
-            echo '<option value="' . $value . '">' . $labelText . '</option>';
+            $content .= '<option value="' . $value . '">' . $labelText . '</option>';
         }
-        echo '</select>';
+        $content .= '</select></div>';
 
-        echo '<label for="q_station">Deckstation</label><select name="q_station" id="q_station"><option value="">– alle –</option>';
+        $content .= '<div class="form-group"><label for="q_station">Deckstation</label><select name="q_station" id="q_station" class="form-control"><option value="">– alle –</option>';
         foreach ($stations as $station) {
-            echo '<option value="' . htmlspecialchars((string) $station, ENT_QUOTES, 'UTF-8') . '">' . htmlspecialchars((string) $station, ENT_QUOTES, 'UTF-8') . '</option>';
+            $content .= '<option value="' . htmlspecialchars((string) $station, ENT_QUOTES, 'UTF-8') . '">' . htmlspecialchars((string) $station, ENT_QUOTES, 'UTF-8') . '</option>';
         }
-        echo '</select>';
+        $content .= '</select></div>';
 
-        echo '<div class="row">';
-        echo '<div><label for="q_sire">Vater</label><input type="text" name="q_sire" id="q_sire"></div>';
-        echo '<div><label for="q_dam">Mutter</label><input type="text" name="q_dam" id="q_dam"></div>';
-        echo '</div>';
+        $content .= '<div class="katalog-export-row">';
+        $content .= '<div class="form-group"><label for="q_sire">Vater</label><input type="text" name="q_sire" id="q_sire" class="form-control"></div>';
+        $content .= '<div class="form-group"><label for="q_dam">Mutter</label><input type="text" name="q_dam" id="q_dam" class="form-control"></div>';
+        $content .= '</div>';
 
-        echo '<div class="row">';
-        echo '<div><label for="q_breeder">Züchter</label><input type="text" name="q_breeder" id="q_breeder"></div>';
-        echo '<div><label for="q_owner">Besitzer</label><input type="text" name="q_owner" id="q_owner"></div>';
-        echo '</div>';
+        $content .= '<div class="katalog-export-row">';
+        $content .= '<div class="form-group"><label for="q_breeder">Züchter</label><input type="text" name="q_breeder" id="q_breeder" class="form-control"></div>';
+        $content .= '<div class="form-group"><label for="q_owner">Besitzer</label><input type="text" name="q_owner" id="q_owner" class="form-control"></div>';
+        $content .= '</div>';
 
-        echo '<p><button type="submit" style="margin-top:1.2rem;padding:0.6rem 1.2rem;">⬇️ Als CSV herunterladen</button></p>';
-        echo '</form>';
-        echo '<p><a href="/admin">Zurück zum Dashboard</a></p>';
-        echo '</body></html>';
+        $content .= '<p><button type="submit" class="btn">⬇️ Als CSV herunterladen</button></p>';
+        $content .= '</form>';
+        $content .= '<p><a href="/admin" class="btn btn-secondary">Zurück zum Dashboard</a></p>';
+        $content .= '</div>';
+
+        PluginPage::render('Katalog-Export', $content);
     }
 
     public function exportCsv(): void {

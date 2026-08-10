@@ -21,6 +21,7 @@ namespace Plugin\StatistikDashboard;
 use App\Controllers\BaseController;
 use App\Database;
 use App\Plugin\HookManager;
+use App\Plugin\PluginPage;
 use PDO;
 
 class Plugin {
@@ -134,74 +135,65 @@ class StatistikController extends BaseController {
         $totalInactive = (int) ($statusCounts['inactive'] ?? 0);
         $totalAll = $totalActive + $totalInactive;
 
-        echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Statistik-Dashboard</title>';
-        echo '<link rel="stylesheet" href="/css/style.css">';
-        echo <<<'HTML'
-        <script>
-        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
-        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
-        (function () {
-            var stored = localStorage.getItem('theme');
-            if (stored === 'dark' || stored === 'light') {
-                document.documentElement.setAttribute('data-theme', stored);
-            }
-        })();
-        </script>
-        HTML;
-        echo '<style>
-            body{font-family:sans-serif;padding:2rem;max-width:1000px;margin:0 auto;color:var(--text-color);background:var(--bg-color);}
-            h1{margin-top:0;}
+        // Inhalt als Fragment im Haupt-Layout über PluginPage (Addons#66):
+        // Header, Navigation, Theme-Umschalter und Basis-Styling kommen vom
+        // Framework, hier steht nur noch der eigentliche Seiteninhalt.
+        // Das Kacheln-Raster ist addon-spezifische Geometrie und bleibt als
+        // kleiner Style-Block; Farben ausschließlich über Theme-Variablen.
+        $content = '<style>
             .tiles{display:grid;grid-template-columns:repeat(auto-fit, minmax(160px, 1fr));gap:1rem;margin-bottom:2rem;}
-            .tile{background:var(--surface-muted);border-radius:8px;padding:1rem;text-align:center;}
+            .tile{background:var(--surface-muted);border-radius:var(--border-radius, 6px);padding:1rem;text-align:center;}
             .tile .num{font-size:1.8rem;font-weight:bold;}
             .tile .label{color:var(--text-muted);font-size:0.85rem;}
-            table{width:100%;border-collapse:collapse;margin-bottom:2rem;}
-            th,td{text-align:left;padding:0.5rem;border-bottom:1px solid var(--border-color);}
-            h2{border-bottom:2px solid var(--secondary-color);padding-bottom:0.3rem;}
-        </style></head><body>';
-        echo '<h1>📈 Statistik-Dashboard</h1>';
+        </style>';
 
-        echo '<div class="tiles">';
-        echo '<div class="tile"><div class="num">' . $totalAll . '</div><div class="label">Pferde gesamt</div></div>';
-        echo '<div class="tile"><div class="num">' . $totalActive . '</div><div class="label">Aktiv (Zucht)</div></div>';
-        echo '<div class="tile"><div class="num">' . $totalInactive . '</div><div class="label">Inaktiv (Zucht)</div></div>';
-        echo '<div class="tile"><div class="num">' . $totalDeceased . '</div><div class="label">Verstorben</div></div>';
-        echo '</div>';
+        $content .= '<div class="card">';
+        $content .= '<h1>📈 Statistik-Dashboard</h1>';
 
-        echo '<h2>Verteilung nach Deckstation</h2>';
-        $this->renderCountTable($stationDistribution, 'station', 'Deckstation');
+        $content .= '<div class="tiles">';
+        $content .= '<div class="tile"><div class="num">' . $totalAll . '</div><div class="label">Pferde gesamt</div></div>';
+        $content .= '<div class="tile"><div class="num">' . $totalActive . '</div><div class="label">Aktiv (Zucht)</div></div>';
+        $content .= '<div class="tile"><div class="num">' . $totalInactive . '</div><div class="label">Inaktiv (Zucht)</div></div>';
+        $content .= '<div class="tile"><div class="num">' . $totalDeceased . '</div><div class="label">Verstorben</div></div>';
+        $content .= '</div>';
 
-        echo '<h2>Wachstum der Datenbank über Zeit</h2>';
-        echo '<table><thead><tr><th>Jahr</th><th>Neu angelegte Pferde</th></tr></thead><tbody>';
+        $content .= '<h2>Verteilung nach Deckstation</h2>';
+        $content .= $this->renderCountTable($stationDistribution, 'station', 'Deckstation');
+
+        $content .= '<h2>Wachstum der Datenbank über Zeit</h2>';
+        $content .= '<table><thead><tr><th>Jahr</th><th>Neu angelegte Pferde</th></tr></thead><tbody>';
         foreach ($growthByYear as $row) {
-            echo '<tr><td>' . htmlspecialchars((string) $row['yr'], ENT_QUOTES, 'UTF-8') . '</td><td>' . (int) $row['total'] . '</td></tr>';
+            $content .= '<tr><td>' . htmlspecialchars((string) $row['yr'], ENT_QUOTES, 'UTF-8') . '</td><td>' . (int) $row['total'] . '</td></tr>';
         }
         if (empty($growthByYear)) {
-            echo '<tr><td colspan="2">Keine Daten vorhanden.</td></tr>';
+            $content .= '<tr><td colspan="2">Keine Daten vorhanden.</td></tr>';
         }
-        echo '</tbody></table>';
+        $content .= '</tbody></table>';
 
-        echo '<h2>Top-Blutlinien: meistgenutzte Väter</h2>';
-        $this->renderCountTable($topSires, 'display_name', 'Vater');
+        $content .= '<h2>Top-Blutlinien: meistgenutzte Väter</h2>';
+        $content .= $this->renderCountTable($topSires, 'display_name', 'Vater');
 
-        echo '<h2>Top-Blutlinien: meistgenutzte Mütter</h2>';
-        $this->renderCountTable($topDams, 'display_name', 'Mutter');
+        $content .= '<h2>Top-Blutlinien: meistgenutzte Mütter</h2>';
+        $content .= $this->renderCountTable($topDams, 'display_name', 'Mutter');
 
-        echo '<p><a href="/admin">Zurück zum Dashboard</a></p>';
-        echo '</body></html>';
+        $content .= '<p><a href="/admin" class="btn btn-secondary">Zurück zum Dashboard</a></p>';
+        $content .= '</div>';
+
+        PluginPage::render('Statistik-Dashboard', $content);
     }
 
     /**
      * @param array<int, array<string, mixed>> $rows
      */
-    private function renderCountTable(array $rows, string $labelKey, string $labelHeading): void {
-        echo '<table><thead><tr><th>' . htmlspecialchars($labelHeading, ENT_QUOTES, 'UTF-8') . '</th><th>Anzahl</th></tr></thead><tbody>';
+    private function renderCountTable(array $rows, string $labelKey, string $labelHeading): string {
+        $html = '<table><thead><tr><th>' . htmlspecialchars($labelHeading, ENT_QUOTES, 'UTF-8') . '</th><th>Anzahl</th></tr></thead><tbody>';
         foreach ($rows as $row) {
-            echo '<tr><td>' . htmlspecialchars((string) $row[$labelKey], ENT_QUOTES, 'UTF-8') . '</td><td>' . (int) $row['total'] . '</td></tr>';
+            $html .= '<tr><td>' . htmlspecialchars((string) $row[$labelKey], ENT_QUOTES, 'UTF-8') . '</td><td>' . (int) $row['total'] . '</td></tr>';
         }
         if (empty($rows)) {
-            echo '<tr><td colspan="2">Keine Daten vorhanden.</td></tr>';
+            $html .= '<tr><td colspan="2">Keine Daten vorhanden.</td></tr>';
         }
-        echo '</tbody></table>';
+        $html .= '</tbody></table>';
+        return $html;
     }
 }

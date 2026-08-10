@@ -29,6 +29,7 @@ namespace Plugin\Galerie;
 use App\Controllers\BaseController;
 use App\Database;
 use App\Plugin\HookManager;
+use App\Plugin\PluginPage;
 use App\Router;
 use PDO;
 
@@ -105,7 +106,7 @@ class Plugin {
                 $src = htmlspecialchars((string) $item['file_path'], ENT_QUOTES, 'UTF-8');
                 $html .= '<figure style="margin:0;">'
                     . '<img src="' . $src . '" alt="' . $caption . '" loading="lazy" '
-                    . 'style="width:100%;height:120px;object-fit:cover;border-radius:6px;cursor:zoom-in;" '
+                    . 'style="width:100%;height:120px;object-fit:cover;border-radius:var(--border-radius, 6px);cursor:zoom-in;" '
                     . 'onclick="hvGalerieLightbox(this.src, this.alt)">'
                     . ($caption !== '' ? '<figcaption style="font-size:0.8em;color:var(--text-muted);">' . $caption . '</figcaption>' : '')
                     . '</figure>';
@@ -113,7 +114,7 @@ class Plugin {
                 $url = htmlspecialchars((string) $item['video_url'], ENT_QUOTES, 'UTF-8');
                 $html .= '<a href="' . $url . '" target="_blank" rel="noopener noreferrer" '
                     . 'style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:120px;'
-                    . 'background:#222;color:#fff;border-radius:6px;text-decoration:none;text-align:center;padding:0.4rem;">'
+                    . 'background:var(--surface-muted);color:var(--text-color);border-radius:var(--border-radius, 6px);text-decoration:none;text-align:center;padding:0.4rem;">'
                     . '<span style="font-size:1.8rem;">▶</span>'
                     . '<span style="font-size:0.8em;">' . ($caption !== '' ? $caption : 'Video ansehen') . '</span>'
                     . '</a>';
@@ -123,9 +124,12 @@ class Plugin {
         $html .= '</div>';
 
         // Schlanke Lightbox: Overlay-DIV, Schließen per Klick/Escape.
+        /* theming-ausnahme: Lightbox-Scrim bleibt in beiden Themes bewusst
+           dunkel (rgba(0,0,0,0.85)) - er soll das Bild abgedunkelt
+           freistellen, nicht der Flächenfarbe des Themes folgen. */
         $html .= '<div id="hv-galerie-lightbox" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);'
             . 'z-index:1000;align-items:center;justify-content:center;cursor:zoom-out;" onclick="this.style.display=\'none\'">'
-            . '<img id="hv-galerie-lightbox-img" src="" alt="" style="max-width:92vw;max-height:92vh;border-radius:6px;">'
+            . '<img id="hv-galerie-lightbox-img" src="" alt="" style="max-width:92vw;max-height:92vh;border-radius:var(--border-radius, 6px);">'
             . '</div>';
         $html .= '<script>
             function hvGalerieLightbox(src, alt) {
@@ -212,90 +216,82 @@ class VerwaltungController extends BaseController {
 
         $csrfToken = Router::generateCsrfToken();
 
-        echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Galerie verwalten</title>';
-        echo '<link rel="stylesheet" href="/css/style.css">';
-        echo <<<'HTML'
-        <script>
-        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
-        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
-        (function () {
-            var stored = localStorage.getItem('theme');
-            if (stored === 'dark' || stored === 'light') {
-                document.documentElement.setAttribute('data-theme', stored);
-            }
-        })();
-        </script>
-        HTML;
-        echo '<style>
-            body{font-family:sans-serif;padding:2rem;max-width:900px;margin:0 auto;background:var(--bg-color);}
-            table{width:100%;border-collapse:collapse;margin-top:1.5rem;}
-            th,td{text-align:left;padding:0.5rem;border-bottom:1px solid var(--border-color);font-size:0.9rem;vertical-align:middle;}
-            label{display:block;margin-top:0.8rem;font-weight:bold;font-size:0.9rem;}
-            input,select{width:100%;padding:0.4rem;margin-top:0.2rem;}
-            .row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}
-            .hint{color:var(--text-muted);font-size:0.85em;margin-top:0.3rem;}
-            .thumb{width:60px;height:45px;object-fit:cover;border-radius:4px;}
-        </style></head><body>';
-        echo '<h1>🖼️ Foto-/Video-Galerie verwalten</h1>';
+        // Die Seite rendert als Fragment im Framework-Layout
+        // (App\Plugin\PluginPage, Addons#66) - Header, Navigation,
+        // Theme-Umschalter, Markenfarben und style.css kommen zentral vom
+        // Layout. Hier bleibt nur addon-spezifische Geometrie
+        // (Formular-Raster, Vorschau-Thumbnails), Farben ausschließlich
+        // über Theme-Variablen.
+        $content = '<style>';
+        $content .= '.galerie-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}';
+        $content .= '.galerie-hint{color:var(--text-muted);font-size:0.85em;margin-top:0.3rem;}';
+        $content .= '.galerie-thumb{width:60px;height:45px;object-fit:cover;border-radius:var(--border-radius, 6px);}';
+        $content .= '</style>';
 
-        echo '<h2>Medium hinzufügen</h2>';
-        echo '<form method="POST" action="/plugin/galerie/verwaltung/store" enctype="multipart/form-data">';
-        echo '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">';
+        $content .= '<div class="card">';
+        $content .= '<h1>🖼️ Foto-/Video-Galerie verwalten</h1>';
 
-        echo '<label for="horse_id">Pferd</label><select name="horse_id" id="horse_id" required>';
-        echo '<option value="">– auswählen –</option>';
+        $content .= '<h2>Medium hinzufügen</h2>';
+        $content .= '<form method="POST" action="/plugin/galerie/verwaltung/store" enctype="multipart/form-data">';
+        $content .= '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">';
+
+        $content .= '<div class="form-group"><label for="horse_id">Pferd</label>'
+            . '<select name="horse_id" id="horse_id" class="form-control" required>';
+        $content .= '<option value="">– auswählen –</option>';
         foreach ($horses as $h) {
-            echo '<option value="' . (int) $h['id'] . '">'
+            $content .= '<option value="' . (int) $h['id'] . '">'
                 . htmlspecialchars($h['name'] . ($h['birth_year'] ? ' (' . $h['birth_year'] . ')' : ''), ENT_QUOTES, 'UTF-8')
                 . '</option>';
         }
-        echo '</select>';
+        $content .= '</select></div>';
 
-        echo '<div class="row">';
-        echo '<div><label for="image">Foto hochladen (JPEG/PNG/WebP, max. 5 MB)</label>'
-            . '<input type="file" name="image" id="image" accept="image/jpeg,image/png,image/webp"></div>';
-        echo '<div><label for="video_url">ODER Video-Link (YouTube/Vimeo, https)</label>'
-            . '<input type="url" name="video_url" id="video_url" placeholder="https://www.youtube.com/watch?v=..."></div>';
-        echo '</div>';
-        echo '<p class="hint">Genau eines von beiden angeben. Videos werden bewusst nur als externer Link eingebunden (kein Eigen-Hosting).</p>';
+        $content .= '<div class="galerie-row">';
+        $content .= '<div class="form-group"><label for="image">Foto hochladen (JPEG/PNG/WebP, max. 5 MB)</label>'
+            . '<input type="file" name="image" id="image" class="form-control" accept="image/jpeg,image/png,image/webp"></div>';
+        $content .= '<div class="form-group"><label for="video_url">ODER Video-Link (YouTube/Vimeo, https)</label>'
+            . '<input type="url" name="video_url" id="video_url" class="form-control" placeholder="https://www.youtube.com/watch?v=..."></div>';
+        $content .= '</div>';
+        $content .= '<p class="galerie-hint">Genau eines von beiden angeben. Videos werden bewusst nur als externer Link eingebunden (kein Eigen-Hosting).</p>';
 
-        echo '<div class="row">';
-        echo '<div><label for="caption">Bildunterschrift (optional)</label><input type="text" name="caption" id="caption" maxlength="255"></div>';
-        echo '<div><label for="sort_order">Sortierung (kleinere Zahl zuerst)</label><input type="number" name="sort_order" id="sort_order" value="0"></div>';
-        echo '</div>';
+        $content .= '<div class="galerie-row">';
+        $content .= '<div class="form-group"><label for="caption">Bildunterschrift (optional)</label><input type="text" name="caption" id="caption" class="form-control" maxlength="255"></div>';
+        $content .= '<div class="form-group"><label for="sort_order">Sortierung (kleinere Zahl zuerst)</label><input type="number" name="sort_order" id="sort_order" class="form-control" value="0"></div>';
+        $content .= '</div>';
 
-        echo '<p><button type="submit" style="margin-top:1.2rem;padding:0.6rem 1.2rem;">Hinzufügen</button></p>';
-        echo '</form>';
+        $content .= '<p><button type="submit" class="btn">Hinzufügen</button></p>';
+        $content .= '</form>';
 
-        echo '<h2>Erfasste Medien</h2>';
-        echo '<table><thead><tr><th>Pferd</th><th>Typ</th><th>Vorschau/Link</th><th>Bildunterschrift</th><th>Sortierung</th><th></th></tr></thead><tbody>';
+        $content .= '<h2>Erfasste Medien</h2>';
+        $content .= '<table><thead><tr><th>Pferd</th><th>Typ</th><th>Vorschau/Link</th><th>Bildunterschrift</th><th>Sortierung</th><th></th></tr></thead><tbody>';
         foreach ($media as $row) {
-            echo '<tr>';
-            echo '<td>' . htmlspecialchars((string) $row['horse_name'], ENT_QUOTES, 'UTF-8') . '</td>';
-            echo '<td>' . ($row['type'] === 'image' ? 'Foto' : 'Video') . '</td>';
-            echo '<td>';
+            $content .= '<tr>';
+            $content .= '<td>' . htmlspecialchars((string) $row['horse_name'], ENT_QUOTES, 'UTF-8') . '</td>';
+            $content .= '<td>' . ($row['type'] === 'image' ? 'Foto' : 'Video') . '</td>';
+            $content .= '<td>';
             if ($row['type'] === 'image' && !empty($row['file_path'])) {
-                echo '<img class="thumb" src="' . htmlspecialchars((string) $row['file_path'], ENT_QUOTES, 'UTF-8') . '" alt="">';
+                $content .= '<img class="galerie-thumb" src="' . htmlspecialchars((string) $row['file_path'], ENT_QUOTES, 'UTF-8') . '" alt="">';
             } elseif (!empty($row['video_url'])) {
                 $url = htmlspecialchars((string) $row['video_url'], ENT_QUOTES, 'UTF-8');
-                echo '<a href="' . $url . '" target="_blank" rel="noopener noreferrer">' . $url . '</a>';
+                $content .= '<a href="' . $url . '" target="_blank" rel="noopener noreferrer">' . $url . '</a>';
             }
-            echo '</td>';
-            echo '<td>' . htmlspecialchars((string) ($row['caption'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
-            echo '<td>' . (int) $row['sort_order'] . '</td>';
-            echo '<td><form method="POST" action="/plugin/galerie/verwaltung/delete" style="margin:0;" onsubmit="return confirm(\'Medium wirklich entfernen?\');">'
+            $content .= '</td>';
+            $content .= '<td>' . htmlspecialchars((string) ($row['caption'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
+            $content .= '<td>' . (int) $row['sort_order'] . '</td>';
+            $content .= '<td><form method="POST" action="/plugin/galerie/verwaltung/delete" style="margin:0;" onsubmit="return confirm(\'Medium wirklich entfernen?\');">'
                 . '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">'
                 . '<input type="hidden" name="id" value="' . (int) $row['id'] . '">'
-                . '<button type="submit" style="color:var(--danger-fg);">Entfernen</button></form></td>';
-            echo '</tr>';
+                . '<button type="submit" class="btn btn-secondary" style="color:var(--danger-fg);">Entfernen</button></form></td>';
+            $content .= '</tr>';
         }
         if (empty($media)) {
-            echo '<tr><td colspan="6">Noch keine Medien erfasst.</td></tr>';
+            $content .= '<tr><td colspan="6">Noch keine Medien erfasst.</td></tr>';
         }
-        echo '</tbody></table>';
+        $content .= '</tbody></table>';
 
-        echo '<p style="margin-top:2rem;"><a href="/admin">Zurück zum Dashboard</a></p>';
-        echo '</body></html>';
+        $content .= '<p><a href="/admin" class="btn btn-secondary">Zurück zum Dashboard</a></p>';
+        $content .= '</div>';
+
+        PluginPage::render('Galerie verwalten', $content);
     }
 
     public function store(): void {

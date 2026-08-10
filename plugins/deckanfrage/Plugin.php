@@ -78,13 +78,13 @@ class Plugin {
         $horseId = (int) $horse['id'];
         $csrfToken = htmlspecialchars(Router::generateCsrfToken(), ENT_QUOTES, 'UTF-8');
 
-        $html = '<div style="margin-top:1rem;padding:1rem;background:var(--surface-muted);border-radius:6px;">';
+        $html = '<div style="margin-top:1rem;padding:1rem;background:var(--surface-muted);border-radius:var(--border-radius, 6px);">';
         $html .= '<h3 style="margin-top:0;">📨 Deckanfrage stellen</h3>';
 
         if (($_GET['deckanfrage'] ?? '') === 'erfolg') {
-            $html .= '<p style="color:var(--success-fg);background:var(--success-soft-bg);padding:0.6rem;border-radius:4px;">Ihre Anfrage wurde erfolgreich versendet.</p>';
+            $html .= '<p style="color:var(--success-fg);background:var(--success-soft-bg);padding:0.6rem;border-radius:var(--border-radius, 4px);">Ihre Anfrage wurde erfolgreich versendet.</p>';
         } elseif (($_GET['deckanfrage'] ?? '') === 'fehler') {
-            $html .= '<p style="color:var(--danger-fg);background:var(--danger-soft-bg);padding:0.6rem;border-radius:4px;">Ihre Anfrage konnte nicht versendet werden. Bitte versuchen Sie es später erneut.</p>';
+            $html .= '<p style="color:var(--danger-fg);background:var(--danger-soft-bg);padding:0.6rem;border-radius:var(--border-radius, 4px);">Ihre Anfrage konnte nicht versendet werden. Bitte versuchen Sie es später erneut.</p>';
         }
 
         $html .= '<form method="POST" action="/plugin/deckanfrage/anfrage">';

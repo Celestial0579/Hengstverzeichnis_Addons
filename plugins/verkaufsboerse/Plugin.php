@@ -22,6 +22,7 @@ namespace Plugin\Verkaufsboerse;
 use App\Controllers\BaseController;
 use App\Database;
 use App\Plugin\HookManager;
+use App\Plugin\PluginPage;
 use App\Router;
 use App\Security\ClientIp;
 use App\Security\RateLimiter;
@@ -131,7 +132,7 @@ class Plugin {
             : number_format((float) $listing['price'], 2, ',', '.') . ' €';
         $csrfToken = htmlspecialchars(Router::generateCsrfToken(), ENT_QUOTES, 'UTF-8');
 
-        $html = '<div style="margin-top:1rem;padding:1rem;background:var(--info-soft-bg);border:1px solid var(--warning-fg);border-radius:6px;">';
+        $html = '<div style="margin-top:1rem;padding:1rem;background:var(--info-soft-bg);border:1px solid var(--warning-fg);border-radius:var(--border-radius, 6px);">';
         $html .= '<h3 style="margin-top:0;">🏷️ Zum Verkauf - ' . htmlspecialchars($priceText, ENT_QUOTES, 'UTF-8') . '</h3>';
 
         if (!empty($listing['description'])) {
@@ -139,9 +140,9 @@ class Plugin {
         }
 
         if (($_GET['verkaufsanfrage'] ?? '') === 'erfolg') {
-            $html .= '<p style="color:var(--success-fg);background:var(--success-soft-bg);padding:0.6rem;border-radius:4px;">Ihre Anfrage wurde erfolgreich versendet.</p>';
+            $html .= '<p style="color:var(--success-fg);background:var(--success-soft-bg);padding:0.6rem;border-radius:var(--border-radius, 4px);">Ihre Anfrage wurde erfolgreich versendet.</p>';
         } elseif (($_GET['verkaufsanfrage'] ?? '') === 'fehler') {
-            $html .= '<p style="color:var(--danger-fg);background:var(--danger-soft-bg);padding:0.6rem;border-radius:4px;">Ihre Anfrage konnte nicht versendet werden. Bitte versuchen Sie es später erneut.</p>';
+            $html .= '<p style="color:var(--danger-fg);background:var(--danger-soft-bg);padding:0.6rem;border-radius:var(--border-radius, 4px);">Ihre Anfrage konnte nicht versendet werden. Bitte versuchen Sie es später erneut.</p>';
         }
 
         $html .= '<form method="POST" action="/plugin/verkaufsboerse/kontakt">';
@@ -230,52 +231,45 @@ class ListeController extends BaseController {
              ORDER BY l.listed_at DESC'
         )->fetchAll(PDO::FETCH_ASSOC);
 
-        echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Verkaufsbörse</title>';
-        echo '<link rel="stylesheet" href="/css/style.css">';
-        echo <<<'HTML'
-        <script>
-        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
-        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
-        (function () {
-            var stored = localStorage.getItem('theme');
-            if (stored === 'dark' || stored === 'light') {
-                document.documentElement.setAttribute('data-theme', stored);
-            }
-        })();
-        </script>
-        HTML;
-        echo '<style>
-            body{font-family:sans-serif;padding:2rem;max-width:900px;margin:0 auto;background:var(--bg-color);}
-            .listing{display:flex;gap:1rem;padding:1rem;border-bottom:1px solid var(--border-color);align-items:center;}
-            .listing img{width:100px;height:100px;object-fit:cover;border-radius:6px;}
-            .listing h2{margin:0 0 0.3rem 0;font-size:1.1rem;}
-            .price{font-weight:bold;color:var(--warning-fg);}
-        </style></head><body>';
-        echo '<h1>🏷️ Verkaufs-/Vermittlungsbörse</h1>';
+        // Inhalt als Fragment im Haupt-Layout über PluginPage (Addons#66):
+        // Header, Navigation, Theme-Umschalter und Grund-Styling kommen vom
+        // Framework. Addon-spezifisch bleibt allein die Geometrie der
+        // Inserats-Zeilen (Thumbnail-Raster) - Farben ausschließlich über
+        // Theme-Variablen.
+        $content = '<style>
+            .verkaufsboerse-listing{display:flex;gap:1rem;padding:1rem 0;border-bottom:1px solid var(--border-color);align-items:center;}
+            .verkaufsboerse-listing img{width:100px;height:100px;object-fit:cover;border-radius:var(--border-radius, 6px);}
+            .verkaufsboerse-listing h2{margin:0 0 0.3rem 0;font-size:1.1rem;}
+            .verkaufsboerse-preis{font-weight:bold;color:var(--warning-fg);}
+        </style>';
+        $content .= '<div class="card">';
+        $content .= '<h1>🏷️ Verkaufs-/Vermittlungsbörse</h1>';
 
         foreach ($listings as $listing) {
             $priceText = !empty($listing['price_on_request']) || $listing['price'] === null
                 ? 'Preis auf Anfrage'
                 : number_format((float) $listing['price'], 2, ',', '.') . ' €';
 
-            echo '<div class="listing">';
+            $content .= '<div class="verkaufsboerse-listing">';
             if (!empty($listing['image_url'])) {
-                echo '<img src="' . htmlspecialchars((string) $listing['image_url'], ENT_QUOTES, 'UTF-8') . '" alt="">';
+                $content .= '<img src="' . htmlspecialchars((string) $listing['image_url'], ENT_QUOTES, 'UTF-8') . '" alt="">';
             }
-            echo '<div>';
-            echo '<h2><a href="/horse?id=' . (int) $listing['horse_id'] . '">' . htmlspecialchars((string) $listing['horse_name'], ENT_QUOTES, 'UTF-8') . '</a></h2>';
-            echo '<div class="price">' . htmlspecialchars($priceText, ENT_QUOTES, 'UTF-8') . '</div>';
+            $content .= '<div>';
+            $content .= '<h2><a href="/horse?id=' . (int) $listing['horse_id'] . '">' . htmlspecialchars((string) $listing['horse_name'], ENT_QUOTES, 'UTF-8') . '</a></h2>';
+            $content .= '<div class="verkaufsboerse-preis">' . htmlspecialchars($priceText, ENT_QUOTES, 'UTF-8') . '</div>';
             if (!empty($listing['birth_year'])) {
-                echo '<div>Geburtsjahr: ' . htmlspecialchars((string) $listing['birth_year'], ENT_QUOTES, 'UTF-8') . '</div>';
+                $content .= '<div>Geburtsjahr: ' . htmlspecialchars((string) $listing['birth_year'], ENT_QUOTES, 'UTF-8') . '</div>';
             }
-            echo '</div></div>';
+            $content .= '</div></div>';
         }
 
         if (empty($listings)) {
-            echo '<p>Aktuell keine Pferde in der Verkaufsbörse gelistet.</p>';
+            $content .= '<p>Aktuell keine Pferde in der Verkaufsbörse gelistet.</p>';
         }
 
-        echo '</body></html>';
+        $content .= '</div>';
+
+        PluginPage::render('Verkaufsbörse', $content);
     }
 }
 
@@ -316,56 +310,44 @@ class VerwaltungController extends BaseController {
 
         $csrfToken = Router::generateCsrfToken();
 
-        echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Verkaufsbörse verwalten</title>';
-        echo '<link rel="stylesheet" href="/css/style.css">';
-        echo <<<'HTML'
-        <script>
-        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
-        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
-        (function () {
-            var stored = localStorage.getItem('theme');
-            if (stored === 'dark' || stored === 'light') {
-                document.documentElement.setAttribute('data-theme', stored);
-            }
-        })();
-        </script>
-        HTML;
-        echo '<style>
-            body{font-family:sans-serif;padding:2rem;max-width:900px;margin:0 auto;background:var(--bg-color);}
-            table{width:100%;border-collapse:collapse;margin-top:1.5rem;}
-            th,td{text-align:left;padding:0.5rem;border-bottom:1px solid var(--border-color);font-size:0.9rem;}
-            label{display:block;margin-top:0.8rem;font-weight:bold;font-size:0.9rem;}
-            input,select,textarea{width:100%;padding:0.4rem;margin-top:0.2rem;}
-            .row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}
-        </style></head><body>';
-        echo '<h1>🏷️ Verkaufsbörse verwalten</h1>';
+        // Die Seite rendert als Fragment im Framework-Layout
+        // (App\Plugin\PluginPage, Addons#66) - Header, Navigation,
+        // Theme-Umschalter, Markenfarben und style.css kommen zentral vom
+        // Layout. Hier bleibt nur addon-spezifische Geometrie
+        // (Formular-Raster), Farben ausschließlich über Theme-Variablen.
+        $content = '<style>
+            .verkaufsboerse-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}
+        </style>';
+        $content .= '<div class="card">';
+        $content .= '<h1>🏷️ Verkaufsbörse verwalten</h1>';
 
-        echo '<h2>Inserat anlegen/aktualisieren</h2>';
-        echo '<form method="POST" action="/plugin/verkaufsboerse/verwaltung/store">';
-        echo '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">';
+        $content .= '<h2>Inserat anlegen/aktualisieren</h2>';
+        $content .= '<form method="POST" action="/plugin/verkaufsboerse/verwaltung/store">';
+        $content .= '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">';
 
-        echo '<label for="horse_id">Pferd</label><select name="horse_id" id="horse_id" required>';
-        echo '<option value="">– auswählen –</option>';
+        $content .= '<div class="form-group"><label for="horse_id">Pferd</label>'
+            . '<select name="horse_id" id="horse_id" class="form-control" required>';
+        $content .= '<option value="">– auswählen –</option>';
         foreach ($horses as $h) {
-            echo '<option value="' . (int) $h['id'] . '">'
+            $content .= '<option value="' . (int) $h['id'] . '">'
                 . htmlspecialchars($h['name'] . ($h['birth_year'] ? ' (' . $h['birth_year'] . ')' : ''), ENT_QUOTES, 'UTF-8')
                 . '</option>';
         }
-        echo '</select>';
+        $content .= '</select></div>';
 
-        echo '<div class="row">';
-        echo '<div><label for="price">Preis (€, leer = auf Anfrage)</label><input type="number" step="0.01" name="price" id="price"></div>';
-        echo '<div><label for="contact_email">Kontakt-E-Mail</label><input type="email" name="contact_email" id="contact_email" required></div>';
-        echo '</div>';
+        $content .= '<div class="verkaufsboerse-row">';
+        $content .= '<div class="form-group"><label for="price">Preis (€, leer = auf Anfrage)</label><input type="number" step="0.01" name="price" id="price" class="form-control"></div>';
+        $content .= '<div class="form-group"><label for="contact_email">Kontakt-E-Mail</label><input type="email" name="contact_email" id="contact_email" class="form-control" required></div>';
+        $content .= '</div>';
 
-        echo '<label for="description">Beschreibung</label><textarea name="description" id="description" rows="3"></textarea>';
-        echo '<label for="listed_until">Gelistet bis (optional)</label><input type="date" name="listed_until" id="listed_until">';
+        $content .= '<div class="form-group"><label for="description">Beschreibung</label><textarea name="description" id="description" class="form-control" rows="3"></textarea></div>';
+        $content .= '<div class="form-group"><label for="listed_until">Gelistet bis (optional)</label><input type="date" name="listed_until" id="listed_until" class="form-control"></div>';
 
-        echo '<p><button type="submit" style="margin-top:1.2rem;padding:0.6rem 1.2rem;">Speichern</button></p>';
-        echo '</form>';
+        $content .= '<p><button type="submit" class="btn">Speichern</button></p>';
+        $content .= '</form>';
 
-        echo '<h2>Aktuelle Inserate</h2>';
-        echo '<table><thead><tr><th>Pferd</th><th>Sichtbarkeit</th><th>Preis</th><th>Kontakt</th><th>Gelistet bis</th><th></th></tr></thead><tbody>';
+        $content .= '<h2>Aktuelle Inserate</h2>';
+        $content .= '<table><thead><tr><th>Pferd</th><th>Sichtbarkeit</th><th>Preis</th><th>Kontakt</th><th>Gelistet bis</th><th></th></tr></thead><tbody>';
         foreach ($listings as $row) {
             $priceText = !empty($row['price_on_request']) || $row['price'] === null
                 ? 'auf Anfrage'
@@ -383,25 +365,27 @@ class VerwaltungController extends BaseController {
                 $visibility = '<span style="color:var(--success-fg);">öffentlich sichtbar</span>';
             }
 
-            echo '<tr>';
-            echo '<td>' . htmlspecialchars((string) $row['horse_name'], ENT_QUOTES, 'UTF-8') . '</td>';
-            echo '<td>' . $visibility . '</td>';
-            echo '<td>' . htmlspecialchars($priceText, ENT_QUOTES, 'UTF-8') . '</td>';
-            echo '<td>' . htmlspecialchars((string) $row['contact_email'], ENT_QUOTES, 'UTF-8') . '</td>';
-            echo '<td>' . htmlspecialchars((string) ($row['listed_until'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
-            echo '<td><form method="POST" action="/plugin/verkaufsboerse/verwaltung/delete" style="margin:0;" onsubmit="return confirm(\'Inserat wirklich entfernen?\');">'
+            $content .= '<tr>';
+            $content .= '<td>' . htmlspecialchars((string) $row['horse_name'], ENT_QUOTES, 'UTF-8') . '</td>';
+            $content .= '<td>' . $visibility . '</td>';
+            $content .= '<td>' . htmlspecialchars($priceText, ENT_QUOTES, 'UTF-8') . '</td>';
+            $content .= '<td>' . htmlspecialchars((string) $row['contact_email'], ENT_QUOTES, 'UTF-8') . '</td>';
+            $content .= '<td>' . htmlspecialchars((string) ($row['listed_until'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
+            $content .= '<td><form method="POST" action="/plugin/verkaufsboerse/verwaltung/delete" style="margin:0;" onsubmit="return confirm(\'Inserat wirklich entfernen?\');">'
                 . '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">'
                 . '<input type="hidden" name="id" value="' . (int) $row['id'] . '">'
-                . '<button type="submit" style="color:var(--danger-fg);">Entfernen</button></form></td>';
-            echo '</tr>';
+                . '<button type="submit" class="btn btn-secondary" style="color:var(--danger-fg);">Entfernen</button></form></td>';
+            $content .= '</tr>';
         }
         if (empty($listings)) {
-            echo '<tr><td colspan="6">Noch keine Inserate erfasst.</td></tr>';
+            $content .= '<tr><td colspan="6">Noch keine Inserate erfasst.</td></tr>';
         }
-        echo '</tbody></table>';
+        $content .= '</tbody></table>';
 
-        echo '<p style="margin-top:2rem;"><a href="/admin">Zurück zum Dashboard</a></p>';
-        echo '</body></html>';
+        $content .= '<p><a href="/admin" class="btn btn-secondary">Zurück zum Dashboard</a></p>';
+        $content .= '</div>';
+
+        PluginPage::render('Verkaufsbörse verwalten', $content);
     }
 
     public function store(): void {

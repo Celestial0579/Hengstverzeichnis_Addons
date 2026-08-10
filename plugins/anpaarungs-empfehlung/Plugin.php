@@ -217,69 +217,63 @@ class EmpfehlungController extends BaseController {
             });
         }
 
-        echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8">';
-        echo '<meta name="viewport" content="width=device-width, initial-scale=1">';
-        echo '<title>Anpaarungs-Empfehlung</title>';
-        echo '<link rel="stylesheet" href="/css/style.css">';
-        echo <<<'HTML'
-        <script>
-        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
-        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
-        (function () {
-            var stored = localStorage.getItem('theme');
-            if (stored === 'dark' || stored === 'light') {
-                document.documentElement.setAttribute('data-theme', stored);
-            }
-        })();
-        </script>
-        HTML;
-        echo '<style>body{font-family:sans-serif;padding:2rem;max-width:820px;margin:0 auto;background:var(--bg-color);}';
-        echo 'label{display:block;margin-top:1rem;font-weight:bold;} select,input{width:100%;padding:0.5rem;margin-top:0.3rem;}';
-        echo '.inline{display:flex;gap:1rem;flex-wrap:wrap;} .inline > div{flex:1;min-width:140px;}';
-        echo 'table{width:100%;border-collapse:collapse;margin-top:1.2rem;} th,td{padding:0.45rem 0.6rem;border-bottom:1px solid var(--border-color);text-align:left;}';
-        echo 'th{background:var(--surface-muted);} td.num{text-align:right;font-variant-numeric:tabular-nums;}';
-        echo 'tr.best td{background:var(--success-soft-bg);} tr.warn td{background:var(--danger-soft-bg);}';
-        echo '.muted{color:var(--text-muted);font-size:0.85em;}</style></head><body>';
-        echo '<h1>💞 Anpaarungs-Empfehlung</h1>';
-        echo '<p>Wählt für ein Basispferd (z. B. eine Stute) die genetisch vielfältigsten Partner: '
+        // Die Seite rendert als Fragment im Framework-Layout
+        // (App\Plugin\PluginPage, Addons#66) - Header, Navigation,
+        // Theme-Umschalter, Markenfarben und style.css kommen zentral vom
+        // Layout; die frühere Standalone-Anbindung (#58) entfällt. Hier
+        // bleibt nur addon-spezifische Geometrie (Formularzeile,
+        // Rang-Markierungen), Farben ausschließlich über Theme-Variablen.
+        $content = '<style>';
+        $content .= '.inline{display:flex;gap:1rem;flex-wrap:wrap;} .inline > div{flex:1;min-width:140px;}';
+        $content .= 'td.num{text-align:right;font-variant-numeric:tabular-nums;}';
+        $content .= 'tr.best td{background:var(--success-soft-bg);} tr.warn td{background:var(--danger-soft-bg);}';
+        $content .= '.muted{color:var(--text-muted);font-size:0.85em;}';
+        $content .= '</style>';
+
+        $content .= '<div class="card">';
+        $content .= '<h1>💞 Anpaarungs-Empfehlung</h1>';
+        $content .= '<p>Wählt für ein Basispferd (z. B. eine Stute) die genetisch vielfältigsten Partner: '
             . 'Alle anderen Pferde werden nach dem voraussichtlichen Inzuchtkoeffizienten (COI) eines '
             . 'gemeinsamen Fohlens sortiert – der niedrigste Wert zuerst.</p>';
 
-        echo '<form method="GET">';
-        echo '<label for="base_id">Basispferd</label><select name="base_id" id="base_id">';
-        echo '<option value="">– auswählen –</option>';
+        $content .= '<form method="GET">';
+        $content .= '<div class="form-group"><label for="base_id">Basispferd</label>'
+            . '<select name="base_id" id="base_id" class="form-control">';
+        $content .= '<option value="">– auswählen –</option>';
         foreach ($horses as $h) {
             $selected = ($baseId === (int) $h['id']) ? ' selected' : '';
             $labelText = $h['name'] . ($h['birth_year'] ? ' (' . (int) $h['birth_year'] . ')' : '');
-            echo '<option value="' . (int) $h['id'] . '"' . $selected . '>'
+            $content .= '<option value="' . (int) $h['id'] . '"' . $selected . '>'
                 . htmlspecialchars($labelText, ENT_QUOTES, 'UTF-8') . '</option>';
         }
-        echo '</select>';
+        $content .= '</select></div>';
 
-        echo '<div class="inline">';
-        echo '<div><label for="depth">Generationstiefe (1–' . self::MAX_DEPTH . ')</label>'
-            . '<input type="number" name="depth" id="depth" min="1" max="' . self::MAX_DEPTH . '" value="' . (int) $depth . '"></div>';
-        echo '<div><label for="limit">Anzahl Vorschläge</label>'
-            . '<input type="number" name="limit" id="limit" min="1" max="' . self::MAX_LIMIT . '" value="' . (int) $limit . '"></div>';
-        echo '</div>';
+        $content .= '<div class="inline">';
+        $content .= '<div class="form-group"><label for="depth">Generationstiefe (1–' . self::MAX_DEPTH . ')</label>'
+            . '<input type="number" name="depth" id="depth" class="form-control" min="1" max="' . self::MAX_DEPTH . '" value="' . (int) $depth . '"></div>';
+        $content .= '<div class="form-group"><label for="limit">Anzahl Vorschläge</label>'
+            . '<input type="number" name="limit" id="limit" class="form-control" min="1" max="' . self::MAX_LIMIT . '" value="' . (int) $limit . '"></div>';
+        $content .= '</div>';
 
-        echo '<p><button type="submit" style="margin-top:1rem;padding:0.6rem 1.2rem;">Empfehlungen berechnen</button></p>';
-        echo '</form>';
+        $content .= '<p><button type="submit" class="btn">Empfehlungen berechnen</button></p>';
+        $content .= '</form>';
 
         if ($geldingBase) {
-            echo '<p class="muted">Das gewählte Basispferd ist als Wallach erfasst - für Wallache wird keine Anpaarungs-Empfehlung berechnet.</p>';
+            $content .= '<p class="muted">Das gewählte Basispferd ist als Wallach erfasst - für Wallache wird keine Anpaarungs-Empfehlung berechnet.</p>';
         }
+        $content .= '</div>';
 
         if ($baseHorse !== null) {
+            $content .= '<div class="card">';
             $baseName = htmlspecialchars((string) $baseHorse['name'], ENT_QUOTES, 'UTF-8');
             if ($baseSex === null) {
-                echo '<p class="muted">⚠️ Für „' . $baseName . '" ist kein Geschlecht hinterlegt - die Partnerliste kann deshalb nicht nach Geschlecht gefiltert werden.</p>';
+                $content .= '<p class="muted">⚠️ Für „' . $baseName . '" ist kein Geschlecht hinterlegt - die Partnerliste kann deshalb nicht nach Geschlecht gefiltert werden.</p>';
             }
             if (empty($ranking)) {
-                echo '<p class="muted">Für „' . $baseName . '" gibt es derzeit keine passenden Partner im Register.</p>';
+                $content .= '<p class="muted">Für „' . $baseName . '" gibt es derzeit keine passenden Partner im Register.</p>';
             } else {
-                echo '<h2>Empfehlungen für „' . $baseName . '"</h2>';
-                echo '<table><thead><tr><th>#</th><th>Partner</th><th>Jahrgang</th>'
+                $content .= '<h2>Empfehlungen für „' . $baseName . '"</h2>';
+                $content .= '<table><thead><tr><th>#</th><th>Partner</th><th>Jahrgang</th>'
                     . '<th class="num">Fohlen-COI</th></tr></thead><tbody>';
                 $rank = 0;
                 foreach (array_slice($ranking, 0, $limit) as $row) {
@@ -291,25 +285,27 @@ class EmpfehlungController extends BaseController {
                     } elseif ($row['coi'] >= self::WARN_THRESHOLD) {
                         $cls = ' class="warn"';
                     }
-                    echo '<tr' . $cls . '>';
-                    echo '<td>' . $rank . '</td>';
-                    echo '<td>' . htmlspecialchars($row['name'], ENT_QUOTES, 'UTF-8')
+                    $content .= '<tr' . $cls . '>';
+                    $content .= '<td>' . $rank . '</td>';
+                    $content .= '<td>' . htmlspecialchars($row['name'], ENT_QUOTES, 'UTF-8')
                         . ($row['sex'] === null ? ' <span class="muted">(Geschlecht unbekannt)</span>' : '')
                         . '</td>';
-                    echo '<td>' . ($row['birth_year'] !== null ? (int) $row['birth_year'] : '—') . '</td>';
-                    echo '<td class="num"><strong>' . $percent . ' %</strong></td>';
-                    echo '</tr>';
+                    $content .= '<td>' . ($row['birth_year'] !== null ? (int) $row['birth_year'] : '—') . '</td>';
+                    $content .= '<td class="num"><strong>' . $percent . ' %</strong></td>';
+                    $content .= '</tr>';
                 }
-                echo '</tbody></table>';
-                echo '<p class="muted">Grün = geringste Inzucht. Rot markiert = Fohlen-COI ab '
+                $content .= '</tbody></table>';
+                $content .= '<p class="muted">Grün = geringste Inzucht. Rot markiert = Fohlen-COI ab '
                     . number_format(self::WARN_THRESHOLD * 100, 2, ',', '.') . ' % '
                     . '(etwa Halbgeschwister-/Onkel-Nichte-Niveau). Näherung über den verfügbaren, '
                     . 'bis zu ' . self::MAX_DEPTH . ' Generationen tiefen Stammbaum; ersetzt keine '
                     . 'züchterische Gesamtbewertung. Eine Farbprognose liefert das Addon „Farbvererbung".</p>';
             }
+            $content .= '</div>';
         }
 
-        echo '<p style="margin-top:2rem;"><a href="/admin">Zurück zum Dashboard</a></p>';
-        echo '</body></html>';
+        $content .= '<p><a href="/admin" class="btn btn-secondary">Zurück zum Dashboard</a></p>';
+
+        \App\Plugin\PluginPage::render('Anpaarungs-Empfehlung', $content);
     }
 }

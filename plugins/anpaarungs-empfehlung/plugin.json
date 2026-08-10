@@ -1,8 +1,9 @@
 {
     "slug": "anpaarungs-empfehlung",
     "name": "Anpaarungs-Empfehlung",
-    "version": "1.0.1",
-    "core_compatibility": ">=0.1.0-beta.1",
+    "version": "1.1.0",
+    "core_compatibility": ">=0.4.0",
+    "core_supported_max": "0.4",
     "description": "Rankt für ein ausgewähltes Pferd alle möglichen Partnertiere nach dem voraussichtlichen Inzuchtkoeffizienten (Wright's COI) eines Fohlens - die genetisch vielfältigsten Verpaarungen zuerst. Zugriff über die Berechtigung anpaarung.recommend.",
     "author": "Hengstverzeichnis_Addons",
     "hooks": [],

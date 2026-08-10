@@ -44,7 +44,7 @@ class Plugin {
     public function addDetailSection(array $sections, array $horse, array $horsePersons, ?array $pedigree): array {
         $horseId = (int) $horse['id'];
         $sections[] = '<p><a href="/plugin/genealogie-vergleich?horse_a=' . $horseId . '" '
-            . 'style="display:inline-block;padding:0.5rem 1rem;background:var(--surface-muted);border-radius:6px;text-decoration:none;color:inherit;">'
+            . 'style="display:inline-block;padding:0.5rem 1rem;background:var(--surface-muted);border-radius:var(--border-radius, 6px);text-decoration:none;color:inherit;">'
             . '🔬 Stammbaum mit einem anderen Pferd vergleichen</a></p>';
         return $sections;
     }
@@ -109,52 +109,46 @@ class VergleichController extends BaseController {
             $commonIds = array_intersect_key($idsA, $idsB);
         }
 
-        echo '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Genealogie-Vergleich</title>';
-        echo '<link rel="stylesheet" href="/css/style.css">';
-        echo <<<'HTML'
-        <script>
-        // Theme-Bootstrap wie im Framework-Layout (dort ausführlich begründet):
-        // synchron im <head>, damit data-theme vor dem ersten Rendern steht.
-        (function () {
-            var stored = localStorage.getItem('theme');
-            if (stored === 'dark' || stored === 'light') {
-                document.documentElement.setAttribute('data-theme', stored);
-            }
-        })();
-        </script>
-        HTML;
-        echo $this->styles();
-        echo '</head><body>';
-        echo '<h1>🔬 Genealogie-Vergleichstool</h1>';
-        echo '<p>Vergleicht die Stammbäume zweier Pferde und hebt gemeinsame Vorfahren hervor.</p>';
+        // Die Seite rendert als Fragment im Framework-Layout
+        // (App\Plugin\PluginPage, Addons#66) - Header, Navigation,
+        // Theme-Umschalter, Markenfarben und style.css kommen zentral vom
+        // Layout. Hier bleibt nur addon-spezifische Geometrie (Formular-
+        // Raster, Stammbaum-Kästen), Farben ausschließlich über
+        // Theme-Variablen.
+        $content = $this->styles();
+        $content .= '<div class="card">';
+        $content .= '<h1>🔬 Genealogie-Vergleichstool</h1>';
+        $content .= '<p>Vergleicht die Stammbäume zweier Pferde und hebt gemeinsame Vorfahren hervor.</p>';
 
-        echo '<form method="GET">';
-        echo '<div class="row">';
-        echo '<div><label for="horse_a">Pferd A</label>' . $this->horseSelect($horses, 'horse_a', $horseAId) . '</div>';
-        echo '<div><label for="horse_b">Pferd B</label>' . $this->horseSelect($horses, 'horse_b', $horseBId) . '</div>';
-        echo '</div>';
-        echo '<label for="depth">Generationstiefe (2-' . self::MAX_DEPTH . ')</label>';
-        echo '<input type="number" name="depth" id="depth" min="2" max="' . self::MAX_DEPTH . '" value="' . (int) $depth . '">';
-        echo '<p><button type="submit" style="margin-top:1rem;padding:0.6rem 1.2rem;">Vergleichen</button></p>';
-        echo '</form>';
+        $content .= '<form method="GET">';
+        $content .= '<div class="row">';
+        $content .= '<div class="form-group"><label for="horse_a">Pferd A</label>' . $this->horseSelect($horses, 'horse_a', $horseAId) . '</div>';
+        $content .= '<div class="form-group"><label for="horse_b">Pferd B</label>' . $this->horseSelect($horses, 'horse_b', $horseBId) . '</div>';
+        $content .= '</div>';
+        $content .= '<div class="form-group"><label for="depth">Generationstiefe (2-' . self::MAX_DEPTH . ')</label>';
+        $content .= '<input type="number" name="depth" id="depth" class="form-control" min="2" max="' . self::MAX_DEPTH . '" value="' . (int) $depth . '"></div>';
+        $content .= '<p><button type="submit" class="btn">Vergleichen</button></p>';
+        $content .= '</form>';
 
         if ($treeA !== null && $treeB !== null) {
             $sharedCount = count($commonIds);
-            echo '<p class="meta">' . ($sharedCount > 0
+            $content .= '<p class="meta">' . ($sharedCount > 0
                 ? "Gemeinsame Vorfahren gefunden: {$sharedCount} (gold hervorgehoben)."
                 : 'Keine gemeinsamen Vorfahren innerhalb der gewählten Generationstiefe gefunden.') . '</p>';
 
-            echo '<div class="comparison">';
-            echo '<div class="pedigree-col"><h2>' . htmlspecialchars((string) $treeA['name'], ENT_QUOTES, 'UTF-8') . '</h2>'
+            $content .= '<div class="comparison">';
+            $content .= '<div class="pedigree-col"><h2>' . htmlspecialchars((string) $treeA['name'], ENT_QUOTES, 'UTF-8') . '</h2>'
                 . '<div class="pedigree">' . $this->renderNode($treeA, $commonIds) . '</div></div>';
-            echo '<div class="pedigree-col"><h2>' . htmlspecialchars((string) $treeB['name'], ENT_QUOTES, 'UTF-8') . '</h2>'
+            $content .= '<div class="pedigree-col"><h2>' . htmlspecialchars((string) $treeB['name'], ENT_QUOTES, 'UTF-8') . '</h2>'
                 . '<div class="pedigree">' . $this->renderNode($treeB, $commonIds) . '</div></div>';
-            echo '</div>';
+            $content .= '</div>';
         } elseif ($horseAId || $horseBId) {
-            echo '<p class="meta">Bitte beide Pferde auswählen, um den Vergleich zu sehen.</p>';
+            $content .= '<p class="meta">Bitte beide Pferde auswählen, um den Vergleich zu sehen.</p>';
         }
 
-        echo '</body></html>';
+        $content .= '</div>';
+
+        \App\Plugin\PluginPage::render('Genealogie-Vergleich', $content);
     }
 
     /**
@@ -209,7 +203,7 @@ class VergleichController extends BaseController {
      * @param array<int, array<string, mixed>> $horses
      */
     private function horseSelect(array $horses, string $name, ?int $selected): string {
-        $html = '<select name="' . $name . '" id="' . $name . '"><option value="">– auswählen –</option>';
+        $html = '<select name="' . $name . '" id="' . $name . '" class="form-control"><option value="">– auswählen –</option>';
         foreach ($horses as $h) {
             $isSelected = $selected === (int) $h['id'] ? ' selected' : '';
             $html .= '<option value="' . (int) $h['id'] . '"' . $isSelected . '>'
@@ -219,26 +213,23 @@ class VergleichController extends BaseController {
         return $html . '</select>';
     }
 
+    // Addon-spezifische Geometrie (zweispaltiges Formular-Raster, Stammbaum-
+    // Kästen der Vergleichsansicht) - Grundstile für body/Formulare/Buttons
+    // kommen seit Addons#66 zentral aus dem Layout.
     private function styles(): string {
         return <<<CSS
 <style>
-    * { box-sizing: border-box; }
-    body { font-family: sans-serif; padding: 1.5rem; color: var(--text-color); background: var(--bg-color); }
     .meta { color: var(--text-muted); }
-    form { background: var(--surface-muted); padding: 1rem; border-radius: 6px; margin-bottom: 1.5rem; }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-    label { display: block; margin-top: 0.6rem; font-weight: bold; font-size: 0.9rem; }
-    select, input { width: 100%; padding: 0.4rem; margin-top: 0.2rem; }
 
     .comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
     .pedigree-col h2 { font-size: 1.1rem; }
     .pedigree { overflow-x: auto; }
     .node { display: flex; align-items: center; }
-    .box { border: 1px solid var(--border-color); border-radius: 6px; padding: 0.4rem 0.7rem; white-space: nowrap; background: var(--card-bg); text-align: center; min-width: 100px; }
+    .box { border: 1px solid var(--border-color); border-radius: var(--border-radius, 6px); padding: 0.4rem 0.7rem; white-space: nowrap; background: var(--card-bg); text-align: center; min-width: 100px; }
     .box.placeholder { border-style: dashed; color: var(--text-muted); background: var(--surface-muted); }
     .box.shared { border: 2px solid var(--warning-fg); background: var(--info-soft-bg); font-weight: bold; }
     .box-name { font-weight: bold; font-size: 0.85rem; }
-    .box.shared .box-name { font-weight: bold; }
     .box-meta { font-size: 0.7rem; color: var(--text-muted); }
     .children { display: flex; flex-direction: column; justify-content: space-around; margin-left: 1rem; gap: 0.5rem; }
     .child { display: flex; align-items: center; }
