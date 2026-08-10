@@ -31,8 +31,11 @@ automatischer Veröffentlichung:
   `/plugin/gesundheitstests/download?id=...`, die dieselben
   Sichtbarkeitsregeln durchsetzt: öffentliche Einträge für alle (sofern die
   Gast-Gruppe `horses.view` hat **und** das Pferd veröffentlicht ist), alle
-  übrigen nur mit der Verwaltungs-Berechtigung. Unbekannte und nicht
-  zugängliche IDs liefern eine identische 404 (kein Existenz-Orakel).
+  übrigen nur mit der Verwaltungs-Berechtigung **in einer angemeldeten
+  Sitzung** (Framework#218: ein Rechte-Fehlgriff bei der frei editierbaren
+  Gast-Gruppe kann den Verwaltungs-Zweig damit nie für Anonyme öffnen).
+  Unbekannte und nicht zugängliche IDs liefern eine identische 404 (kein
+  Existenz-Orakel).
 - Uploads werden per echter MIME-Prüfung (`finfo`) auf PDF/JPEG/PNG/WebP
   begrenzt (max. 10 MB) und unter einem zufälligen Dateinamen gespeichert -
   gleiches Muster wie `HorseController::handleImageUpload()` im Kern.
@@ -43,3 +46,24 @@ automatischer Veröffentlichung:
    Einträge je Pferd erfassen, optional mit Dokument.
 2. Als öffentlich markierte Einträge erscheinen automatisch als Abschnitt
    "🩺 DNA-/Gesundheitstests" auf der öffentlichen Pferde-Detailseite.
+
+## Technik
+
+- Berechtigung: Modul `gesundheitstests`, Aktion `manage` (Verwaltungsseite,
+  Pferdesuche und alle schreibenden Routen).
+- Routen: `/plugin/gesundheitstests/verwaltung` (GET),
+  `/plugin/gesundheitstests/suche?q=…` (GET, JSON für die Pferde-Datalist,
+  max. 50 Treffer), `/verwaltung/store` und `/verwaltung/delete` (POST) sowie
+  `/plugin/gesundheitstests/download?id=…` (GET, siehe oben).
+- Die Pferde-Auswahl der Verwaltung ist ein Suchfeld mit serverseitig
+  nachgeladener Vorschlagsliste (`<input list>` + `<datalist>`) statt eines
+  Voll-`<select>` über den gesamten Bestand; ohne JavaScript wird der
+  getippte Name beim Speichern serverseitig aufgelöst (eindeutiger Name,
+  „Name (Jahrgang)" oder das `[#id]`-Suffix der Vorschläge). Die
+  Eintragsliste ist mit 50 Einträgen je Seite paginiert (`?seite=…`).
+- Schema-Anlage: über den `install()`-Hook des PluginManagers (einmal bei
+  Aktivierung bzw. nach einem Addon-Update); auf älteren Kernen ohne diesen
+  Hook greift ein marker-geführter Fallback (`.schema-1` im
+  Plugin-Verzeichnis), damit nicht bei jedem Request ein DDL-Statement
+  läuft.
+- Tabelle: `plugin_gesundheitstests` (`ON DELETE CASCADE` auf `horses`).
