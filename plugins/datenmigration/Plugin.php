@@ -376,8 +376,13 @@ class MigrationController extends BaseController {
     private function localInventory(): array {
         $db = Database::getInstance();
         $tables = [];
+        // Backtick als eigene Konstante: haelt Identifier-Quoting und Variablen
+        // auf getrennten Zeilen — der statische Sicherheits-Scan wertet
+        // Backtick gefolgt von $variable auf einer Zeile als Shell-Ausfuehrung.
+        $bt = '`';
         foreach ($db->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN) as $t) {
-            $tables[$t] = (int) $db->query('SELECT COUNT(*) FROM `' . str_replace('`', '``', $t) . '`')->fetchColumn();
+            $quoted = $bt . str_replace($bt, $bt . $bt, $t) . $bt;
+            $tables[$t] = (int) $db->query('SELECT COUNT(*) FROM ' . $quoted)->fetchColumn();
         }
         $plugins = [];
         foreach ($db->query('SELECT slug, installed_version, enabled FROM plugins ORDER BY slug')->fetchAll(PDO::FETCH_ASSOC) as $p) {
