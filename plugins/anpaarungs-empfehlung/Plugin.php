@@ -428,23 +428,40 @@ class EmpfehlungController extends BaseController {
         if ($baseHorse !== null) {
             // Kandidaten SQL-seitig einschränken (#69): Geschlechtsfilter in
             // SQL statt in PHP, alphabetische Deckelung VOR der Berechnung.
+            // Beide Zweige als vollständige Literal-Queries (LIMIT gebunden),
+            // damit kein Variablenanteil in den Query-String gelangt - der
+            // statische Plugin-Check blockiert interpolierte SQL-Strings.
             if ($baseSex !== null) {
-                $candidateWhere = "deleted_at IS NULL AND id != ? AND (sex = ? OR sex IS NULL)";
-                $candidateParams = [$baseId, $oppositeSex[$baseSex]];
-            } else {
-                $candidateWhere = "deleted_at IS NULL AND id != ? AND (sex IS NULL OR sex != 'gelding')";
-                $candidateParams = [$baseId];
-            }
+                $countStmt = $db->prepare(
+                    'SELECT COUNT(*) FROM horses
+                     WHERE deleted_at IS NULL AND id != :id AND (sex = :sex OR sex IS NULL)'
+                );
+                $countStmt->execute(['id' => $baseId, 'sex' => $oppositeSex[$baseSex]]);
 
-            $countStmt = $db->prepare("SELECT COUNT(*) FROM horses WHERE {$candidateWhere}");
-            $countStmt->execute($candidateParams);
+                $candidateStmt = $db->prepare(
+                    'SELECT id, name, birth_year, sex FROM horses
+                     WHERE deleted_at IS NULL AND id != :id AND (sex = :sex OR sex IS NULL)
+                     ORDER BY name ASC, id ASC LIMIT :limit'
+                );
+                $candidateStmt->bindValue('sex', $oppositeSex[$baseSex]);
+            } else {
+                $countStmt = $db->prepare(
+                    "SELECT COUNT(*) FROM horses
+                     WHERE deleted_at IS NULL AND id != :id AND (sex IS NULL OR sex != 'gelding')"
+                );
+                $countStmt->execute(['id' => $baseId]);
+
+                $candidateStmt = $db->prepare(
+                    "SELECT id, name, birth_year, sex FROM horses
+                     WHERE deleted_at IS NULL AND id != :id AND (sex IS NULL OR sex != 'gelding')
+                     ORDER BY name ASC, id ASC LIMIT :limit"
+                );
+            }
             $totalCandidates = (int) $countStmt->fetchColumn();
 
-            $candidateStmt = $db->prepare(
-                "SELECT id, name, birth_year, sex FROM horses WHERE {$candidateWhere} "
-                . "ORDER BY name ASC, id ASC LIMIT " . $candidateCap
-            );
-            $candidateStmt->execute($candidateParams);
+            $candidateStmt->bindValue('id', $baseId, PDO::PARAM_INT);
+            $candidateStmt->bindValue('limit', $candidateCap, PDO::PARAM_INT);
+            $candidateStmt->execute();
             $candidates = $candidateStmt->fetchAll(PDO::FETCH_ASSOC);
 
             // Ahnen-Kanten EINMAL geschlossen laden, alle Bäume rein in PHP (#69).
