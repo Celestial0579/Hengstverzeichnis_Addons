@@ -200,10 +200,19 @@ class ExportController extends BaseController {
         $qSire = trim($_GET['q_sire'] ?? '');
         $qDam = trim($_GET['q_dam'] ?? '');
 
+        // Personen-Treffer über EXISTS statt über multiplizierende JOINs -
+        // dieselbe Bauart wie PublicController::catalog() im Kern (#125).
+        // Ohne is_published-Einschränkung: Der Export ist bewusst eine
+        // Backoffice-Funktion und enthält auch unveröffentlichte Personen
+        // (siehe README).
         if ($search !== '') {
             $like = '%' . $search . '%';
-            $where[] = "(h.name LIKE ? OR h.ueln LIKE ? OR h.foreign_ueln LIKE ? OR h.sire_name LIKE ? OR h.dam_name LIKE ? OR bs.name LIKE ? OR h.breeding_station LIKE ? OR p_breeder.name LIKE ? OR p_owner.name LIKE ?)";
-            array_push($params, $like, $like, $like, $like, $like, $like, $like, $like, $like);
+            $where[] = "(h.name LIKE ? OR h.ueln LIKE ? OR h.foreign_ueln LIKE ? OR h.sire_name LIKE ? OR h.dam_name LIKE ? OR bs.name LIKE ? OR h.breeding_station LIKE ? OR EXISTS (
+                SELECT 1 FROM horse_persons hps
+                JOIN persons ps ON ps.id = hps.person_id AND ps.deleted_at IS NULL
+                WHERE hps.horse_id = h.id AND ps.name LIKE ?
+            ))";
+            array_push($params, $like, $like, $like, $like, $like, $like, $like, $like);
         }
         if ($qName !== '') {
             $where[] = "h.name LIKE ?";
@@ -243,11 +252,19 @@ class ExportController extends BaseController {
             $params[] = (int) $qDeceased;
         }
         if ($qBreeder !== '') {
-            $where[] = "p_breeder.name LIKE ?";
+            $where[] = "EXISTS (
+                SELECT 1 FROM horse_persons hpb
+                JOIN persons pb ON pb.id = hpb.person_id AND pb.deleted_at IS NULL
+                WHERE hpb.horse_id = h.id AND hpb.role = 'breeder' AND pb.name LIKE ?
+            )";
             $params[] = '%' . $qBreeder . '%';
         }
         if ($qOwner !== '') {
-            $where[] = "p_owner.name LIKE ?";
+            $where[] = "EXISTS (
+                SELECT 1 FROM horse_persons hpo
+                JOIN persons po ON po.id = hpo.person_id AND po.deleted_at IS NULL
+                WHERE hpo.horse_id = h.id AND hpo.role = 'owner' AND po.name LIKE ?
+            )";
             $params[] = '%' . $qOwner . '%';
         }
         if ($qStation !== '') {
@@ -268,22 +285,36 @@ class ExportController extends BaseController {
 
         $whereSql = implode(' AND ', $where);
 
+        // Züchter/Besitzer aggregiert statt über multiplizierende JOINs, analog
+        // zu PublicController::catalog() im Kern (#125, dort $personAggregateJoin):
+        // Ein Pferd mit mehreren Züchtern/Besitzern (Besitzerhistorie über
+        // from_year/until_year!) erzeugt so genau EINE CSV-Zeile, die Namen
+        // stehen kommasepariert in ihrer Spalte. Das frühere DISTINCT konnte
+        // die Vervielfachung nicht kompensieren, weil sich die Zeilen in
+        // breeder_name/owner_name unterschieden (Addons#70). Alle
+        // verbleibenden JOINs sind 1:1, daher ist kein DISTINCT nötig.
+        // Abweichend vom Kern ohne is_published-Einschränkung: Backoffice-
+        // Export, unveröffentlichte Personen sind hier gewollt (siehe README).
         $sql = "
-            SELECT DISTINCT
+            SELECT
                 h.id, h.name, h.ueln, h.foreign_ueln, h.birth_year, h.birth_date, h.color, h.sex, h.breed, h.height_cm, h.status, h.is_deceased, h.death_year,
                 COALESCE(bs.name, h.breeding_station) AS station_name,
                 COALESCE(sire.name, h.sire_name) AS sire_display,
                 COALESCE(dam.name, h.dam_name) AS dam_display,
-                p_breeder.name AS breeder_name,
-                p_owner.name AS owner_name
+                hpx.breeder_name,
+                hpx.owner_name
             FROM horses h
             LEFT JOIN breeding_stations bs ON h.breeding_station_id = bs.id AND bs.deleted_at IS NULL
             LEFT JOIN horses sire ON h.sire_id = sire.id AND sire.deleted_at IS NULL
             LEFT JOIN horses dam ON h.dam_id = dam.id AND dam.deleted_at IS NULL
-            LEFT JOIN horse_persons hp_breeder ON hp_breeder.horse_id = h.id AND hp_breeder.role = 'breeder'
-            LEFT JOIN persons p_breeder ON hp_breeder.person_id = p_breeder.id AND p_breeder.deleted_at IS NULL
-            LEFT JOIN horse_persons hp_owner ON hp_owner.horse_id = h.id AND hp_owner.role = 'owner'
-            LEFT JOIN persons p_owner ON hp_owner.person_id = p_owner.id AND p_owner.deleted_at IS NULL
+            LEFT JOIN (
+                SELECT hp.horse_id,
+                       GROUP_CONCAT(DISTINCT CASE WHEN hp.role = 'breeder' THEN p.name END SEPARATOR ', ') AS breeder_name,
+                       GROUP_CONCAT(DISTINCT CASE WHEN hp.role = 'owner' THEN p.name END SEPARATOR ', ') AS owner_name
+                FROM horse_persons hp
+                JOIN persons p ON p.id = hp.person_id AND p.deleted_at IS NULL
+                GROUP BY hp.horse_id
+            ) hpx ON hpx.horse_id = h.id
             WHERE {$whereSql}
             ORDER BY h.name ASC
         ";

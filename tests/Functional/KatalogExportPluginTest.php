@@ -216,5 +216,101 @@ class KatalogExportPluginTest extends FunctionalTestCase {
             $row,
             'Der Name muss vollständig in genau einem Feld stehen.'
         );
+
+        // 9. Aggregation statt Zeilen-Vervielfachung (#70): Ein Pferd mit
+        // 1 Züchter und 3 Besitzerzeilen (Besitzerhistorie über
+        // from_year/until_year) erzeugt genau EINE Datenzeile; die Namen
+        // stehen kommasepariert in ihrer jeweiligen Spalte. Vorher
+        // multiplizierten die horse_persons-JOINs die Zeilen (3 Besitzer ->
+        // 3 CSV-Zeilen), was SELECT DISTINCT nicht kompensieren konnte, weil
+        // sich die Zeilen in der Besitzer-Spalte unterschieden.
+        //
+        // Personen direkt per DB angelegt (Präzedenz: GdprEraseTest im
+        // Framework-Repo, VerkaufsboersePluginTest hier) - für den
+        // Backoffice-Export ist keine Veröffentlichung nötig.
+        $db = \App\Database::getInstance();
+        $personStmt = $db->prepare('INSERT INTO persons (name) VALUES (?)');
+        $personIds = [];
+        foreach (['Zuechter', 'BesitzerB', 'BesitzerC', 'BesitzerD'] as $suffix) {
+            $personStmt->execute(["CsvPerson{$suffix}-{$unique}"]);
+            $personIds[$suffix] = (int) $db->lastInsertId();
+        }
+
+        $multiOwnerName = "CsvMehrbesitzer-{$unique}";
+        $createFormMulti = $admin->get('/admin/horses/create');
+        $createResponseMulti = $admin->post('/admin/horses/store', [
+            'csrf_token' => $createFormMulti->formField('csrf_token') ?? '',
+            'name' => $multiOwnerName,
+            'status' => 'active',
+            'persons' => [
+                ['person_id' => (string) $personIds['Zuechter'], 'role' => 'breeder'],
+                ['person_id' => (string) $personIds['BesitzerB'], 'role' => 'owner', 'from_year' => '1998', 'until_year' => '2005'],
+                ['person_id' => (string) $personIds['BesitzerC'], 'role' => 'owner', 'from_year' => '2005', 'until_year' => '2015'],
+                ['person_id' => (string) $personIds['BesitzerD'], 'role' => 'owner', 'from_year' => '2015'],
+            ],
+        ]);
+        $this->assertSame('/admin/horses?success=created', $createResponseMulti->location());
+
+        $csvMulti = $admin->get('/plugin/katalog-export/csv?q_name=' . urlencode($multiOwnerName));
+        $this->assertSame(200, $csvMulti->statusCode);
+
+        $csvLines = array_values(array_filter(
+            preg_split('/\r\n|\n/', $csvMulti->body) ?: [],
+            static fn (string $line): bool => trim($line) !== ''
+        ));
+        $this->assertCount(
+            2,
+            $csvLines,
+            'Kopfzeile + genau EINE Datenzeile erwartet. Mehr Zeilen heißt: die '
+            . 'horse_persons-JOINs vervielfachen den Export wieder je '
+            . "Züchter x Besitzer (#70). Body: {$csvMulti->body}"
+        );
+
+        $dataRow = str_getcsv($csvLines[1], ';', '"', '');
+        $this->assertCount(18, $dataRow);
+        $this->assertSame($multiOwnerName, $dataRow[1]);
+        $this->assertSame(
+            "CsvPersonZuechter-{$unique}",
+            $dataRow[16],
+            'Züchter-Spalte muss den (einzigen) Züchter enthalten.'
+        );
+
+        // GROUP_CONCAT garantiert ohne ORDER BY keine Reihenfolge (der Kern
+        // verzichtet in $personAggregateJoin ebenfalls darauf) - deshalb
+        // sortiert vergleichen statt auf eine feste Reihenfolge zu bestehen.
+        $owners = array_map('trim', explode(',', (string) $dataRow[17]));
+        sort($owners);
+        $expectedOwners = [
+            "CsvPersonBesitzerB-{$unique}",
+            "CsvPersonBesitzerC-{$unique}",
+            "CsvPersonBesitzerD-{$unique}",
+        ];
+        $this->assertSame(
+            $expectedOwners,
+            $owners,
+            'Alle drei Besitzer der Historie müssen kommasepariert in EINER Zelle stehen.'
+        );
+
+        // Die EXISTS-Filter finden das Pferd über jeden historischen Besitzer -
+        // und liefern es auch dann nur EINMAL.
+        $csvOwnerFiltered = $admin->get('/plugin/katalog-export/csv?q_owner=' . urlencode("CsvPersonBesitzerB-{$unique}"));
+        $this->assertSame(200, $csvOwnerFiltered->statusCode);
+        $this->assertSame(
+            1,
+            substr_count($csvOwnerFiltered->body, $multiOwnerName),
+            'q_owner muss das Pferd genau einmal liefern - weder 0x (Filter kaputt) noch mehrfach (JOIN multipliziert).'
+        );
+
+        $csvBreederFiltered = $admin->get('/plugin/katalog-export/csv?q_breeder=' . urlencode("CsvPersonZuechter-{$unique}"));
+        $this->assertStringContainsString($multiOwnerName, $csvBreederFiltered->body);
+
+        // Rollenschärfe: Besitzer B ist kein Züchter, der q_breeder-EXISTS
+        // darf ihn nicht als Züchter-Treffer werten.
+        $csvRoleMiss = $admin->get('/plugin/katalog-export/csv?q_breeder=' . urlencode("CsvPersonBesitzerB-{$unique}"));
+        $this->assertStringNotContainsString($multiOwnerName, $csvRoleMiss->body);
+
+        // Allgemeine Suche trifft Personennamen rollenunabhängig (EXISTS).
+        $csvSearch = $admin->get('/plugin/katalog-export/csv?search=' . urlencode("CsvPersonBesitzerC-{$unique}"));
+        $this->assertStringContainsString($multiOwnerName, $csvSearch->body);
     }
 }
