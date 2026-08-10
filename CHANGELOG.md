@@ -8,6 +8,8 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+## [0.4.0] – 2026-08-10
+
 ### Alle Addons
 
 - Eigenständige Plugin-Seiten rendern im Haupt-Layout des Frameworks
