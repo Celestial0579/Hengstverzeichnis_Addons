@@ -12,6 +12,9 @@ namespace Tests\Functional;
  * DeckanfragePluginTest liefert App\Service\Mailer::send() daher
  * kontrolliert `false`, die reale Anfrage erwartet folglich das Ergebnis
  * "fehler", nicht "erfolg" (siehe dortiger Kommentar für die Begründung).
+ *
+ * Zusätzlich abgedeckt (#74): die Datalist-Pferdesuche samt No-JS-Fallback
+ * sowie die Paginierung von Verwaltung und öffentlicher Börse.
  */
 class VerkaufsboersePluginTest extends FunctionalTestCase {
 
@@ -52,6 +55,26 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
         $verwaltungPage = $admin->get('/plugin/verkaufsboerse/verwaltung');
         $this->assertSame(200, $verwaltungPage->statusCode);
 
+        // 3a. Pferde-Auswahl (#74): Suchfeld mit Datalist statt Voll-<select>
+        // über den gesamten Bestand; die gewählte ID reist im Hidden-Feld.
+        $this->assertStringContainsString('list="horse_q_liste"', $verwaltungPage->body, 'Das Pferd-Feld sollte eine Datalist referenzieren.');
+        $this->assertStringContainsString('<datalist id="horse_q_liste">', $verwaltungPage->body);
+        $this->assertStringContainsString('name="horse_id" id="horse_id" value=""', $verwaltungPage->body);
+        $this->assertStringNotContainsString('<select name="horse_id"', $verwaltungPage->body, 'Der frühere Voll-<select> über alle Pferde darf nicht mehr gerendert werden.');
+
+        // 3b. Suchroute (#74): JSON {id, label}, nur für Berechtigte, leere
+        // Suche liefert eine leere Liste statt des Gesamtbestands.
+        $sucheResponse = $admin->get('/plugin/verkaufsboerse/suche?q=' . urlencode($horseName));
+        $this->assertSame(200, $sucheResponse->statusCode);
+        $suggestions = json_decode($sucheResponse->body, true);
+        $this->assertIsArray($suggestions, "Suchroute sollte JSON liefern. Body: {$sucheResponse->body}");
+        $this->assertCount(1, $suggestions, 'Der eindeutige Testname sollte genau einen Treffer liefern.');
+        $this->assertSame($horseId, (int) $suggestions[0]['id']);
+        $this->assertStringContainsString($horseName, (string) $suggestions[0]['label']);
+
+        $emptySuche = $admin->get('/plugin/verkaufsboerse/suche?q=');
+        $this->assertSame('[]', trim($emptySuche->body), 'Ohne Suchbegriff darf die Suchroute nichts ausliefern.');
+
         $storeResponse = $admin->post('/plugin/verkaufsboerse/verwaltung/store', [
             'csrf_token' => $verwaltungPage->formField('csrf_token') ?? '',
             'horse_id' => (string) $horseId,
@@ -67,11 +90,54 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
         $this->assertStringContainsString($contactEmail, $verwaltungAfter->body);
         $this->assertStringContainsString('1.500,00 €', $verwaltungAfter->body);
 
+        // 4b. No-JS-Fallback (#74): Ohne horse_id löst store() den getippten
+        // Text (horse_q) serverseitig zu einer Pferde-ID auf.
+        $noJsName = "NoJSVerkauf-{$unique}";
+        $noJsId = $this->createHorse($admin, $noJsName, ['status' => 'active']);
+        $noJsEmail = "nojs-{$unique}@example.test";
+        $storeNoJs = $admin->post('/plugin/verkaufsboerse/verwaltung/store', [
+            'csrf_token' => $verwaltungPage->formField('csrf_token') ?? '',
+            'horse_q' => $noJsName,
+            'price' => '2500.00',
+            'contact_email' => $noJsEmail,
+        ]);
+        $this->assertSame('/plugin/verkaufsboerse/verwaltung', $storeNoJs->location());
+        $this->assertStringContainsString(
+            $noJsEmail,
+            $admin->get('/plugin/verkaufsboerse/verwaltung')->body,
+            'Ein eindeutiger Name in horse_q sollte serverseitig aufgelöst werden.'
+        );
+
+        // ... ein unauflösbarer Text legt nichts an.
+        $unresolvedEmail = "verwaist-{$unique}@example.test";
+        $storeUnresolved = $admin->post('/plugin/verkaufsboerse/verwaltung/store', [
+            'csrf_token' => $verwaltungPage->formField('csrf_token') ?? '',
+            'horse_q' => "GibtEsNicht-{$unique}",
+            'contact_email' => $unresolvedEmail,
+        ]);
+        $this->assertSame('/plugin/verkaufsboerse/verwaltung', $storeUnresolved->location());
+        $this->assertStringNotContainsString(
+            $unresolvedEmail,
+            $admin->get('/plugin/verkaufsboerse/verwaltung')->body,
+            'Ein unauflösbarer Pferdename darf kein Inserat anlegen.'
+        );
+
         // 5. Öffentliche Übersicht zeigt das Inserat.
         $listePage = $visitor->get('/plugin/verkaufsboerse/liste');
         $this->assertSame(200, $listePage->statusCode);
         $this->assertStringContainsString($horseName, $listePage->body);
         $this->assertStringContainsString('1.500,00 €', $listePage->body);
+
+        // 5a. Paginierung (#74): Unterhalb der Seitengröße erscheint keine
+        // Blätter-Leiste, und ein zu großer ?seite=-Wert wird auf die letzte
+        // vorhandene Seite geklemmt statt eine leere Liste zu zeigen.
+        $this->assertStringNotContainsString('Seite 1 von 1', $listePage->body, 'Bei nur einer Seite darf keine Blätter-Leiste erscheinen.');
+        $clampedListe = $visitor->get('/plugin/verkaufsboerse/liste?seite=999');
+        $this->assertSame(200, $clampedListe->statusCode);
+        $this->assertStringContainsString($horseName, $clampedListe->body, 'Ein zu großer ?seite=-Wert soll auf die letzte Seite geklemmt werden.');
+        $clampedVerwaltung = $admin->get('/plugin/verkaufsboerse/verwaltung?seite=999');
+        $this->assertSame(200, $clampedVerwaltung->statusCode);
+        $this->assertStringContainsString($horseName, $clampedVerwaltung->body, 'Auch die Verwaltung klemmt einen zu großen ?seite=-Wert.');
 
         // 5b. Regression zu Issue #24: Ein Inserat für ein UNVERÖFFENTLICHTES
         // Pferd darf in der öffentlichen Übersicht nicht erscheinen - /horse

@@ -33,25 +33,38 @@ use PDO;
 
 class Plugin {
 
+    /**
+     * Sorgt dafür, dass das Script-Tag genau einmal je Request ausgegeben
+     * wird (Addons#73): buttonHtml() läuft über catalog.card_sections für
+     * JEDE Katalogkarte - vorher stand dadurch der komplette 3,8-KB-
+     * Inline-Block 24-mal (CATALOG_PER_PAGE) im HTML einer Katalogseite.
+     */
+    private bool $scriptEmitted = false;
+
     public function register(HookManager $hooks): void {
         $hooks->addFilter('horse.detail_sections', [$this, 'addDetailSection']);
         $hooks->addFilter('catalog.card_sections', [$this, 'addCardSection']);
     }
 
     /**
-     * Gemeinsames, mehrfach einbindbares Button-Snippet. Das Skript ist per
-     * window-Guard idempotent - auf einer Katalogseite mit vielen Karten wird
-     * es zwar mehrfach ausgegeben, definiert die Helfer aber nur einmal.
-     * Ein MutationObserver hält die Button-Beschriftungen auch nach
-     * AJAX-Nachladen des Katalogs (public_catalog_cards.php) korrekt.
+     * Gemeinsames, mehrfach einbindbares Button-Snippet. Die clientseitige
+     * Logik (localStorage lesen/schreiben, Buttons synchronisieren,
+     * Katalog-Einstieg, MutationObserver für das AJAX-Nachladen) liegt als
+     * statisches Asset in assets/merkliste.js und wird über die Plugin-Route
+     * GET /plugin/merkliste/assets.js cachebar ausgeliefert (Addons#73);
+     * hier wird nur noch einmal je Request das <script src=... defer>-Tag
+     * angehängt.
      */
     private function buttonHtml(int $horseId, bool $compact): string {
         $style = $compact
             ? 'padding:0.25rem 0.6rem;font-size:0.8em;'
             : 'padding:0.5rem 1rem;';
 
+        // Der window.-Guard im onclick deckt den kurzen Zeitraum ab, bevor
+        // das defer-Skript geladen ist: ein Klick verpufft dann still statt
+        // mit einem ReferenceError in der Konsole.
         $html = '<button type="button" data-hv-merkliste="' . $horseId . '" '
-            . 'onclick="hvMerklisteToggle(this)" '
+            . 'onclick="window.hvMerklisteToggle&&hvMerklisteToggle(this)" '
             . 'style="' . $style . 'margin-top:0.5rem;border:1px solid var(--warning-fg);background:var(--info-soft-bg);border-radius:var(--border-radius, 4px);cursor:pointer;">'
             . '☆ Merken</button>';
 
@@ -62,69 +75,29 @@ class Plugin {
             $html .= ' <a href="/plugin/merkliste" class="btn btn-secondary" style="margin-left:0.5rem;padding:0.5rem 1rem;">Zur Merkliste</a>';
         }
 
-        $html .= '<script>
-            if (!window.hvMerkliste) {
-                window.hvMerkliste = {
-                    read: function () {
-                        try {
-                            var raw = JSON.parse(localStorage.getItem("hv_merkliste") || "[]");
-                            return Array.isArray(raw) ? raw.map(Number).filter(function (n) { return n > 0; }) : [];
-                        } catch (e) { return []; }
-                    },
-                    write: function (ids) {
-                        localStorage.setItem("hv_merkliste", JSON.stringify(ids));
-                    },
-                    syncButtons: function () {
-                        var ids = window.hvMerkliste.read();
-                        document.querySelectorAll("[data-hv-merkliste]").forEach(function (btn) {
-                            var saved = ids.indexOf(parseInt(btn.getAttribute("data-hv-merkliste"), 10)) !== -1;
-                            var next = saved ? "★ Gemerkt" : "☆ Merken";
-                            // Nur schreiben, wenn sich der Text tatsaechlich aendert:
-                            // Jede textContent-Zuweisung ist selbst eine DOM-Mutation,
-                            // die den MutationObserver unten erneut ausloest. Ohne diesen
-                            // Guard synchronisiert sich der Observer endlos selbst (100% CPU,
-                            // die Seite friert ein), sobald ueberhaupt Merken-Buttons im DOM
-                            // sind - also auf jedem befuellten Katalog und jeder Detailseite.
-                            if (btn.textContent !== next) { btn.textContent = next; }
-                        });
-                        window.hvMerkliste.ensureCatalogEntry(ids);
-                    },
-                    // Genau EIN "Zur Merkliste"-Einstieg auf der Katalogseite (#49):
-                    // neben dem Trefferzahl-Badge, den es nur dort gibt - die
-                    // Detailseite hat ihren eigenen Link. Einfuegen ist idempotent
-                    // (ID-Guard), der Zaehler-Text folgt demselben textContent-
-                    // Guard wie syncButtons (sonst Observer-Endlosschleife, #47).
-                    ensureCatalogEntry: function (ids) {
-                        var badge = document.getElementById("hit-count-badge");
-                        if (!badge) { return; }
-                        var entry = document.getElementById("hv-merkliste-entry");
-                        if (!entry) {
-                            entry = document.createElement("a");
-                            entry.id = "hv-merkliste-entry";
-                            entry.href = "/plugin/merkliste";
-                            entry.className = "btn btn-secondary";
-                            entry.style.cssText = "padding:0.3rem 0.8rem;font-size:0.9rem;";
-                            badge.parentNode.insertBefore(entry, badge);
-                        }
-                        var next = "★ Merkliste (" + ids.length + ")";
-                        if (entry.textContent !== next) { entry.textContent = next; }
-                    }
-                };
-                window.hvMerklisteToggle = function (btn) {
-                    var id = parseInt(btn.getAttribute("data-hv-merkliste"), 10);
-                    var ids = window.hvMerkliste.read();
-                    var pos = ids.indexOf(id);
-                    if (pos === -1) { ids.push(id); } else { ids.splice(pos, 1); }
-                    window.hvMerkliste.write(ids);
-                    window.hvMerkliste.syncButtons();
-                };
-                document.addEventListener("DOMContentLoaded", window.hvMerkliste.syncButtons);
-                new MutationObserver(function () { window.hvMerkliste.syncButtons(); })
-                    .observe(document.documentElement, { childList: true, subtree: true });
-            }
-        </script>';
+        if (!$this->scriptEmitted) {
+            $this->scriptEmitted = true;
+            $html .= self::scriptTag();
+        }
 
         return $html;
+    }
+
+    /**
+     * <script>-Tag für das statische Merklisten-Skript. `defer` entkoppelt
+     * das Laden vom HTML-Parsen; der ?v=-Parameter (mtime der Datei)
+     * invalidiert den Browser-Cache bei jedem Deploy einer neuen Fassung,
+     * ohne die max-age=86400-Cachebarkeit im Normalfall zu opfern. Der
+     * Router matcht Pfade ohne Query-String, der Parameter stört die Route
+     * also nicht.
+     */
+    private static function scriptTag(): string {
+        $version = @filemtime(self::assetPath()) ?: 0;
+        return '<script src="/plugin/merkliste/assets.js?v=' . $version . '" defer></script>';
+    }
+
+    public static function assetPath(): string {
+        return __DIR__ . '/assets/merkliste.js';
     }
 
     /**
@@ -151,6 +124,7 @@ class Plugin {
         return [
             ['method' => 'GET', 'path' => '/', 'callback' => [MerklisteController::class, 'show']],
             ['method' => 'GET', 'path' => '/api', 'callback' => [MerklisteController::class, 'api']],
+            ['method' => 'GET', 'path' => '/assets.js', 'callback' => [MerklisteController::class, 'assetsJs']],
         ];
     }
 }
@@ -165,6 +139,28 @@ class Plugin {
 class MerklisteController extends BaseController {
 
     private const MAX_IDS = 100;
+
+    /**
+     * Statisches Merklisten-Skript (Addons#73): assets/merkliste.js mit
+     * JS-Content-Type und Cache-Control ausliefern, damit der Browser-Cache
+     * greift - vorher stand derselbe Code als Inline-Block in jeder
+     * Katalogkarte. Anonym erreichbar wie die übrigen Merklisten-Routen;
+     * der Inhalt ist statischer Code ohne Daten.
+     */
+    public function assetsJs(): void {
+        $path = Plugin::assetPath();
+        if (!is_file($path)) {
+            http_response_code(404);
+            exit;
+        }
+
+        header('Content-Type: application/javascript; charset=utf-8');
+        header('Cache-Control: public, max-age=86400');
+        header('X-Content-Type-Options: nosniff');
+        header('Content-Length: ' . (string) filesize($path));
+        readfile($path);
+        exit;
+    }
 
     public function show(): void {
         // Inhalt als Fragment im Haupt-Layout über PluginPage (Addons#66):

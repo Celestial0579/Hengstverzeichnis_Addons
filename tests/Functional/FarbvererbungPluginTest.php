@@ -12,7 +12,12 @@ namespace Tests\Functional;
  * eingetragenen Farbe auf der öffentlichen Detailseite (horse.detail_sections),
  * den Farbrechner mit einem eindeutigen Kreuzungsfall (Rotfalbe × Rotfalbe →
  * 100 % Rotfalbe, da ee × ee immer ee ergibt) sowie die Durchsetzung der selbst
- * registrierten Berechtigung farbvererbung.calculate.
+ * registrierten Berechtigung farbvererbung.calculate; seit #74 außerdem das
+ * gedeckelte Nachschlage-Element "Farben im Register" samt /suche-Route.
+ *
+ * Die Rechen-MATRIX (Agouti-/Cream-Locus, Heterozygotie-Annahme, Summe = 1)
+ * prüft tests/Unit/FarbvererbungGenetikTest.php ohne HTTP (#76) - hier bleibt
+ * bewusst nur der eine eindeutige Durchstich durch den ganzen Stack.
  */
 class FarbvererbungPluginTest extends FunctionalTestCase {
 
@@ -103,6 +108,37 @@ class FarbvererbungPluginTest extends FunctionalTestCase {
         $this->assertStringContainsString('100,00 %', $calcResponse->body);
         $this->assertStringContainsString('Rotfalbe (Rødblakk)', $calcResponse->body);
 
+        // 2b. Nachschlage-Element "Farben im Register" (#74): statt des
+        // früheren Komplettbestands eine gedeckelte Tabelle (nur Pferde MIT
+        // eingetragener Farbe) plus Suchfeld mit <datalist> an der /suche-Route.
+        $noColorId = $this->createHorse($admin, "Farblos-{$unique}", ['status' => 'active']);
+        $registerPage = $admin->get('/plugin/farbvererbung/rechner');
+        $this->assertSame(200, $registerPage->statusCode);
+        $this->assertStringContainsString('list="farbvererbung_suche_liste"', $registerPage->body, 'Suchfeld des Nachschlage-Elements fehlt.');
+        $this->assertStringContainsString('<datalist id="farbvererbung_suche_liste">', $registerPage->body, 'datalist des Nachschlage-Elements fehlt.');
+        $this->assertStringContainsString("Farbe-{$unique}", $registerPage->body, 'Pferd mit eingetragener Farbe gehört in die Nachschlage-Tabelle.');
+        $this->assertStringNotContainsString("Farblos-{$unique}", $registerPage->body,
+            'Ein Pferd OHNE eingetragene Farbe trägt zur Farb-Nachschlage-Tabelle nichts bei (#74).');
+
+        // 2c. /suche-Route (#74): JSON, Name gefiltert, Vorschlagstext nennt
+        // Farbe und Falb-Einordnung direkt.
+        $sucheHits = json_decode($admin->get('/plugin/farbvererbung/suche?q=' . urlencode("Farbe-{$unique}"))->body, true);
+        $this->assertIsArray($sucheHits);
+        $this->assertCount(1, $sucheHits, 'Suche nach dem eindeutigen Namen muss genau einen Treffer liefern.');
+        $this->assertSame($horseId, $sucheHits[0]['id']);
+        $this->assertStringContainsString("Farbe-{$unique}", $sucheHits[0]['label']);
+        $this->assertStringContainsString('Rotfalbe (Rødblakk)', $sucheHits[0]['label'],
+            'Der Vorschlagstext muss die Falb-Einordnung der eingetragenen Farbe nennen - er IST die Antwort des Nachschlagens.');
+
+        $this->assertSame([], json_decode($admin->get('/plugin/farbvererbung/suche?q=' . urlencode("Farblos-{$unique}"))->body, true),
+            'Pferde ohne eingetragene Farbe haben in den Farb-Vorschlägen nichts zu suchen.');
+
+        // Die generische Grundfarbe aus 1b bleibt auch hier ohne Falb-Zuordnung
+        // (gleiche keyFromText()-Regel wie auf der Detailseite, #50).
+        $plainHits = json_decode($admin->get('/plugin/farbvererbung/suche?q=' . urlencode("Braunes-{$unique}"))->body, true);
+        $this->assertCount(1, $plainHits);
+        $this->assertStringContainsString('keine Falb-Zuordnung', $plainHits[0]['label']);
+
         // 3. Berechtigungsdurchsetzung: Editor ohne farbvererbung.calculate -> 403 ...
         $editorGroupId = $this->findBuiltinGroupId($admin, 'Editor');
         $editor = $this->createAndLoginEditor(
@@ -117,6 +153,12 @@ class FarbvererbungPluginTest extends FunctionalTestCase {
             403,
             $deniedResponse->statusCode,
             'Ohne farbvererbung.calculate sollte die Plugin-Route 403 liefern.'
+        );
+        $deniedSuche = $editor->get('/plugin/farbvererbung/suche?q=Farbe');
+        $this->assertSame(
+            403,
+            $deniedSuche->statusCode,
+            'Die /suche-Route (#74) unterliegt derselben Berechtigung wie der Rechner.'
         );
 
         // ... und ist nach Zuweisung der Berechtigung erreichbar.

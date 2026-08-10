@@ -54,16 +54,35 @@ class MerklistePluginTest extends FunctionalTestCase {
             'Der "Zur Merkliste"-Link muss als .btn btn-secondary gerendert werden'
         );
 
-        // 2. Kompakter Button auf den Katalogkarten (catalog.card_sections) und
-        // der Katalog-Einstieg zur Merkliste (#49): das idempotente Skript hängt
-        // clientseitig GENAU EINEN Einstiegs-Link neben den Trefferzahl-Badge -
-        // serverseitig prüfbar ist, dass der Einfüge-Code mit ausgeliefert wird
-        // und das Ziel-Element (hit-count-badge) auf der Seite existiert.
+        // 2. Kompakter Button auf den Katalogkarten (catalog.card_sections).
+        // Die clientseitige Logik kommt seit #73 aus einem statischen Asset:
+        // das Script-Tag steht GENAU EINMAL in der Seite (Instanz-Flag) statt
+        // als 3,8-KB-Inline-Block je Karte; das Ziel-Element des
+        // Katalog-Einstiegs (hit-count-badge) existiert weiterhin.
         $catalogPage = $visitor->get('/katalog');
         $this->assertSame(200, $catalogPage->statusCode);
         $this->assertStringContainsString('data-hv-merkliste=', $catalogPage->body);
-        $this->assertStringContainsString('hv-merkliste-entry', $catalogPage->body, 'Katalog-Einstiegs-Skript fehlt');
         $this->assertStringContainsString('id="hit-count-badge"', $catalogPage->body, 'Ankerelement für den Einstieg fehlt');
+        $this->assertSame(
+            1,
+            preg_match_all('/<script src="\/plugin\/merkliste\/assets\.js(\?v=\d+)?" defer><\/script>/', $catalogPage->body),
+            'Das Merklisten-Script-Tag muss genau EINMAL je Seite ausgegeben werden (#73)'
+        );
+        $this->assertStringNotContainsString('window.hvMerkliste =', $catalogPage->body, 'Inline-Skriptblock darf nicht mehr im Katalog-HTML stehen (#73)');
+
+        // 2b. Das statische Asset selbst: 200, JS-Content-Type, cachebar -
+        // und es enthält die Logik, die vorher inline lag (Buttons
+        // synchronisieren, Katalog-Einstieg, Observer auf #catalog-grid).
+        $assetResponse = $visitor->get('/plugin/merkliste/assets.js');
+        $this->assertSame(200, $assetResponse->statusCode);
+        $this->assertStringContainsString('application/javascript', (string) $assetResponse->header('Content-Type'));
+        $cacheControl = (string) $assetResponse->header('Cache-Control');
+        $this->assertStringContainsString('public', $cacheControl, 'Asset muss browser-/proxy-cachebar sein (#73)');
+        $this->assertStringContainsString('max-age=86400', $cacheControl);
+        $this->assertStringContainsString('hvMerklisteToggle', $assetResponse->body);
+        $this->assertStringContainsString('hv-merkliste-entry', $assetResponse->body, 'Katalog-Einstiegs-Code fehlt im Asset');
+        $this->assertStringContainsString('catalog-grid', $assetResponse->body, 'Observer muss auf den Karten-Container eingeschränkt sein (#73)');
+        $this->assertStringNotContainsString('document.documentElement', $assetResponse->body, 'Observer darf nicht mehr das ganze Dokument beobachten (#73)');
 
         // 3. Merklisten-Seite ist anonym erreichbar.
         $listPage = $visitor->get('/plugin/merkliste');

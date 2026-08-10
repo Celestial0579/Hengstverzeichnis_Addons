@@ -30,5 +30,13 @@ Keine Berechtigung nötig - die API gibt ausschließlich Daten aus, die der
   in der angefragten Reihenfolge zurück (der vom Besucher gemerkten), nicht
   in Datenbank-Reihenfolge; jedes Element trägt `id`, `name`, `birth_year`,
   `image_url` und `url`.
+- `GET /plugin/merkliste/assets.js` - die clientseitige Logik als statisches
+  Asset (`assets/merkliste.js`, `Cache-Control: public, max-age=86400`).
+  `buttonHtml()` hängt nur noch einmal je Seite ein `<script … defer>`-Tag an
+  statt eines 3,8-KB-Inline-Blocks je Katalogkarte
+  ([#73](https://github.com/Celestial0579/Hengstverzeichnis_Addons/issues/73));
+  ein `?v=`-Parameter (mtime) invalidiert den Cache bei neuen Fassungen.
 - Die Button-Beschriftung ("☆ Merken"/"★ Gemerkt") wird per
-  MutationObserver auch nach AJAX-Nachladen des Katalogs synchron gehalten.
+  MutationObserver auch nach AJAX-Nachladen des Katalogs synchron gehalten;
+  beobachtet wird gezielt der Karten-Container `#catalog-grid` (auf Seiten
+  ohne diesen Container läuft kein Observer).

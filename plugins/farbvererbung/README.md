@@ -12,9 +12,14 @@ anhand der Farbgenetik des Norwegischen Fjordpferds.
   `farbvererbung.calculate` (unter **Admin → Gruppen** zuweisbar; Admins haben
   sie systemseitig immer). Die Route ist nur per direkter URL erreichbar -
   das Addon registriert keine Dashboard-Kachel. Das Nachschlage-Element
-  "Farben im Register" dort listet die Farbwerte aller nicht gelöschten
-  Pferde, auch unveröffentlichter - zulässig, weil berechtigungsgeschützt,
-  aber bewusst mehr als die öffentliche Sicht.
+  "Farben im Register" dort listet die Farbwerte nicht gelöschter Pferde mit
+  eingetragener Farbe, auch unveröffentlichter - zulässig, weil
+  berechtigungsgeschützt, aber bewusst mehr als die öffentliche Sicht. Die
+  Tabelle ist auf die ersten 200 Pferde (alphabetisch) gedeckelt (#74);
+  darüber hinaus schlägt ein Suchfeld (`<input list>` + `<datalist>`) über
+  `GET /plugin/farbvererbung/suche?q=…` nach (höchstens 50 Treffer, gleiche
+  Berechtigung wie der Rechner) - jeder Vorschlag nennt Farbe und
+  Falb-Einordnung direkt im Text.
 - **Detailseiten-Hinweis** (`horse.detail_sections`): ordnet die im Feld
   *Farbe* eingetragene Bezeichnung – sofern erkennbar – einer der fünf
   Falbfarben zu und zeigt die genetische Einordnung an.

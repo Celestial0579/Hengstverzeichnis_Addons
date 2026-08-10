@@ -107,6 +107,11 @@ class Plugin {
                 'path' => '/rechner',
                 'callback' => [RechnerController::class, 'show'],
             ],
+            [
+                'method' => 'GET',
+                'path' => '/suche',
+                'callback' => [RechnerController::class, 'suche'],
+            ],
         ];
     }
 }
@@ -299,6 +304,18 @@ class FjordColor {
  */
 class RechnerController extends BaseController {
 
+    /**
+     * Obergrenze der Nachschlage-Tabelle "Farben im Register" (#74). Vorher
+     * lud die Seite den GESAMTEN Pferdebestand und renderte ihn - inklusive
+     * einem FjordColor::keyFromText() je Zeile - in ein zugeklapptes
+     * <details>, das kaum ein Besucher öffnet. Alles jenseits der Grenze ist
+     * über das Suchfeld (-> /suche) erreichbar.
+     */
+    private const REGISTER_LIMIT = 200;
+
+    /** Maximale Trefferzahl der /suche-Route (#74). */
+    private const SUCHE_LIMIT = 50;
+
     public function __construct() {
         parent::__construct();
         $this->checkAuth();
@@ -309,9 +326,19 @@ class RechnerController extends BaseController {
         $sireColor = self::readColorParam('sire_color');
         $damColor = self::readColorParam('dam_color');
 
+        // Gedeckelt statt Komplettbestand (#74); Pferde ohne eingetragene
+        // Farbe trügen zur Farb-Nachschlage-Tabelle ohnehin nichts bei. Eine
+        // Zeile mehr als die Grenze, um "es gibt weitere" ohne zweite
+        // COUNT-Abfrage zu erkennen.
         $horses = Database::getInstance()->query(
-            "SELECT id, name, birth_year, color FROM horses WHERE deleted_at IS NULL ORDER BY name ASC"
+            "SELECT id, name, birth_year, color FROM horses
+             WHERE deleted_at IS NULL AND color IS NOT NULL AND color != ''
+             ORDER BY name ASC LIMIT " . (self::REGISTER_LIMIT + 1)
         )->fetchAll(PDO::FETCH_ASSOC);
+        $registerTruncated = count($horses) > self::REGISTER_LIMIT;
+        if ($registerTruncated) {
+            $horses = array_slice($horses, 0, self::REGISTER_LIMIT);
+        }
 
         $result = ($sireColor !== null && $damColor !== null)
             ? FjordColor::predictFoal($sireColor, $damColor)
@@ -359,6 +386,19 @@ class RechnerController extends BaseController {
         }
 
         $content .= '<details style="margin-top:1.5rem;"><summary>Farben im Register (zum Nachschlagen)</summary>';
+
+        // Suchfeld mit <datalist> (#74): schlägt Pferde samt Farbe und
+        // Falb-Einordnung direkt im Vorschlagstext nach - so bleiben auch
+        // Pferde jenseits der Tabellen-Obergrenze nachschlagbar, ohne den
+        // Gesamtbestand ins HTML zu rendern. Rein lesend, kein Hidden-Feld
+        // nötig: Die Antwort STEHT im Vorschlagstext.
+        $content .= '<div class="form-group" style="margin-top:0.5rem;">';
+        $content .= '<label for="farbvererbung_suche">Pferd nachschlagen</label>';
+        $content .= '<input type="text" id="farbvererbung_suche" class="form-control" list="farbvererbung_suche_liste"'
+            . ' placeholder="Name eintippen - Vorschläge zeigen Farbe und Falb-Einordnung …" autocomplete="off">';
+        $content .= '<datalist id="farbvererbung_suche_liste"></datalist>';
+        $content .= '</div>';
+
         $content .= '<table style="margin-top:0.5rem;">';
         foreach ($horses as $h) {
             $key = FjordColor::keyFromText($h['color'] ?? '');
@@ -368,12 +408,87 @@ class RechnerController extends BaseController {
                 . '<td>' . htmlspecialchars((string) ($h['color'] ?? ''), ENT_QUOTES, 'UTF-8') . '</td>'
                 . '<td class="farbvererbung-muted">' . htmlspecialchars($mapped, ENT_QUOTES, 'UTF-8') . '</td></tr>';
         }
-        $content .= '</table></details>';
+        $content .= '</table>';
+        if ($registerTruncated) {
+            $content .= '<p class="farbvererbung-muted">Aus Platzgründen nur die ersten '
+                . self::REGISTER_LIMIT . ' Pferde (alphabetisch) mit eingetragener Farbe - '
+                . 'weitere über das Suchfeld oben oder die vollständige Liste unter '
+                . '<a href="/admin/horses">Pferde verwalten</a>.</p>';
+        }
+        $content .= '</details>';
 
         $content .= '<p style="margin-top:2rem;"><a href="/admin" class="btn btn-secondary">Zurück zum Dashboard</a></p>';
         $content .= '</div>';
 
+        // Befüllt die datalist über die /suche-Route (#74); Bauart wie im
+        // inzuchtkoeffizient-Addon (entprelltes fetch, still scheiternd -
+        // die Vorschläge sind Komfort, die Tabelle bleibt auch ohne JS da).
+        $content .= '<script>
+            (function () {
+                var feld = document.getElementById("farbvererbung_suche");
+                var liste = document.getElementById("farbvererbung_suche_liste");
+                var timer = null;
+                feld.addEventListener("input", function () {
+                    if (timer) { clearTimeout(timer); }
+                    timer = setTimeout(function () {
+                        fetch("/plugin/farbvererbung/suche?q=" + encodeURIComponent(feld.value.trim()))
+                            .then(function (antwort) { return antwort.ok ? antwort.json() : []; })
+                            .then(function (zeilen) {
+                                liste.textContent = "";
+                                zeilen.forEach(function (zeile) {
+                                    var option = document.createElement("option");
+                                    option.value = zeile.label;
+                                    liste.appendChild(option);
+                                });
+                            })
+                            .catch(function () { /* Vorschläge sind Komfort - still scheitern lassen */ });
+                    }, 200);
+                });
+            })();
+        </script>';
+
         PluginPage::render('Fjord-Farbvererbungsrechner', $content);
+    }
+
+    /**
+     * JSON-Suchroute für das Nachschlage-Feld (#74): liefert höchstens
+     * SUCHE_LIMIT Treffer als "Name (Jahr) - Farbe -> Falb-Einordnung" statt
+     * des früheren Gesamtbestands in der Tabelle. Sichtbarkeit wie die Seite
+     * selbst (bewusst auch unveröffentlichte Pferde, denn die Route läuft
+     * durch denselben berechtigungsprüfenden Konstruktor - siehe README).
+     */
+    public function suche(): void {
+        header('Content-Type: application/json; charset=utf-8');
+
+        $q = trim((string) ($_GET['q'] ?? ''));
+
+        $where = "deleted_at IS NULL AND color IS NOT NULL AND color != ''";
+        $params = [];
+        if ($q !== '') {
+            // Teilstring-Suche, gleiche Bauart wie inzuchtkoeffizient/Kern-Katalog.
+            $where .= ' AND name LIKE ?';
+            $params[] = '%' . $q . '%';
+        }
+
+        $stmt = Database::getInstance()->prepare(
+            "SELECT id, name, birth_year, color FROM horses WHERE {$where} ORDER BY name ASC LIMIT " . self::SUCHE_LIMIT
+        );
+        $stmt->execute($params);
+
+        $result = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $key = FjordColor::keyFromText($row['color'] ?? '');
+            $result[] = [
+                'id' => (int) $row['id'],
+                'label' => $row['name']
+                    . (!empty($row['birth_year']) ? ' (' . (int) $row['birth_year'] . ')' : '')
+                    . ' — ' . (string) $row['color']
+                    . ' → ' . ($key !== null ? FjordColor::label($key) : 'keine Falb-Zuordnung'),
+            ];
+        }
+
+        echo json_encode($result);
+        exit;
     }
 
     private static function readColorParam(string $name): ?string {

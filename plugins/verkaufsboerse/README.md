@@ -27,10 +27,17 @@ funktionierender Mailversand konfiguriert sein.
   Beschreibung, Kontakt-E-Mail, optionales Ablaufdatum) oder entfernen. Ein
   Pferd hat höchstens ein aktives Inserat - erneutes Speichern aktualisiert
   es. Zur Auswahl stehen alle nicht gelöschten Pferde, auch
-  unveröffentlichte.
+  unveröffentlichte. Die Pferde-Auswahl ist ein Suchfeld mit serverseitig
+  nachgeladener Vorschlagsliste (`<input list>` + `<datalist>`,
+  `/plugin/verkaufsboerse/suche?q=…`, max. 50 Treffer) statt eines
+  Voll-`<select>` über den gesamten Bestand; ohne JavaScript wird der
+  getippte Name beim Speichern serverseitig aufgelöst (eindeutiger Name,
+  „Name (Jahrgang)" oder das `[#id]`-Suffix der Vorschläge). Die
+  Inseratsliste ist mit 50 Einträgen je Seite paginiert (`?seite=…`).
 - **Öffentliche Übersicht** (`/plugin/verkaufsboerse/liste`): listet aktive
   Inserate **veröffentlichter** Pferde (und nur, wenn die Gast-Gruppe
-  `horses.view` hat), verlinkt jeweils auf die normale Pferde-Detailseite.
+  `horses.view` hat), verlinkt jeweils auf die normale Pferde-Detailseite,
+  paginiert mit 50 Inseraten je Seite (`?seite=…`).
   Ein Inserat zu einem unveröffentlichten Pferd lässt sich anlegen, erscheint
   aber erst mit dessen Veröffentlichung - der häufigste Grund für "Inserat
   angelegt, taucht nicht auf".
@@ -47,6 +54,11 @@ Einschränkung zum fehlenden `Reply-To`-Header von
 `deckanfrage` protokolliert die Verkaufsbörse eingehende Anfragen **nicht**
 in einer Tabelle - es gibt nur den Mailversand. Inserate liegen in
 `plugin_verkaufsboerse_listings`.
+
+Schema-Anlage: über den `install()`-Hook des PluginManagers (einmal bei
+Aktivierung bzw. nach einem Addon-Update); auf älteren Kernen ohne diesen
+Hook greift ein marker-geführter Fallback (`.schema-1` im
+Plugin-Verzeichnis), damit nicht bei jedem Request ein DDL-Statement läuft.
 
 ## Berechtigungen
 

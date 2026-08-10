@@ -50,7 +50,10 @@ Zum Format: Trennzeichen ist das Semikolon (auf deutsche Excel-Installationen
 zugeschnitten - andere Importe müssen das ggf. angeben), und Feldwerte, die
 mit `=`, `+`, `-`, `@`, Tab oder CR beginnen, werden mit einem führenden
 Hochkomma entschärft (Schutz vor CSV-Formel-Injection beim Öffnen in
-Tabellenkalkulationen).
+Tabellenkalkulationen). Jedes Pferd belegt genau **eine** Zeile: Mehrere
+Züchter bzw. Besitzer (etwa eine Besitzerhistorie über mehrere Jahre) stehen
+kommasepariert in ihrer jeweiligen Spalte, wie auf der Katalogkarte des
+Kerns (#70).
 
 Die Export-Route `/plugin/katalog-export/csv` akzeptiert dieselben
 Query-Parameter wie die öffentliche Katalogseite (`search`, `q_name`,
