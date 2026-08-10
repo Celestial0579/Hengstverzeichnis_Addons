@@ -160,6 +160,19 @@ Weitere Automatik:
 - [`.github/workflows/scorecard.yml`](.github/workflows/scorecard.yml) -
   OpenSSF-Scorecard-Bewertung der Repo-Absicherung.
 
+## Versionierung & Releases
+
+Dieses Repo wird als **Gesamtstand** released: Tags `vX.Y.z` folgen der
+Framework-Linie `X.Y` (Patch-Stelle `z` frei für Addon-Fixes zwischen
+Framework-Releases). Der Addon-Store und das Addon-Autoupdate des
+Frameworks lesen für dieses offizielle Repo den besten Release-Tag zur
+laufenden Kern-Linie statt des `main`-HEAD - was auf `main` liegt, ist
+damit erst nach einem Release auf Produktivinstanzen. Ablauf, Pipeline und
+die Pflicht-Manifestgrenzen (`core_compatibility` als Untergrenze,
+`core_supported_max` als Obergrenze): siehe
+[docs/releasing.md](docs/releasing.md); Änderungen je Release stehen im
+[CHANGELOG.md](CHANGELOG.md).
+
 ## Neues Addon hinzufügen
 
 1. Neues Verzeichnis unter `plugins/<slug>/` anlegen (Konventionen siehe

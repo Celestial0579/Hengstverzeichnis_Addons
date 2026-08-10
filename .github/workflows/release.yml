@@ -1,0 +1,79 @@
+# Release-Pipeline des Addons-Repos (#65)
+#
+# Läuft bei jedem Push eines "v*"-Tags. Die Versionierung folgt dem
+# Framework (siehe docs/releasing.md): Ein Tag vX.Y.z ist der geprüfte
+# Gesamtstand ALLER Addons, der zur Framework-Linie X.Y passt; die
+# Patch-Stelle z läuft unabhängig (Addon-Fixes zwischen Framework-Releases).
+#
+#   1. Testsuite (tests.yml, wiederverwendet per workflow_call) als Gate -
+#      kein Release, wenn irgendetwas fehlschlägt.
+#   2. Konsistenzprüfung (scripts/check-release-consistency.php): Unter- UND
+#      Pflicht-Obergrenze jedes plugins/*/plugin.json müssen die zum Tag
+#      gehörende Framework-Linie einschließen - sonst behauptete der Release,
+#      zu einem Kern zu passen, den ein enthaltenes Addon ausschließt.
+#   3. GitHub-Release anlegen (bzw. Artefaktloser Eintrag zum Tag). Die
+#      Beschreibung bleibt bewusst manuell/kuratiert (orientiert an
+#      CHANGELOG.md) - wie im Framework-Repo.
+#
+# Verbraucherseite: Addon-Store und Addon-Autoupdate des Frameworks lesen
+# für das offizielle Repo den besten Release-Tag der laufenden Kern-Linie
+# statt des Branch-HEAD (Framework#197) - ein Release hier ist also der
+# Stand, der auf Produktivinstanzen landet.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    uses: ./.github/workflows/tests.yml
+
+  konsistenz:
+    name: Release-Konsistenz (Framework-Linie)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: PHP einrichten
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2 (2.37.2)
+        with:
+          php-version: "8.5"
+
+      - name: Manifeste gegen die Ziel-Linie des Tags pruefen
+        run: php scripts/check-release-consistency.php "${GITHUB_REF}"
+
+  release:
+    name: GitHub-Release anlegen
+    needs: [tests, konsistenz]
+    # Nur beim Tag-Push, nicht bei manuellem workflow_dispatch-Testlauf.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Release anlegen bzw. um Tag ergaenzen
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          # Titel/Beschreibung bewusst nicht gesetzt: bleiben manuell
+          # kuratiert (CHANGELOG.md als Grundlage), wie im Framework.
+          draft: false
