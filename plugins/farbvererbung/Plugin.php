@@ -260,14 +260,17 @@ class FjordColor {
         // roten, grauen oder gelben Pferd eine Fjord-Falbfarbe zu - genetisch
         // falsch, denn "braun" ohne Dun-Gen ist kein Braunfalbe. Ein Pferd ohne
         // expliziten Falb-Hinweis in der Farbe erzeugt jetzt keine Zuordnung.
-        // Reihenfolge: spezifische (Cream-)Farben zuerst, damit z. B. "gelbfalbe"
-        // nicht fälschlich über ein enthaltenes "falbe" o. ä. woanders greift.
+        // Reihenfolge: spezifische (Cream-)Farben zuerst, damit z. B. "gelbfalb"
+        // nicht fälschlich über ein enthaltenes "falb" o. ä. woanders greift.
+        // Die Nadeln sind die Wortstämme OHNE End-e: Sie treffen sowohl die
+        // Substantivform ("Graufalbe") als auch die im Farbfeld übliche
+        // adjektivische Kurzform ("graufalb") - beide sind gebräuchlich.
         $needles = [
-            'ulsblakk' => ['ulsblakk', 'hellfalbe', 'weissfalbe', 'weisfalbe'],
-            'gulblakk' => ['gulblakk', 'gelbfalbe'],
-            'brunblakk' => ['brunblakk', 'braunfalbe'],
-            'rodblakk' => ['rodblakk', 'rotfalbe'],
-            'graa' => ['graablakk', 'grablakk', 'graufalbe', 'grullo'],
+            'ulsblakk' => ['ulsblakk', 'hellfalb', 'weissfalb', 'weisfalb'],
+            'gulblakk' => ['gulblakk', 'gelbfalb'],
+            'brunblakk' => ['brunblakk', 'braunfalb'],
+            'rodblakk' => ['rodblakk', 'rotfalb'],
+            'graa' => ['graablakk', 'grablakk', 'graufalb', 'grullo'],
         ];
 
         foreach ($needles as $key => $variants) {

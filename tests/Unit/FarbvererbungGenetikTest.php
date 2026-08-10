@@ -153,4 +153,46 @@ class FarbvererbungGenetikTest extends TestCase {
             }
         }
     }
+
+    /**
+     * Familie 6: Freitext-Zuordnung `keyFromText()`. Im Farbfeld stehen je
+     * nach Erfasser die Substantivform ("Graufalbe"), die adjektivische
+     * Kurzform ("graufalb") oder der norwegische Name - alle drei müssen auf
+     * denselben Schlüssel führen. Die Kurzformen ohne End-e gingen bis
+     * v0.4.0 leer aus, weil die Nadeln nur die -e-Formen enthielten.
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('colorTextProvider')]
+    public function testKeyFromText(?string $text, ?string $expected): void {
+        $this->assertSame($expected, FjordColor::keyFromText($text));
+    }
+
+    public static function colorTextProvider(): array {
+        return [
+            // Adjektivische Kurzformen ohne End-e (der v0.4.1-Anlass)
+            'graufalb'   => ['graufalb', 'graa'],
+            'rotfalb'    => ['rotfalb', 'rodblakk'],
+            'braunfalb'  => ['braunfalb', 'brunblakk'],
+            'gelbfalb'   => ['gelbfalb', 'gulblakk'],
+            'hellfalb'   => ['hellfalb', 'ulsblakk'],
+            'weißfalb'   => ['weißfalb', 'ulsblakk'],
+            // Substantivformen mit End-e (mussten schon immer gehen)
+            'Graufalbe'  => ['Graufalbe', 'graa'],
+            'Rotfalbe'   => ['Rotfalbe', 'rodblakk'],
+            'Braunfalbe' => ['Braunfalbe', 'brunblakk'],
+            'Gelbfalbe'  => ['Gelbfalbe', 'gulblakk'],
+            'Weißfalbe'  => ['Weißfalbe', 'ulsblakk'],
+            // Norwegische Originalnamen inkl. Sonderzeichen-Normalisierung
+            'Rødblakk'   => ['Rødblakk', 'rodblakk'],
+            'Grå exakt'  => ['Grå', 'graa'],
+            'Ulsblakk'   => ['Ulsblakk', 'ulsblakk'],
+            // Keine Zuordnung: generische Farben sind ohne Falb-Hinweis
+            // KEINE Fjord-Falbfarben (#50), und 'gra' als Substring darf
+            // "Grauschimmel" nicht treffen
+            'Grauschimmel' => ['Grauschimmel', null],
+            'Braun'        => ['Braun', null],
+            'Fuchs'        => ['Fuchs', null],
+            'leer'         => ['', null],
+            'null'         => [null, null],
+        ];
+    }
 }
