@@ -8,6 +8,17 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+## [0.4.1] – 2026-08-10
+
+### Farbvererbung
+
+- Freitext-Zuordnung erkennt auch die adjektivischen Kurzformen ohne
+  End-e („graufalb", „rotfalb", „braunfalb", „gelbfalb", „hellfalb",
+  „weißfalb") - die Nadeln sind jetzt Wortstämme, die Substantivformen
+  („Graufalbe" …) bleiben als Obermenge abgedeckt. Neue Unit-Testfamilie
+  für `keyFromText()` inkl. Negativfällen („Grauschimmel" bleibt ohne
+  Falb-Deutung); Plugin-Version 1.1.2
+
 ## [0.4.0] – 2026-08-10
 
 ### Alle Addons
