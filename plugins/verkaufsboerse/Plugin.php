@@ -31,6 +31,19 @@ use PDO;
 
 class Plugin {
 
+    /**
+     * Request-weiter Cache der horse_ids mit Inserat (Framework#222):
+     * Beim Leeren des Papierkorbs feuert der Kern horse.before_delete für
+     * JEDES Pferd einzeln - eine eigene SELECT-Query je Pferd summierte sich
+     * dort auf Hunderte Round-Trips in einem Request. Stattdessen werden die
+     * horse_ids aller Inserate beim ersten Hook-Aufruf EINMAL geladen
+     * (array_flip für O(1)-Lookups); jeder Folgeaufruf ist ein
+     * Array-Zugriff. null = noch nicht geladen.
+     *
+     * @var array<int, int>|null
+     */
+    private ?array $listingHorseIds = null;
+
     public function register(HookManager $hooks): void {
         $this->ensureTable();
         $hooks->addFilter('horse.detail_sections', [$this, 'addDetailSection']);
@@ -84,15 +97,31 @@ class Plugin {
         );
     }
 
+    /**
+     * Batch-tauglich (Framework#222): lädt beim ersten Aufruf im Request die
+     * horse_ids ALLER Inserate einmal in $listingHorseIds; danach ist jeder
+     * Aufruf ein reiner Array-Lookup. Die Hooks feuern nur bei
+     * Bestandsänderungen am Pferd (Papierkorb/Restore/Löschen) - Inserate
+     * ändern sich in denselben Requests nicht, der Cache veraltet also
+     * innerhalb eines Requests nicht. Beim before_delete-Batch des
+     * Papierkorbs wird ohnehin VOR den DELETEs gehookt.
+     */
     private function hasActiveListing(int $horseId): bool {
-        $stmt = Database::getInstance()->prepare(
-            'SELECT 1 FROM `plugin_verkaufsboerse_listings` WHERE horse_id = ?'
-        );
-        $stmt->execute([$horseId]);
-        return (bool) $stmt->fetchColumn();
+        if ($this->listingHorseIds === null) {
+            $ids = Database::getInstance()
+                ->query('SELECT horse_id FROM `plugin_verkaufsboerse_listings`')
+                ->fetchAll(PDO::FETCH_COLUMN);
+            $this->listingHorseIds = array_flip(array_map('intval', $ids));
+        }
+        return isset($this->listingHorseIds[$horseId]);
     }
 
-    private function ensureTable(): void {
+    /**
+     * Framework-Hook (#75): Der PluginManager ruft install() bei der
+     * Aktivierung und nach einem Addon-Update genau einmal auf - das
+     * DDL-Statement läuft damit nicht mehr in jedem Request.
+     */
+    public function install(): void {
         Database::getInstance()->exec(
             'CREATE TABLE IF NOT EXISTS `plugin_verkaufsboerse_listings` (
                 `id` INT AUTO_INCREMENT PRIMARY KEY,
@@ -106,6 +135,30 @@ class Plugin {
                 FOREIGN KEY (`horse_id`) REFERENCES `horses`(`id`) ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
         );
+    }
+
+    /**
+     * Fallback für ältere Kerne ohne install()-Hook (#75) - bewusst OHNE
+     * Marker-Datei: Der Kern gibt das Plugin-Verzeichnis über einen
+     * Inhalts-Fingerabdruck frei, in den auch Dotfiles einfließen. Jede zur
+     * Laufzeit dorthin geschriebene Datei änderte den Fingerabdruck, und der
+     * Kern deaktivierte das Plugin als unfreigegeben verändert. Statt DDL
+     * pro Request (siehe Issue) läuft deshalb nur noch eine billige
+     * SELECT-Probe je Request; erst wenn sie fehlschlägt, legt install()
+     * die Tabelle an. Auf Kernen mit install()-Hook existiert die Tabelle
+     * ohnehin - dort bleibt es bei der Probe.
+     */
+    private function ensureTable(): void {
+        static $checked = false;
+        if ($checked) {
+            return;
+        }
+        try {
+            Database::getInstance()->query('SELECT 1 FROM `plugin_verkaufsboerse_listings` LIMIT 1');
+        } catch (\Throwable $e) {
+            $this->install();
+        }
+        $checked = true;
     }
 
     /**
@@ -195,6 +248,10 @@ class Plugin {
         return [
             ['method' => 'GET', 'path' => '/liste', 'callback' => [ListeController::class, 'show']],
             ['method' => 'GET', 'path' => '/verwaltung', 'callback' => [VerwaltungController::class, 'index']],
+            // Serverseitige Pferdesuche für die Datalist im Formular (#74,
+            // Muster Framework-Katalog): JSON, max. 50 Treffer, nur mit
+            // verkaufsboerse.manage (Konstruktor-Schutz des Controllers).
+            ['method' => 'GET', 'path' => '/suche', 'callback' => [VerwaltungController::class, 'suche']],
             ['method' => 'POST', 'path' => '/verwaltung/store', 'callback' => [VerwaltungController::class, 'store']],
             ['method' => 'POST', 'path' => '/verwaltung/delete', 'callback' => [VerwaltungController::class, 'delete']],
             ['method' => 'POST', 'path' => '/kontakt', 'callback' => [KontaktController::class, 'submit']],
@@ -210,6 +267,9 @@ class Plugin {
  */
 class ListeController extends BaseController {
 
+    /** Inserate je Seite der öffentlichen Börse (#74). */
+    private const LISTINGS_PER_PAGE = 50;
+
     public function show(): void {
         // Öffentliche Sichtbarkeit exakt wie im Kern (PublicController::catalog):
         // Liste nur, wenn die Gast-Gruppe Pferde sehen darf.
@@ -223,13 +283,30 @@ class ListeController extends BaseController {
         // das Inserat nicht abgelaufen ist. Die Verwaltung listet dagegen
         // bewusst ALLE Inserate mit ausgewiesenem Status; das Kontaktformular
         // (KontaktController::submit) prüft exakt diese Regel erneut.
-        $listings = Database::getInstance()->query(
+        // Paginiert (#74): vorher lud die Seite alle aktiven Inserate ohne
+        // LIMIT und renderte jede Zeile ins HTML.
+        $db = Database::getInstance();
+        $totalListings = (int) $db->query(
+            'SELECT COUNT(*)
+             FROM `plugin_verkaufsboerse_listings` l
+             JOIN horses h ON h.id = l.horse_id AND h.deleted_at IS NULL AND h.is_published = 1
+             WHERE l.listed_until IS NULL OR l.listed_until >= CURDATE()'
+        )->fetchColumn();
+        $pageCount = max(1, (int) ceil($totalListings / self::LISTINGS_PER_PAGE));
+        $page = min($pageCount, max(1, (int) ($_GET['seite'] ?? 1)));
+
+        $listingsStmt = $db->prepare(
             'SELECT l.*, h.name AS horse_name, h.birth_year, h.color, h.image_url
              FROM `plugin_verkaufsboerse_listings` l
              JOIN horses h ON h.id = l.horse_id AND h.deleted_at IS NULL AND h.is_published = 1
              WHERE l.listed_until IS NULL OR l.listed_until >= CURDATE()
-             ORDER BY l.listed_at DESC'
-        )->fetchAll(PDO::FETCH_ASSOC);
+             ORDER BY l.listed_at DESC, l.id DESC
+             LIMIT :limit OFFSET :offset'
+        );
+        $listingsStmt->bindValue('limit', self::LISTINGS_PER_PAGE, PDO::PARAM_INT);
+        $listingsStmt->bindValue('offset', ($page - 1) * self::LISTINGS_PER_PAGE, PDO::PARAM_INT);
+        $listingsStmt->execute();
+        $listings = $listingsStmt->fetchAll(PDO::FETCH_ASSOC);
 
         // Inhalt als Fragment im Haupt-Layout über PluginPage (Addons#66):
         // Header, Navigation, Theme-Umschalter und Grund-Styling kommen vom
@@ -267,6 +344,20 @@ class ListeController extends BaseController {
             $content .= '<p>Aktuell keine Pferde in der Verkaufsbörse gelistet.</p>';
         }
 
+        // Blätter-Leiste (#74): erscheint erst, wenn es mehr als eine Seite
+        // gibt - die Ein-Seiten-Ansicht bleibt unverändert schlank.
+        if ($pageCount > 1) {
+            $content .= '<p>';
+            if ($page > 1) {
+                $content .= '<a class="btn btn-secondary" href="/plugin/verkaufsboerse/liste?seite=' . ($page - 1) . '">&laquo; Zurück</a> ';
+            }
+            $content .= 'Seite ' . $page . ' von ' . $pageCount . ' (' . $totalListings . ' Inserate)';
+            if ($page < $pageCount) {
+                $content .= ' <a class="btn btn-secondary" href="/plugin/verkaufsboerse/liste?seite=' . ($page + 1) . '">Weiter &raquo;</a>';
+            }
+            $content .= '</p>';
+        }
+
         $content .= '</div>';
 
         PluginPage::render('Verkaufsbörse', $content);
@@ -282,6 +373,12 @@ class ListeController extends BaseController {
  */
 class VerwaltungController extends BaseController {
 
+    /** Treffer-Deckel der Datalist-Suche (#74). */
+    private const SEARCH_LIMIT = 50;
+
+    /** Inserate je Verwaltungsseite (#74). */
+    private const LISTINGS_PER_PAGE = 50;
+
     public function __construct() {
         parent::__construct();
         $this->checkAuth();
@@ -291,22 +388,28 @@ class VerwaltungController extends BaseController {
     public function index(): void {
         $db = Database::getInstance();
 
-        $horses = $db->query(
-            'SELECT id, name, birth_year FROM horses WHERE deleted_at IS NULL ORDER BY name ASC'
-        )->fetchAll(PDO::FETCH_ASSOC);
-
         // Bewusst OHNE Sichtbarkeitsfilter (anders als die öffentliche Börse,
         // siehe ListeController::show()): Die Verwaltung soll ALLE Inserate
         // zeigen - aber mit ausgewiesenem Status (#51), damit die Diskrepanz
         // "Verwaltung listet es, Börse zeigt es nicht" sichtbar wird, statt
         // still nebeneinander zu existieren (Pferd im Papierkorb/unveröffentlicht,
-        // Inserat abgelaufen).
-        $listings = $db->query(
+        // Inserat abgelaufen). Paginiert (#74): vorher lud die Seite alle
+        // Inserate ohne LIMIT und renderte jede Zeile ins HTML.
+        $totalListings = (int) $db->query('SELECT COUNT(*) FROM `plugin_verkaufsboerse_listings`')->fetchColumn();
+        $pageCount = max(1, (int) ceil($totalListings / self::LISTINGS_PER_PAGE));
+        $page = min($pageCount, max(1, (int) ($_GET['seite'] ?? 1)));
+
+        $listingsStmt = $db->prepare(
             'SELECT l.*, h.name AS horse_name, h.deleted_at AS horse_deleted_at, h.is_published AS horse_is_published
              FROM `plugin_verkaufsboerse_listings` l
              JOIN horses h ON h.id = l.horse_id
-             ORDER BY l.listed_at DESC'
-        )->fetchAll(PDO::FETCH_ASSOC);
+             ORDER BY l.listed_at DESC, l.id DESC
+             LIMIT :limit OFFSET :offset'
+        );
+        $listingsStmt->bindValue('limit', self::LISTINGS_PER_PAGE, PDO::PARAM_INT);
+        $listingsStmt->bindValue('offset', ($page - 1) * self::LISTINGS_PER_PAGE, PDO::PARAM_INT);
+        $listingsStmt->execute();
+        $listings = $listingsStmt->fetchAll(PDO::FETCH_ASSOC);
 
         $csrfToken = Router::generateCsrfToken();
 
@@ -325,15 +428,17 @@ class VerwaltungController extends BaseController {
         $content .= '<form method="POST" action="/plugin/verkaufsboerse/verwaltung/store">';
         $content .= '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">';
 
-        $content .= '<div class="form-group"><label for="horse_id">Pferd</label>'
-            . '<select name="horse_id" id="horse_id" class="form-control" required>';
-        $content .= '<option value="">– auswählen –</option>';
-        foreach ($horses as $h) {
-            $content .= '<option value="' . (int) $h['id'] . '">'
-                . htmlspecialchars($h['name'] . ($h['birth_year'] ? ' (' . $h['birth_year'] . ')' : ''), ENT_QUOTES, 'UTF-8')
-                . '</option>';
-        }
-        $content .= '</select></div>';
+        // Pferde-Auswahl als Suchfeld mit serverseitig nachgeladener
+        // Vorschlagsliste statt eines Voll-<select> über den gesamten
+        // Bestand (#74, Muster Framework-Katalog). Die gewählte ID landet
+        // per JS im Hidden-Feld horse_id; ohne JavaScript löst store() den
+        // getippten Text über resolveHorseId() auf.
+        $content .= '<div class="form-group"><label for="horse_q">Pferd</label>'
+            . '<input type="text" name="horse_q" id="horse_q" class="form-control" list="horse_q_liste" autocomplete="off"'
+            . ' placeholder="Namen eintippen und Vorschlag auswählen …" required>'
+            . '<datalist id="horse_q_liste"></datalist>'
+            . '<input type="hidden" name="horse_id" id="horse_id" value="">'
+            . '</div>';
 
         $content .= '<div class="verkaufsboerse-row">';
         $content .= '<div class="form-group"><label for="price">Preis (€, leer = auf Anfrage)</label><input type="number" step="0.01" name="price" id="price" class="form-control"></div>';
@@ -345,6 +450,55 @@ class VerwaltungController extends BaseController {
 
         $content .= '<p><button type="submit" class="btn">Speichern</button></p>';
         $content .= '</form>';
+
+        // Progressive Enhancement der Pferdesuche: lädt Vorschläge von
+        // /plugin/verkaufsboerse/suche und mappt das gewählte Label auf die
+        // ID im Hidden-Feld. Ohne fetch()/JS greift der No-JS-Fallback in
+        // store().
+        $content .= '<script>
+(function () {
+    var input = document.getElementById("horse_q");
+    var hidden = document.getElementById("horse_id");
+    var list = document.getElementById("horse_q_liste");
+    if (!input || !hidden || !list || typeof window.fetch !== "function") { return; }
+
+    var byLabel = {};
+    var timer = null;
+
+    function sync() {
+        hidden.value = Object.prototype.hasOwnProperty.call(byLabel, input.value)
+            ? String(byLabel[input.value])
+            : "";
+    }
+
+    function loadSuggestions() {
+        var q = input.value.trim();
+        if (q === "") { return; }
+        fetch("/plugin/verkaufsboerse/suche?q=" + encodeURIComponent(q))
+            .then(function (res) { return res.json(); })
+            .then(function (items) {
+                if (!Array.isArray(items)) { return; }
+                byLabel = {};
+                list.textContent = "";
+                items.forEach(function (item) {
+                    byLabel[item.label] = item.id;
+                    var option = document.createElement("option");
+                    option.value = item.label;
+                    list.appendChild(option);
+                });
+                sync();
+            })
+            .catch(function () { /* Suche nicht erreichbar - der No-JS-Fallback greift beim Absenden */ });
+    }
+
+    input.addEventListener("input", function () {
+        sync();
+        if (timer) { clearTimeout(timer); }
+        timer = setTimeout(loadSuggestions, 200);
+    });
+    input.addEventListener("change", sync);
+})();
+</script>';
 
         $content .= '<h2>Aktuelle Inserate</h2>';
         $content .= '<table><thead><tr><th>Pferd</th><th>Sichtbarkeit</th><th>Preis</th><th>Kontakt</th><th>Gelistet bis</th><th></th></tr></thead><tbody>';
@@ -373,6 +527,7 @@ class VerwaltungController extends BaseController {
             $content .= '<td>' . htmlspecialchars((string) ($row['listed_until'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
             $content .= '<td><form method="POST" action="/plugin/verkaufsboerse/verwaltung/delete" style="margin:0;" onsubmit="return confirm(\'Inserat wirklich entfernen?\');">'
                 . '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">'
+                . '<input type="hidden" name="seite" value="' . $page . '">'
                 . '<input type="hidden" name="id" value="' . (int) $row['id'] . '">'
                 . '<button type="submit" class="btn btn-secondary" style="color:var(--danger-fg);">Entfernen</button></form></td>';
             $content .= '</tr>';
@@ -381,6 +536,20 @@ class VerwaltungController extends BaseController {
             $content .= '<tr><td colspan="6">Noch keine Inserate erfasst.</td></tr>';
         }
         $content .= '</tbody></table>';
+
+        // Blätter-Leiste (#74): erscheint erst, wenn es mehr als eine Seite
+        // gibt - die Ein-Seiten-Ansicht bleibt unverändert schlank.
+        if ($pageCount > 1) {
+            $content .= '<p>';
+            if ($page > 1) {
+                $content .= '<a class="btn btn-secondary" href="/plugin/verkaufsboerse/verwaltung?seite=' . ($page - 1) . '">&laquo; Zurück</a> ';
+            }
+            $content .= 'Seite ' . $page . ' von ' . $pageCount . ' (' . $totalListings . ' Inserate)';
+            if ($page < $pageCount) {
+                $content .= ' <a class="btn btn-secondary" href="/plugin/verkaufsboerse/verwaltung?seite=' . ($page + 1) . '">Weiter &raquo;</a>';
+            }
+            $content .= '</p>';
+        }
 
         $content .= '<p><a href="/admin" class="btn btn-secondary">Zurück zum Dashboard</a></p>';
         $content .= '</div>';
@@ -393,13 +562,30 @@ class VerwaltungController extends BaseController {
             $this->renderForbidden('CSRF-Sicherheits-Token ungültig oder abgelaufen.');
         }
 
+        $db = Database::getInstance();
+
+        // ID aus dem Hidden-Feld (per JS gesetzt), sonst No-JS-Fallback:
+        // den getippten Text des Suchfelds serverseitig auflösen (#74). In
+        // beiden Fällen wird gegen den Bestand geprüft - eine frei erfundene
+        // ID liefe sonst in den FOREIGN-KEY-Fehler statt in einen Redirect.
         $horseId = !empty($_POST['horse_id']) ? (int) $_POST['horse_id'] : null;
+        if ($horseId !== null) {
+            $stmt = $db->prepare('SELECT id FROM horses WHERE id = ? AND deleted_at IS NULL');
+            $stmt->execute([$horseId]);
+            $horseId = $stmt->fetchColumn() !== false ? $horseId : null;
+        } else {
+            $horseQ = trim($_POST['horse_q'] ?? '');
+            if ($horseQ !== '') {
+                $horseId = $this->resolveHorseId($db, $horseQ);
+            }
+        }
+
         $contactEmail = trim($_POST['contact_email'] ?? '');
 
         if ($horseId && filter_var($contactEmail, FILTER_VALIDATE_EMAIL)) {
             $price = ($_POST['price'] ?? '') !== '' ? (float) $_POST['price'] : null;
 
-            $stmt = Database::getInstance()->prepare(
+            $stmt = $db->prepare(
                 'INSERT INTO `plugin_verkaufsboerse_listings`
                     (horse_id, price, price_on_request, description, contact_email, listed_until)
                  VALUES (:horse_id, :price, :price_on_request, :description, :contact_email, :listed_until)
@@ -435,8 +621,104 @@ class VerwaltungController extends BaseController {
             $stmt->execute(['id' => $id]);
         }
 
-        header('Location: /plugin/verkaufsboerse/verwaltung');
+        // Zurück auf die Listenseite, von der gelöscht wurde (#74); index()
+        // klemmt einen inzwischen zu großen Wert selbst auf die letzte Seite.
+        $seite = (int) ($_POST['seite'] ?? 1);
+        header('Location: /plugin/verkaufsboerse/verwaltung' . ($seite > 1 ? '?seite=' . $seite : ''));
         exit;
+    }
+
+    /**
+     * Serverseitige Pferdesuche für die Datalist (#74, Muster
+     * Framework-Katalog): JSON-Liste {id, label} über eine Teilstring-Suche
+     * im Namen, höchstens SEARCH_LIMIT Treffer. Läuft über denselben
+     * Konstruktor-Schutz (verkaufsboerse.manage) wie die Verwaltungsseite.
+     */
+    public function suche(): void {
+        header('Content-Type: application/json; charset=utf-8');
+
+        $q = trim((string) ($_GET['q'] ?? ''));
+        if ($q === '') {
+            echo json_encode([]);
+            exit;
+        }
+
+        $stmt = Database::getInstance()->prepare(
+            'SELECT id, name, birth_year FROM horses
+             WHERE deleted_at IS NULL AND name LIKE ?
+             ORDER BY name ASC, id ASC LIMIT ' . self::SEARCH_LIMIT
+        );
+        $stmt->execute(['%' . addcslashes($q, '\\%_') . '%']);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Label-Duplikate (gleicher Name und Jahrgang) eindeutig machen: Die
+        // Datalist mappt Label -> ID, und der No-JS-Fallback löst das
+        // "[#id]"-Suffix in resolveHorseId() wieder auf.
+        $labelCounts = [];
+        foreach ($rows as $row) {
+            $label = self::horseLabel($row);
+            $labelCounts[$label] = ($labelCounts[$label] ?? 0) + 1;
+        }
+
+        $result = [];
+        foreach ($rows as $row) {
+            $label = self::horseLabel($row);
+            if ($labelCounts[$label] > 1) {
+                $label .= ' [#' . (int) $row['id'] . ']';
+            }
+            $result[] = ['id' => (int) $row['id'], 'label' => $label];
+        }
+
+        echo json_encode($result);
+        exit;
+    }
+
+    /**
+     * No-JS-Fallback: löst den getippten Text des Suchfelds serverseitig zu
+     * einer Pferde-ID auf - nur bei eindeutigem Treffer, sonst null.
+     */
+    private function resolveHorseId(PDO $db, string $q): ?int {
+        // 1) Eindeutigkeits-Suffix aus der Vorschlagsliste: "… [#123]"
+        if (preg_match('/\[#(\d+)\]\s*$/', $q, $m)) {
+            $stmt = $db->prepare('SELECT id FROM horses WHERE id = ? AND deleted_at IS NULL');
+            $stmt->execute([(int) $m[1]]);
+            $id = $stmt->fetchColumn();
+            return $id !== false ? (int) $id : null;
+        }
+
+        // 2) Label-Form "Name (Jahrgang)"
+        if (preg_match('/^(.*\S)\s*\((\d{3,4})\)$/u', $q, $m)) {
+            $stmt = $db->prepare('SELECT id FROM horses WHERE deleted_at IS NULL AND name = ? AND birth_year = ? LIMIT 2');
+            $stmt->execute([$m[1], (int) $m[2]]);
+            $ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
+            if (count($ids) === 1) {
+                return (int) $ids[0];
+            }
+            if (count($ids) > 1) {
+                return null; // mehrdeutig - nur die "[#id]"-Variante ist eindeutig
+            }
+            // kein Treffer: unten als wörtlichen Namen weiterversuchen
+        }
+
+        // 3) exakter Name, sofern eindeutig
+        $stmt = $db->prepare('SELECT id FROM horses WHERE deleted_at IS NULL AND name = ? LIMIT 2');
+        $stmt->execute([$q]);
+        $ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        return count($ids) === 1 ? (int) $ids[0] : null;
+    }
+
+    /**
+     * Anzeige-/Suchlabel eines Pferdes: "Name (Jahrgang)" bzw. nur "Name" -
+     * dieselbe Form, die früher die <select>-Optionen trugen.
+     *
+     * @param array<string, mixed> $h
+     */
+    private static function horseLabel(array $h): string {
+        $label = (string) $h['name'];
+        if (!empty($h['birth_year'])) {
+            $label .= ' (' . (int) $h['birth_year'] . ')';
+        }
+        return $label;
     }
 }
 
