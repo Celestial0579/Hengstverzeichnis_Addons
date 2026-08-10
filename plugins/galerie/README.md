@@ -42,10 +42,22 @@ der gewünschten Gruppe unter `/admin/groups` die Berechtigung
 
 ## Technik
 
-- Berechtigung: Modul `galerie`, Aktion `manage` (Verwaltungsseite und alle
-  schreibenden Routen).
-- Routen: `/plugin/galerie/verwaltung` (GET), `/verwaltung/store` und
-  `/verwaltung/delete` (POST).
+- Berechtigung: Modul `galerie`, Aktion `manage` (Verwaltungsseite,
+  Pferdesuche und alle schreibenden Routen).
+- Routen: `/plugin/galerie/verwaltung` (GET), `/plugin/galerie/suche?q=…`
+  (GET, JSON für die Pferde-Datalist, max. 50 Treffer), `/verwaltung/store`
+  und `/verwaltung/delete` (POST).
+- Die Pferde-Auswahl der Verwaltung ist ein Suchfeld mit serverseitig
+  nachgeladener Vorschlagsliste (`<input list>` + `<datalist>`) statt eines
+  Voll-`<select>` über den gesamten Bestand; ohne JavaScript wird der
+  getippte Name beim Speichern serverseitig aufgelöst (eindeutiger Name,
+  „Name (Jahrgang)" oder das `[#id]`-Suffix der Vorschläge). Die Medienliste
+  ist mit 50 Einträgen je Seite paginiert (`?seite=…`).
+- Schema-Anlage: über den `install()`-Hook des PluginManagers (einmal bei
+  Aktivierung bzw. nach einem Addon-Update); auf älteren Kernen ohne diesen
+  Hook greift ein marker-geführter Fallback (`.schema-1` im
+  Plugin-Verzeichnis), damit nicht bei jedem Request ein DDL-Statement
+  läuft.
 - Tabelle: `plugin_galerie_media`. Beim endgültigen Löschen eines Pferdes
   entfernt `ON DELETE CASCADE` nur die Datenbank-Zeilen - die hochgeladenen
   Dateien unter `public/uploads/plugin_galerie/` bleiben dann als Waisen

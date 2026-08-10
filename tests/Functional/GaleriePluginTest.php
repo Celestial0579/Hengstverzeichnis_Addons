@@ -10,8 +10,10 @@ namespace Tests\Functional;
  *
  * Der Foto-Upload selbst wird hier nicht durchgespielt (der Test-HttpClient
  * sendet keine multipart-Anfragen) - abgedeckt sind der Video-Link-Pfad
- * inkl. Host-/Schema-Validierung, die öffentliche Galerie-Sektion und die
- * Berechtigungsdurchsetzung der Verwaltung.
+ * inkl. Host-/Schema-Validierung, die öffentliche Galerie-Sektion, die
+ * Berechtigungsdurchsetzung der Verwaltung sowie (#74) die
+ * Datalist-Pferdesuche samt No-JS-Fallback und die Paginierung der
+ * Medienliste.
  */
 class GaleriePluginTest extends FunctionalTestCase {
 
@@ -49,6 +51,26 @@ class GaleriePluginTest extends FunctionalTestCase {
         $verwaltungPage = $admin->get('/plugin/galerie/verwaltung');
         $this->assertSame(200, $verwaltungPage->statusCode);
 
+        // Pferde-Auswahl (#74): Suchfeld mit Datalist statt Voll-<select>
+        // über den gesamten Bestand; die gewählte ID reist im Hidden-Feld.
+        $this->assertStringContainsString('list="horse_q_liste"', $verwaltungPage->body, 'Das Pferd-Feld sollte eine Datalist referenzieren.');
+        $this->assertStringContainsString('<datalist id="horse_q_liste">', $verwaltungPage->body);
+        $this->assertStringContainsString('name="horse_id" id="horse_id" value=""', $verwaltungPage->body);
+        $this->assertStringNotContainsString('<select name="horse_id"', $verwaltungPage->body, 'Der frühere Voll-<select> über alle Pferde darf nicht mehr gerendert werden.');
+
+        // Suchroute (#74): JSON {id, label}, nur für Berechtigte, leere
+        // Suche liefert eine leere Liste statt des Gesamtbestands.
+        $sucheResponse = $admin->get('/plugin/galerie/suche?q=' . urlencode("GalerieTestPferd-{$unique}"));
+        $this->assertSame(200, $sucheResponse->statusCode);
+        $suggestions = json_decode($sucheResponse->body, true);
+        $this->assertIsArray($suggestions, "Suchroute sollte JSON liefern. Body: {$sucheResponse->body}");
+        $this->assertCount(1, $suggestions, 'Der eindeutige Testname sollte genau einen Treffer liefern.');
+        $this->assertSame($horseId, (int) $suggestions[0]['id']);
+        $this->assertStringContainsString("GalerieTestPferd-{$unique}", (string) $suggestions[0]['label']);
+
+        $emptySuche = $admin->get('/plugin/galerie/suche?q=');
+        $this->assertSame('[]', trim($emptySuche->body), 'Ohne Suchbegriff darf die Suchroute nichts ausliefern.');
+
         $videoUrl = 'https://www.youtube.com/watch?v=test' . $unique;
         $storeVideo = $admin->post('/plugin/galerie/verwaltung/store', [
             'csrf_token' => $verwaltungPage->formField('csrf_token') ?? '',
@@ -81,6 +103,41 @@ class GaleriePluginTest extends FunctionalTestCase {
         $this->assertStringNotContainsString('evil.example', $verwaltungAfterBad->body);
         $this->assertStringNotContainsString('insecure' . $unique, $verwaltungAfterBad->body);
 
+        // 4b. No-JS-Fallback (#74): Ohne horse_id löst store() den getippten
+        // Text (horse_q) serverseitig zu einer Pferde-ID auf.
+        $storeNoJs = $admin->post('/plugin/galerie/verwaltung/store', [
+            'csrf_token' => $verwaltungPage->formField('csrf_token') ?? '',
+            'horse_q' => "GalerieTestPferd-{$unique}",
+            'video_url' => 'https://vimeo.com/12345' . $unique,
+            'caption' => "NoJS-{$unique}",
+        ]);
+        $this->assertSame('/plugin/galerie/verwaltung', $storeNoJs->location());
+
+        $verwaltungAfterNoJs = $admin->get('/plugin/galerie/verwaltung');
+        $this->assertStringContainsString("NoJS-{$unique}", $verwaltungAfterNoJs->body, 'Ein eindeutiger Name in horse_q sollte serverseitig aufgelöst werden.');
+
+        // ... ein unauflösbarer Text legt nichts an.
+        $storeUnresolved = $admin->post('/plugin/galerie/verwaltung/store', [
+            'csrf_token' => $verwaltungPage->formField('csrf_token') ?? '',
+            'horse_q' => "GibtEsNicht-{$unique}",
+            'video_url' => 'https://vimeo.com/99999' . $unique,
+            'caption' => "Verwaist-{$unique}",
+        ]);
+        $this->assertSame('/plugin/galerie/verwaltung', $storeUnresolved->location());
+        $this->assertStringNotContainsString(
+            "Verwaist-{$unique}",
+            $admin->get('/plugin/galerie/verwaltung')->body,
+            'Ein unauflösbarer Pferdename darf keinen Eintrag anlegen.'
+        );
+
+        // 4c. Paginierung (#74): Unterhalb der Seitengröße erscheint keine
+        // Blätter-Leiste, und ein zu großer ?seite=-Wert wird auf die letzte
+        // vorhandene Seite geklemmt statt eine leere Liste zu zeigen.
+        $this->assertStringNotContainsString('Seite 1 von 1', $verwaltungAfterNoJs->body, 'Bei nur einer Seite darf keine Blätter-Leiste erscheinen.');
+        $clampedPage = $admin->get('/plugin/galerie/verwaltung?seite=999');
+        $this->assertSame(200, $clampedPage->statusCode);
+        $this->assertStringContainsString("NoJS-{$unique}", $clampedPage->body, 'Ein überzogener seite-Wert sollte auf die letzte Seite geklemmt werden.');
+
         // 5. Berechtigungsdurchsetzung: Editor ohne galerie.manage wird
         // abgewiesen ...
         $editorGroupId = $this->findBuiltinGroupId($admin, 'Editor');
@@ -93,6 +150,12 @@ class GaleriePluginTest extends FunctionalTestCase {
 
         $deniedResponse = $editor->get('/plugin/galerie/verwaltung');
         $this->assertSame(403, $deniedResponse->statusCode);
+
+        // ... auch von der Suchroute (#74): Pferdenamen (inkl.
+        // unveröffentlichter Pferde) bleiben auf den berechtigten Kreis
+        // beschränkt.
+        $deniedSuche = $editor->get('/plugin/galerie/suche?q=' . urlencode("GalerieTestPferd-{$unique}"));
+        $this->assertSame(403, $deniedSuche->statusCode);
 
         // ... und ist nach Zuweisung der Berechtigung erreichbar.
         $this->setGroupPermissions($admin, $editorGroupId, self::EDITOR_DEFAULT_PERMISSIONS + [
