@@ -23,10 +23,14 @@ Berechtigung `inzuchtkoeffizient.calculate`, die einer Gruppe unter
 
 ## Funktionsweise
 
-- **Detailseite:** nutzt den vom Kern bereits berechneten 6-Generationen-Baum
-  (vierter Parameter des `horse.detail_sections`-Filters), keine zusätzliche
-  Datenbankabfrage nötig. Dieser Baum ist öffentlich gefiltert: unveröffentlichte
-  Vorfahren stecken nur als Platzhalter darin und fließen nicht in den COI ein.
+- **Detailseite:** baut je Elternteil einen eigenen, bis zu 6 Generationen
+  tiefen Stammbaum über `App\Service\PedigreeBuilder::build()` auf - mit dem
+  **Elternteil als Wurzel**. Der vom Kern an den Filter übergebene Baum hat
+  das Pferd selbst als Wurzel und reicht je Elternteil nur 5 Generationen;
+  ihn zu übernehmen ließ einen gemeinsamen Vorfahren der sechsten Generation
+  auf der Detailseite verschwinden, den der Verpaarungsrechner bei gleicher
+  Datenlage noch zählte (#72). Öffentlich gefiltert: unveröffentlichte
+  Vorfahren stecken nur als Platzhalter im Baum und fließen nicht in den COI ein.
 - **Verpaarungsrechner:** baut für die zwei ausgewählten Pferde jeweils einen
   eigenen Stammbaum über `App\Service\PedigreeBuilder::build()` auf (wählbare
   Tiefe 1-8) und berechnet daraus den COI des hypothetischen Fohlens - hier
@@ -34,6 +38,16 @@ Berechtigung `inzuchtkoeffizient.calculate`, die einer Gruppe unter
   Route ist berechtigungsgeschützt. Derselbe Verpaarungsfall kann deshalb auf
   der öffentlichen Detailseite und im Rechner unterschiedliche Werte liefern,
   sobald unveröffentlichte Vorfahren im Spiel sind.
+- **Pferde-Auswahl:** Die Elterntiere werden über Suchfelder
+  (`<input list>` + `<datalist>`) gewählt, die ihre Vorschläge serverseitig
+  von `GET /plugin/inzuchtkoeffizient/suche?q=…&rolle=sire|dam` holen
+  (höchstens 50 Treffer, gleiche Berechtigung wie der Rechner). Das ersetzt
+  das frühere `<select>` über den kompletten Pferdebestand (#74). Der
+  `rolle`-Parameter filtert nach Geschlecht (Hengst-Feld ohne Stuten/Wallache,
+  Stuten-Feld ohne Hengste/Wallache; Pferde ohne Geschlechtsangabe bleiben in
+  beiden wählbar), die getroffene Auswahl wird serverseitig erneut geprüft.
+  Jeder Vorschlag endet auf `[#<id>]`; daraus füllt die Seite die eigentlichen
+  Parameter `sire_id`/`dam_id`, Ergebnis-URLs bleiben also unverändert teilbar.
 
 ## Berechnungsmethode
 
