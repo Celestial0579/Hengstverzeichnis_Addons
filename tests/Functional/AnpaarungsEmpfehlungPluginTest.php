@@ -14,10 +14,15 @@ namespace Tests\Functional;
  *   - Base x ZZfree -> Fohlen-COI 0 %  (keine gemeinsamen Vorfahren)
  *   - Base x AAsib  -> Fohlen-COI 25 % (zwei gemeinsame Vorfahren, je n1=n2=1)
  * Das Ranking muss daher ZZfree (0 %) VOR AAsib (25 %) listen - obwohl AAsib
- * alphabetisch früher steht (die Auswahl-Dropdowns sind nach Name sortiert).
- * Die Reihenfolge wird deshalb bewusst nur innerhalb der Ergebnistabelle
- * (<tbody>) geprüft, nicht über die gesamte Seite. Deckt zusätzlich die
- * Durchsetzung der Berechtigung anpaarung.recommend ab.
+ * alphabetisch früher steht. Die Reihenfolge wird bewusst nur innerhalb der
+ * Ergebnistabelle (<tbody>) geprüft, nicht über die gesamte Seite.
+ *
+ * Deckt zusätzlich ab: die Durchsetzung der Berechtigung anpaarung.recommend
+ * (Empfehlungs- UND Suchroute), die serverseitige Basispferd-Suche (#69,
+ * /suche als JSON-Datalist-Quelle statt Voll-<select>), den No-JS-Fallback
+ * über base_q, die Tiefensemantik "Generationen je Elternteil = 6" (#72)
+ * sowie den Kandidaten-Deckel vor der Berechnung (#69, limit x 5, max. 200)
+ * samt Hinweistext.
  */
 class AnpaarungsEmpfehlungPluginTest extends FunctionalTestCase {
 
@@ -55,11 +60,28 @@ class AnpaarungsEmpfehlungPluginTest extends FunctionalTestCase {
         $response = $admin->get("/plugin/anpaarungs-empfehlung/empfehlung?base_id={$baseId}");
         $this->assertSame(200, $response->statusCode);
 
+        // Basispferd-Auswahl (#69): Suchfeld mit Datalist statt Voll-<select>
+        // über den gesamten Bestand; die gewählte ID reist im Hidden-Feld.
+        $this->assertStringContainsString('list="base_q_liste"', $response->body, 'Das Basispferd-Feld sollte eine Datalist referenzieren.');
+        $this->assertStringContainsString('<datalist id="base_q_liste">', $response->body);
+        $this->assertStringContainsString('name="base_id" id="base_id" value="' . $baseId . '"', $response->body, 'Die aufgelöste Basis-ID sollte im Hidden-Feld vorbelegt sein.');
+        $this->assertStringNotContainsString('<select name="base_id"', $response->body, 'Der frühere Voll-<select> über alle Pferde darf nicht mehr gerendert werden.');
+
+        // Tiefensemantik (#72): Standard sind 6 Generationen JE ELTERNTEIL -
+        // identisch zum Verpaarungsrechner des Inzuchtkoeffizient-Addons.
+        $this->assertStringContainsString('Generationen je Elternteil (1–8)', $response->body);
+        $this->assertStringContainsString(
+            'name="depth" id="depth" class="form-control" min="1" max="8" value="6"',
+            $response->body,
+            'Die Standard-Generationstiefe je Elternteil sollte 6 sein (#72).'
+        );
+        $this->assertStringContainsString('bis zu 6 Generationen je Elternteil tiefen Stammbaum', $response->body);
+
         $this->assertStringContainsString('0,00 %', $response->body, 'Unverwandte Verpaarung sollte 0,00 % zeigen.');
         $this->assertStringContainsString('25,00 %', $response->body, 'Vollgeschwister-Verpaarung sollte 25,00 % zeigen.');
 
-        // Nur die Ergebnistabelle betrachten (die Auswahl-Dropdowns davor sind
-        // nach Name sortiert und würden die COI-Sortierung sonst verfälschen).
+        // Nur die Ergebnistabelle betrachten (das vorbelegte Suchfeld davor
+        // würde die COI-Sortierung sonst verfälschen).
         $table = strstr($response->body, '<tbody>');
         $this->assertIsString($table, "Ergebnistabelle (<tbody>) nicht gefunden. Body: {$response->body}");
 
@@ -96,6 +118,44 @@ class AnpaarungsEmpfehlungPluginTest extends FunctionalTestCase {
         $this->assertStringContainsString('Wallach erfasst', $geldingResponse->body);
         $this->assertStringNotContainsString('<tbody>', $geldingResponse->body, 'Für einen Wallach darf kein Ranking berechnet werden.');
 
+        // Serverseitige Basispferd-Suche (#69): JSON mit id + label, wie sie
+        // das Datalist-Script der Seite konsumiert.
+        $sucheResponse = $admin->get('/plugin/anpaarungs-empfehlung/suche?q=' . urlencode("AAsib-{$unique}"));
+        $this->assertSame(200, $sucheResponse->statusCode);
+        $suggestions = json_decode($sucheResponse->body, true);
+        $this->assertIsArray($suggestions, "Suchroute sollte JSON liefern. Body: {$sucheResponse->body}");
+        $this->assertCount(1, $suggestions, 'Der eindeutige Testname sollte genau einen Treffer liefern.');
+        $this->assertSame($sibId, (int) $suggestions[0]['id']);
+        $this->assertStringContainsString("AAsib-{$unique}", (string) $suggestions[0]['label']);
+
+        // Leere Suche liefert eine leere Liste statt des Gesamtbestands.
+        $emptySuche = $admin->get('/plugin/anpaarungs-empfehlung/suche?q=');
+        $this->assertSame('[]', trim($emptySuche->body), 'Ohne Suchbegriff darf die Suchroute nichts ausliefern.');
+
+        // No-JS-Fallback: Ohne base_id löst die Seite den getippten Text
+        // (base_q) serverseitig auf, sofern er eindeutig ist.
+        $fallbackResponse = $admin->get('/plugin/anpaarungs-empfehlung/empfehlung?base_q=' . urlencode("Base-{$unique}"));
+        $this->assertSame(200, $fallbackResponse->statusCode);
+        $this->assertStringContainsString("Empfehlungen für „Base-{$unique}", $fallbackResponse->body, 'Ein eindeutiger Name in base_q sollte serverseitig aufgelöst werden.');
+        $this->assertStringContainsString('25,00 %', $fallbackResponse->body);
+
+        // ... ein unauflösbarer Text erzeugt einen Hinweis statt eines Rankings.
+        $unresolvedResponse = $admin->get('/plugin/anpaarungs-empfehlung/empfehlung?base_q=' . urlencode("GibtEsNicht-{$unique}"));
+        $this->assertStringContainsString('kein eindeutiges Pferd gefunden', $unresolvedResponse->body);
+        $this->assertStringNotContainsString('<tbody>', $unresolvedResponse->body, 'Ohne aufgelöstes Basispferd darf kein Ranking erscheinen.');
+
+        // Kandidaten-Deckel (#69): limit=1 deckelt die berechnete Menge auf 5
+        // Kandidaten. Für die Stuten-Basis existieren hier mindestens sechs
+        // (GpA, GpB, Base, AAsib, ZZfree ohne Geschlecht plus GfHengst), der
+        // Hinweis auf die Deckelung muss also erscheinen - und angezeigt wird
+        // genau eine Zeile.
+        $capResponse = $admin->get("/plugin/anpaarungs-empfehlung/empfehlung?base_id={$mareBase}&limit=1");
+        $this->assertStringContainsString('alphabetisch ersten', $capResponse->body, 'Bei greifendem Kandidaten-Deckel muss die Seite darauf hinweisen.');
+        $capTable = strstr($capResponse->body, '<tbody>');
+        $this->assertIsString($capTable, "Ergebnistabelle für den Deckel-Fall nicht gefunden. Body: {$capResponse->body}");
+        $capTbody = substr($capTable, 0, (int) strpos($capTable, '</tbody>'));
+        $this->assertSame(1, substr_count($capTbody, '<tr'), 'limit=1 darf genau eine Ergebniszeile anzeigen.');
+
         // Das Basispferd selbst darf nicht als Partner-Vorschlag erscheinen.
         $this->assertStringNotContainsString(
             "Base-{$unique}",
@@ -117,6 +177,15 @@ class AnpaarungsEmpfehlungPluginTest extends FunctionalTestCase {
             403,
             $deniedResponse->statusCode,
             'Ohne anpaarung.recommend sollte die Plugin-Route 403 liefern.'
+        );
+
+        // ... die Suchroute gibt ohne die Berechtigung ebenfalls nichts preis
+        // (sie liefert Namen auch unveröffentlichter Pferde).
+        $deniedSuche = $editor->get('/plugin/anpaarungs-empfehlung/suche?q=a');
+        $this->assertSame(
+            403,
+            $deniedSuche->statusCode,
+            'Auch die Suchroute verlangt anpaarung.recommend.'
         );
 
         // ... und ist nach Zuweisung der Berechtigung erreichbar.
