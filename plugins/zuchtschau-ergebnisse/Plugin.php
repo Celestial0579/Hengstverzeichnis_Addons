@@ -35,8 +35,12 @@ class Plugin {
 
     /**
      * Framework-Hook (#75): Der PluginManager ruft install() bei der
-     * Aktivierung und nach einem Addon-Update genau einmal auf - das
-     * DDL-Statement läuft damit nicht mehr in jedem Request.
+     * Aktivierung und nach einem Addon-Update auf - das DDL-Statement läuft
+     * damit nicht mehr in jedem Request. install() muss idempotent sein
+     * (CREATE TABLE IF NOT EXISTS), denn der Kern garantiert "mindestens
+     * einmal nach Installation/Update", nicht "genau einmal" - so zieht ein
+     * Addon-Update auf einer Bestandsinstallation die neue Kindtabelle nach,
+     * ohne die vorhandene Ergebnistabelle anzufassen (#82).
      */
     public function install(): void {
         Database::getInstance()->exec(
@@ -52,6 +56,26 @@ class Plugin {
                 `comment` TEXT NULL DEFAULT NULL,
                 `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (`horse_id`) REFERENCES `horses`(`id`) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+        );
+
+        // Kindtabelle für Teilwertungen (#82): mehrspaltige Einzelwertungen
+        // (Dressur/Springen/Gelände, Zeiten, Distanzen ...) je Ergebnis. Alle
+        // Fachspalten bewusst NULL-tolerant - die Altdaten aus v1/v2 sind
+        // lückig, und eine Teilwertung mit nur Bezeichnung+Note ist gültig.
+        // ON DELETE CASCADE: Teilwertungen existieren nie ohne ihr Ergebnis.
+        Database::getInstance()->exec(
+            'CREATE TABLE IF NOT EXISTS `plugin_zuchtschau_teilwertungen` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `ergebnis_id` INT NOT NULL,
+                `bezeichnung` VARCHAR(150) NULL DEFAULT NULL,
+                `wertung` VARCHAR(100) NULL DEFAULT NULL,
+                `note` VARCHAR(50) NULL DEFAULT NULL,
+                `platzierung` VARCHAR(50) NULL DEFAULT NULL,
+                `distanz` VARCHAR(50) NULL DEFAULT NULL,
+                `zeit` VARCHAR(50) NULL DEFAULT NULL,
+                `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (`ergebnis_id`) REFERENCES `plugin_zuchtschau_ergebnisse`(`id`) ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
         );
     }
@@ -73,7 +97,13 @@ class Plugin {
             return;
         }
         try {
-            Database::getInstance()->query('SELECT 1 FROM `plugin_zuchtschau_ergebnisse` LIMIT 1');
+            // Die Probe zielt bewusst auf die JÜNGSTE Tabelle des Addons: Auf
+            // Bestandsinstallationen existiert `plugin_zuchtschau_ergebnisse`
+            // längst - eine Probe nur darauf würde nie fehlschlagen, und die
+            // mit v1.2.0 hinzugekommene Kindtabelle (#82) würde auf Kernen
+            // ohne install()-Hook nie angelegt. Fehlt die Kindtabelle, legt
+            // install() beide Tabellen idempotent an (IF NOT EXISTS).
+            Database::getInstance()->query('SELECT 1 FROM `plugin_zuchtschau_teilwertungen` LIMIT 1');
         } catch (\Throwable $e) {
             $this->install();
         }
@@ -90,7 +120,7 @@ class Plugin {
         $horseId = (int) $horse['id'];
 
         $stmt = Database::getInstance()->prepare(
-            'SELECT event_name, event_date, category, score, judge, placement, `comment`
+            'SELECT id, event_name, event_date, category, score, judge, placement, `comment`
              FROM `plugin_zuchtschau_ergebnisse`
              WHERE horse_id = :id
              ORDER BY event_date DESC, id DESC'
@@ -101,6 +131,17 @@ class Plugin {
         if (empty($results)) {
             return $sections;
         }
+
+        // Teilwertungen (#82) je Ergebnis nachladen. Bewusst EIN vorbereitetes
+        // Statement, das pro Ergebnis ausgeführt wird - kein per Interpolation
+        // zusammengesetztes IN(...): Die Detailseite zeigt wenige Ergebnisse,
+        // und das SQL bleibt ein reines Literal (Prepared Statement).
+        $twStmt = Database::getInstance()->prepare(
+            'SELECT bezeichnung, wertung, note, platzierung, distanz, zeit
+             FROM `plugin_zuchtschau_teilwertungen`
+             WHERE ergebnis_id = :ergebnis_id
+             ORDER BY id ASC'
+        );
 
         $html = '<div style="margin-top:0.5rem;">';
         $html .= '<h3 style="margin-bottom:0.5rem;">🏆 Zuchtschau-/Körungsergebnisse</h3>';
@@ -122,6 +163,30 @@ class Plugin {
             if (!empty($row['comment'])) {
                 $html .= '<tr style="border-bottom:1px solid var(--border-color);"><td colspan="6" style="padding:0 0.4rem 0.5rem 0.4rem;color:var(--text-muted);font-size:0.9em;">'
                     . htmlspecialchars((string) $row['comment'], ENT_QUOTES, 'UTF-8') . '</td></tr>';
+            }
+
+            // Teilwertungen unterhalb des jeweiligen Ergebnisses (#82) - nur
+            // rendern, wenn welche erfasst sind (kein leerer Unterabschnitt).
+            $twStmt->execute(['ergebnis_id' => (int) $row['id']]);
+            $teilwertungen = $twStmt->fetchAll(PDO::FETCH_ASSOC);
+            if (!empty($teilwertungen)) {
+                $html .= '<tr style="border-bottom:1px solid var(--border-color);"><td colspan="6" style="padding:0 0.4rem 0.5rem 1.2rem;">';
+                $html .= '<table style="width:100%;border-collapse:collapse;font-size:0.9em;">';
+                $html .= '<thead><tr style="text-align:left;color:var(--text-muted);">'
+                    . '<th style="padding:0.2rem 0.4rem;">Teilwertung</th><th style="padding:0.2rem 0.4rem;">Wertung</th>'
+                    . '<th style="padding:0.2rem 0.4rem;">Note</th><th style="padding:0.2rem 0.4rem;">Platzierung</th>'
+                    . '<th style="padding:0.2rem 0.4rem;">Distanz</th><th style="padding:0.2rem 0.4rem;">Zeit</th></tr></thead><tbody>';
+                foreach ($teilwertungen as $tw) {
+                    $html .= '<tr>';
+                    $html .= '<td style="padding:0.2rem 0.4rem;">' . htmlspecialchars((string) ($tw['bezeichnung'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
+                    $html .= '<td style="padding:0.2rem 0.4rem;">' . htmlspecialchars((string) ($tw['wertung'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
+                    $html .= '<td style="padding:0.2rem 0.4rem;">' . htmlspecialchars((string) ($tw['note'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
+                    $html .= '<td style="padding:0.2rem 0.4rem;">' . htmlspecialchars((string) ($tw['platzierung'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
+                    $html .= '<td style="padding:0.2rem 0.4rem;">' . htmlspecialchars((string) ($tw['distanz'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
+                    $html .= '<td style="padding:0.2rem 0.4rem;">' . htmlspecialchars((string) ($tw['zeit'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
+                    $html .= '</tr>';
+                }
+                $html .= '</tbody></table></td></tr>';
             }
         }
 
@@ -165,6 +230,16 @@ class Plugin {
                 'path' => '/ergebnisse/delete',
                 'callback' => [ErgebnisseController::class, 'delete'],
             ],
+            [
+                'method' => 'POST',
+                'path' => '/ergebnisse/teilwertung/store',
+                'callback' => [ErgebnisseController::class, 'storeTeilwertung'],
+            ],
+            [
+                'method' => 'POST',
+                'path' => '/ergebnisse/teilwertung/delete',
+                'callback' => [ErgebnisseController::class, 'deleteTeilwertung'],
+            ],
         ];
     }
 }
@@ -196,6 +271,18 @@ class ErgebnisseController extends BaseController {
              ORDER BY e.event_date DESC, e.id DESC'
         )->fetchAll(PDO::FETCH_ASSOC);
 
+        // Teilwertungen (#82) in einem Rutsch laden und nach Ergebnis
+        // gruppieren - erspart eine Query je Ergebniszeile.
+        $teilwertungenByErgebnis = [];
+        $twRows = $db->query(
+            'SELECT id, ergebnis_id, bezeichnung, wertung, note, platzierung, distanz, zeit
+             FROM `plugin_zuchtschau_teilwertungen`
+             ORDER BY id ASC'
+        )->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($twRows as $tw) {
+            $teilwertungenByErgebnis[(int) $tw['ergebnis_id']][] = $tw;
+        }
+
         $csrfToken = Router::generateCsrfToken();
 
         // Die Seite rendert als Fragment im Framework-Layout
@@ -205,6 +292,8 @@ class ErgebnisseController extends BaseController {
         // (Formular-Raster), Farben ausschließlich über Theme-Variablen.
         $content = '<style>';
         $content .= '.zuchtschau-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}';
+        $content .= '.zuchtschau-tw-form{display:grid;grid-template-columns:repeat(6,1fr) auto;gap:0.5rem;align-items:end;margin:0.3rem 0 0.5rem 0;}';
+        $content .= '.zuchtschau-tw-zelle{padding-left:1.5rem;}';
         $content .= '</style>';
 
         $content .= '<div class="card">';
@@ -253,11 +342,53 @@ class ErgebnisseController extends BaseController {
             $content .= '<td>' . htmlspecialchars((string) ($row['event_date'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
             $content .= '<td>' . htmlspecialchars((string) ($row['score'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
             $content .= '<td>' . htmlspecialchars((string) ($row['placement'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
-            $content .= '<td><form method="POST" action="/plugin/zuchtschau-ergebnisse/ergebnisse/delete" style="margin:0;" onsubmit="return confirm(\'Ergebnis wirklich löschen?\');">'
+            $content .= '<td><form method="POST" action="/plugin/zuchtschau-ergebnisse/ergebnisse/delete" style="margin:0;" onsubmit="return confirm(\'Ergebnis wirklich löschen? Zugehörige Teilwertungen werden mitgelöscht.\');">'
                 . '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">'
                 . '<input type="hidden" name="id" value="' . (int) $row['id'] . '">'
                 . '<button type="submit" class="btn btn-secondary" style="color:var(--danger-fg);">Löschen</button></form></td>';
             $content .= '</tr>';
+
+            // Teilwertungen (#82) direkt unter der Ergebniszeile pflegen:
+            // vorhandene auflisten (mit Löschen-Knopf) und neue über ein
+            // Inline-Formular anlegen - gleiches CRUD-Muster wie beim
+            // Ergebnis selbst (anlegen/löschen, kein Bearbeiten).
+            $ergebnisId = (int) $row['id'];
+            $content .= '<tr><td colspan="6" class="zuchtschau-tw-zelle">';
+            $content .= '<details><summary>Teilwertungen ('
+                . count($teilwertungenByErgebnis[$ergebnisId] ?? []) . ')</summary>';
+
+            if (!empty($teilwertungenByErgebnis[$ergebnisId])) {
+                $content .= '<table style="font-size:0.9em;"><thead><tr><th>Bezeichnung</th><th>Wertung</th><th>Note</th><th>Platzierung</th><th>Distanz</th><th>Zeit</th><th></th></tr></thead><tbody>';
+                foreach ($teilwertungenByErgebnis[$ergebnisId] as $tw) {
+                    $content .= '<tr>';
+                    $content .= '<td>' . htmlspecialchars((string) ($tw['bezeichnung'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
+                    $content .= '<td>' . htmlspecialchars((string) ($tw['wertung'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
+                    $content .= '<td>' . htmlspecialchars((string) ($tw['note'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
+                    $content .= '<td>' . htmlspecialchars((string) ($tw['platzierung'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
+                    $content .= '<td>' . htmlspecialchars((string) ($tw['distanz'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
+                    $content .= '<td>' . htmlspecialchars((string) ($tw['zeit'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
+                    $content .= '<td><form method="POST" action="/plugin/zuchtschau-ergebnisse/ergebnisse/teilwertung/delete" style="margin:0;" onsubmit="return confirm(\'Teilwertung wirklich löschen?\');">'
+                        . '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">'
+                        . '<input type="hidden" name="id" value="' . (int) $tw['id'] . '">'
+                        . '<button type="submit" class="btn btn-secondary" style="color:var(--danger-fg);">Löschen</button></form></td>';
+                    $content .= '</tr>';
+                }
+                $content .= '</tbody></table>';
+            }
+
+            $content .= '<form method="POST" action="/plugin/zuchtschau-ergebnisse/ergebnisse/teilwertung/store" class="zuchtschau-tw-form">';
+            $content .= '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">';
+            $content .= '<input type="hidden" name="ergebnis_id" value="' . $ergebnisId . '">';
+            $content .= '<input type="text" name="bezeichnung" class="form-control" placeholder="Bezeichnung" aria-label="Bezeichnung" required>';
+            $content .= '<input type="text" name="wertung" class="form-control" placeholder="Wertung" aria-label="Wertung">';
+            $content .= '<input type="text" name="note" class="form-control" placeholder="Note" aria-label="Note">';
+            $content .= '<input type="text" name="platzierung" class="form-control" placeholder="Platzierung" aria-label="Platzierung">';
+            $content .= '<input type="text" name="distanz" class="form-control" placeholder="Distanz" aria-label="Distanz">';
+            $content .= '<input type="text" name="zeit" class="form-control" placeholder="Zeit" aria-label="Zeit">';
+            $content .= '<button type="submit" class="btn">Teilwertung anlegen</button>';
+            $content .= '</form>';
+
+            $content .= '</details></td></tr>';
         }
         if (empty($results)) {
             $content .= '<tr><td colspan="6">Noch keine Ergebnisse erfasst.</td></tr>';
@@ -307,7 +438,73 @@ class ErgebnisseController extends BaseController {
 
         $id = !empty($_POST['id']) ? (int) $_POST['id'] : null;
         if ($id) {
+            // Zugehörige Teilwertungen räumt die Datenbank selbst ab
+            // (FK ON DELETE CASCADE, siehe install()).
             $stmt = Database::getInstance()->prepare('DELETE FROM `plugin_zuchtschau_ergebnisse` WHERE id = :id');
+            $stmt->execute(['id' => $id]);
+        }
+
+        header('Location: /plugin/zuchtschau-ergebnisse/ergebnisse');
+        exit;
+    }
+
+    /**
+     * Legt eine Teilwertung (#82) zu einem bestehenden Ergebnis an. Alle
+     * Fachfelder außer der Bezeichnung sind optional (NULL-tolerant, wie die
+     * lückigen Altdaten); die Bezeichnung ist im Admin-Formular Pflicht,
+     * damit dort keine unbenennbaren Leerzeilen entstehen.
+     */
+    public function storeTeilwertung(): void {
+        if (!Router::verifyCsrfToken($_POST['csrf_token'] ?? '')) {
+            $this->renderForbidden('CSRF-Sicherheits-Token ungültig oder abgelaufen.');
+        }
+
+        $ergebnisId = !empty($_POST['ergebnis_id']) ? (int) $_POST['ergebnis_id'] : null;
+        $bezeichnung = trim($_POST['bezeichnung'] ?? '');
+
+        if ($ergebnisId && $bezeichnung !== '') {
+            // Existenz des Elternergebnisses vorab prüfen, statt den
+            // FK-Fehler als 500er beim Benutzer landen zu lassen (z. B.
+            // wenn das Ergebnis in einem zweiten Tab gelöscht wurde).
+            $check = Database::getInstance()->prepare(
+                'SELECT id FROM `plugin_zuchtschau_ergebnisse` WHERE id = :id'
+            );
+            $check->execute(['id' => $ergebnisId]);
+
+            if ($check->fetchColumn() !== false) {
+                $stmt = Database::getInstance()->prepare(
+                    'INSERT INTO `plugin_zuchtschau_teilwertungen`
+                        (ergebnis_id, bezeichnung, wertung, note, platzierung, distanz, zeit)
+                     VALUES (:ergebnis_id, :bezeichnung, :wertung, :note, :platzierung, :distanz, :zeit)'
+                );
+                $stmt->execute([
+                    'ergebnis_id' => $ergebnisId,
+                    'bezeichnung' => $bezeichnung,
+                    'wertung' => trim($_POST['wertung'] ?? '') ?: null,
+                    'note' => trim($_POST['note'] ?? '') ?: null,
+                    'platzierung' => trim($_POST['platzierung'] ?? '') ?: null,
+                    'distanz' => trim($_POST['distanz'] ?? '') ?: null,
+                    'zeit' => trim($_POST['zeit'] ?? '') ?: null,
+                ]);
+            }
+        }
+
+        header('Location: /plugin/zuchtschau-ergebnisse/ergebnisse');
+        exit;
+    }
+
+    /**
+     * Löscht eine einzelne Teilwertung (#82) - das Ergebnis selbst bleibt
+     * bestehen (Gegenrichtung läuft über den FK-CASCADE, siehe delete()).
+     */
+    public function deleteTeilwertung(): void {
+        if (!Router::verifyCsrfToken($_POST['csrf_token'] ?? '')) {
+            $this->renderForbidden('CSRF-Sicherheits-Token ungültig oder abgelaufen.');
+        }
+
+        $id = !empty($_POST['id']) ? (int) $_POST['id'] : null;
+        if ($id) {
+            $stmt = Database::getInstance()->prepare('DELETE FROM `plugin_zuchtschau_teilwertungen` WHERE id = :id');
             $stmt->execute(['id' => $id]);
         }
 
