@@ -1,11 +1,14 @@
 {
     "slug": "titel-praemierungen",
     "name": "Titel & Prämierungen",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "core_compatibility": ">=0.4.0",
-    "core_supported_max": "0.4",
+    "core_supported_max": "0.5",
     "description": "Erfasst Titel, Prämierungen und sportliche Erfolge strukturiert pro Pferd (Art, Bezeichnung, Jahr, Kommentar) im Admin-Bereich und zeigt sie auf der öffentlichen Detailseite an.",
     "author": "Hengstverzeichnis_Addons",
-    "hooks": ["horse.detail_sections", "admin.dashboard_tiles"],
+    "hooks": [
+        "horse.detail_sections",
+        "admin.dashboard_tiles"
+    ],
     "entry": "Plugin.php"
 }

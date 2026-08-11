@@ -1,11 +1,15 @@
 {
     "slug": "besucherstatistik",
     "name": "Besucherstatistik",
-    "version": "1.1.1",
+    "version": "1.1.2",
     "core_compatibility": ">=0.4.0",
-    "core_supported_max": "0.4",
+    "core_supported_max": "0.5",
     "description": "Zählt Seitenaufrufe je Pferd auf der öffentlichen Detailseite und zeigt eine Rangliste der meistgesehenen Pferde im Admin-Bereich.",
     "author": "Hengstverzeichnis_Addons",
-    "hooks": ["horse.detail_sections", "admin.dashboard_tiles", "horse.after_save"],
+    "hooks": [
+        "horse.detail_sections",
+        "admin.dashboard_tiles",
+        "horse.after_save"
+    ],
     "entry": "Plugin.php"
 }
