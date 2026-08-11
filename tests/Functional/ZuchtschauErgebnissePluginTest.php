@@ -67,7 +67,64 @@ class ZuchtschauErgebnissePluginTest extends FunctionalTestCase {
         $this->assertStringContainsString('Dr. Testrichter', $detailAfter->body);
         $this->assertStringContainsString('Hervorragende Bewegungsqualität.', $detailAfter->body);
 
-        // 5. Berechtigungsdurchsetzung: Editor ohne zuchtschau-ergebnisse.manage wird abgewiesen ...
+        // 5. Teilwertungen (#82): ID des Ergebnisses aus der Admin-Übersicht
+        // ziehen (erste id-Zeile ist das Lösch-Formular des Ergebnisses,
+        // die Teilwertungs-Formulare folgen erst danach im Markup).
+        preg_match('/name="id" value="(\d+)"/', $indexAfter->body, $ergebnisIdMatch);
+        $this->assertNotEmpty($ergebnisIdMatch, 'Konnte ID des erfassten Ergebnisses nicht ermitteln.');
+        $ergebnisId = (int) $ergebnisIdMatch[1];
+
+        // 5a. Teilwertung anlegen - Distanz bewusst leer gelassen: die
+        // Fachfelder sind NULL-tolerant (lückige Altdaten aus v1/v2).
+        $teilwertungName = "Dressur-{$unique}";
+        $twStoreResponse = $admin->post('/plugin/zuchtschau-ergebnisse/ergebnisse/teilwertung/store', [
+            'csrf_token' => $indexAfter->formField('csrf_token') ?? '',
+            'ergebnis_id' => (string) $ergebnisId,
+            'bezeichnung' => $teilwertungName,
+            'wertung' => 'A',
+            'note' => '7,8',
+            'platzierung' => '2.',
+            'distanz' => '',
+            'zeit' => '4:32,1',
+        ]);
+        $this->assertSame('/plugin/zuchtschau-ergebnisse/ergebnisse', $twStoreResponse->location());
+
+        // 5b. Admin-Übersicht und öffentliche Detailseite zeigen die
+        // Teilwertung unterhalb des Ergebnisses.
+        $indexWithTw = $admin->get('/plugin/zuchtschau-ergebnisse/ergebnisse');
+        $this->assertStringContainsString($teilwertungName, $indexWithTw->body);
+        $this->assertStringContainsString('Teilwertungen (1)', $indexWithTw->body);
+
+        $detailWithTw = $visitor->get("/horse?id={$horseId}");
+        $this->assertStringContainsString($teilwertungName, $detailWithTw->body);
+        $this->assertStringContainsString('7,8', $detailWithTw->body);
+        $this->assertStringContainsString('4:32,1', $detailWithTw->body);
+
+        // 5c. Einzelne Teilwertung wieder löschen (eigene Route), ohne das
+        // Ergebnis anzutasten - danach eine zweite anlegen, die später den
+        // CASCADE-Nachweis liefert.
+        preg_match('#teilwertung/delete.*?name="id" value="(\d+)"#s', $indexWithTw->body, $twIdMatch);
+        $this->assertNotEmpty($twIdMatch, 'Konnte ID der erfassten Teilwertung nicht ermitteln.');
+
+        $twDeleteResponse = $admin->post('/plugin/zuchtschau-ergebnisse/ergebnisse/teilwertung/delete', [
+            'csrf_token' => $indexWithTw->formField('csrf_token') ?? '',
+            'id' => $twIdMatch[1],
+        ]);
+        $this->assertSame('/plugin/zuchtschau-ergebnisse/ergebnisse', $twDeleteResponse->location());
+
+        $detailAfterTwDelete = $visitor->get("/horse?id={$horseId}");
+        $this->assertStringNotContainsString($teilwertungName, $detailAfterTwDelete->body);
+        $this->assertStringContainsString($eventName, $detailAfterTwDelete->body);
+
+        $cascadeName = "Springen-{$unique}";
+        $admin->post('/plugin/zuchtschau-ergebnisse/ergebnisse/teilwertung/store', [
+            'csrf_token' => $indexWithTw->formField('csrf_token') ?? '',
+            'ergebnis_id' => (string) $ergebnisId,
+            'bezeichnung' => $cascadeName,
+        ]);
+        $this->assertSame(1, $this->countTeilwertungen($ergebnisId));
+
+        // 6. Berechtigungsdurchsetzung: Editor ohne zuchtschau-ergebnisse.manage wird abgewiesen ...
         $editorGroupId = $this->findBuiltinGroupId($admin, 'Editor');
         $editor = $this->createAndLoginEditor(
             $admin,
@@ -87,17 +144,37 @@ class ZuchtschauErgebnissePluginTest extends FunctionalTestCase {
         $this->assertSame(200, $allowedResponse->statusCode);
         $this->assertStringContainsString($eventName, $allowedResponse->body);
 
-        // 6. Löschen entfernt das Ergebnis wieder von der Detailseite.
-        preg_match('/name="id" value="(\d+)"/', $indexAfter->body, $idMatch);
-        $this->assertNotEmpty($idMatch, 'Konnte ID des erfassten Ergebnisses nicht ermitteln.');
-
+        // 7. Löschen entfernt das Ergebnis wieder von der Detailseite - und
+        // per FK ON DELETE CASCADE auch seine Teilwertungen. Der Nachweis
+        // läuft nicht nur über die (dann ohnehin leere) Detailseite, sondern
+        // direkt gegen die Datenbank: Ein grün gerenderter Abschnitt ist kein
+        // Beleg dafür, dass die Kindzeilen wirklich weg sind.
         $deleteResponse = $admin->post('/plugin/zuchtschau-ergebnisse/ergebnisse/delete', [
             'csrf_token' => $indexAfter->formField('csrf_token') ?? '',
-            'id' => $idMatch[1],
+            'id' => (string) $ergebnisId,
         ]);
         $this->assertSame('/plugin/zuchtschau-ergebnisse/ergebnisse', $deleteResponse->location());
 
         $detailAfterDelete = $visitor->get("/horse?id={$horseId}");
         $this->assertStringNotContainsString('Zuchtschau-/Körungsergebnisse', $detailAfterDelete->body);
+        $this->assertStringNotContainsString($cascadeName, $detailAfterDelete->body);
+        $this->assertSame(
+            0,
+            $this->countTeilwertungen($ergebnisId),
+            'FK ON DELETE CASCADE hat die Teilwertungen des gelöschten Ergebnisses nicht entfernt.'
+        );
+    }
+
+    /**
+     * Zählt Teilwertungen direkt in der Datenbank - der unabhängige
+     * Nebeneffekt-Nachweis für Anlage und CASCADE (die DB_*-Konstanten für
+     * diesen Prozess setzt tests/bootstrap.php aus der Umgebung).
+     */
+    private function countTeilwertungen(int $ergebnisId): int {
+        $stmt = \App\Database::getInstance()->prepare(
+            'SELECT COUNT(*) FROM `plugin_zuchtschau_teilwertungen` WHERE ergebnis_id = :id'
+        );
+        $stmt->execute(['id' => $ergebnisId]);
+        return (int) $stmt->fetchColumn();
     }
 }

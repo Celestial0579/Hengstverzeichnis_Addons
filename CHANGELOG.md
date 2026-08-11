@@ -8,6 +8,19 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+### Zuchtschau-Ergebnisse
+
+- Teilwertungen strukturiert statt im Kommentarfeld (#82): Neue Kindtabelle
+  `plugin_zuchtschau_teilwertungen` (`ergebnis_id` FK mit
+  `ON DELETE CASCADE`; `bezeichnung`, `wertung`, `note`, `platzierung`,
+  `distanz`, `zeit` - alle Fachspalten NULL-tolerant, die Altdaten aus
+  v1/v2 sind lückig). Pflege (anlegen/löschen) im Admin-Bereich unterhalb
+  der jeweiligen Ergebniszeile, Anzeige auf der öffentlichen Detailseite
+  unterhalb des Ergebnisses. `install()` legt beide Tabellen idempotent an;
+  die `SELECT`-Probe des Fallbacks für Kerne ohne `install()`-Hook zielt
+  jetzt auf die jüngste Tabelle, damit Bestandsinstallationen die
+  Kindtabelle nachziehen. Plugin-Version 1.2.0
+
 ## [0.4.1] – 2026-08-10
 
 ### Farbvererbung
