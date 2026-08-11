@@ -8,7 +8,35 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
-### Zuchtschau-Ergebnisse
+## [0.5.0] – 2026-08-11
+
+Alle 17 Addons deklarieren jetzt die Kern-Linie 0.5 (`core_supported_max`,
+Patch-Version-Bump je Plugin) — passend zum Framework-Release v0.5.0. Ohne
+diesen Bump würde ein 0.5-Kern die Addons fail-closed als inkompatibel
+ablehnen.
+
+### Datenmigration (NEU, 1.0.x)
+
+- Vollständiger Instanz-Umzug Framework → Framework (#80): Export bündelt
+  Datenbank (DatabaseDumper), sämtliche Uploads und ein Manifest
+  (Kern-Version, Plugin-Bestand, Zählstände) in ein tar(.gz)-Archiv —
+  eigener streamender ustar-Schreiber, bewusst ohne ext-zip. Import auf der
+  Zielinstanz zweistufig (Prüfseite mit Versions-/Plugin-Abgleich →
+  ausdrückliche Bestätigung), mit Sicherungs-Dump vor dem Anwenden,
+  Pfadhärtung gegen Archiv-Traversal und Sitzungsende nach der
+  Benutzerübernahme. Große Archive laufen am PHP-Upload-Limit vorbei über
+  `var/datenmigration/`.
+
+### Titel & Prämierungen (NEU, 1.0.x)
+
+- Strukturierte Auszeichnungen je Pferd (#81): Tabelle
+  `plugin_titel_praemierungen` (Art: Titel/Prämierung/Erfolg, Bezeichnung,
+  Jahr, Kommentar), Detail-Sektion nach Art gruppiert, CRUD mit eigener
+  Berechtigung, Dashboard-Kachel. Zielstruktur für die v1/v2-Altdaten
+  (258 Titel-, 125 Prämierungs-, 104 Erfolgs-Listen), die bisher nur als
+  Beschreibungstext ankommen konnten.
+
+### Zuchtschau-Ergebnisse (1.2.x)
 
 - Teilwertungen strukturiert statt im Kommentarfeld (#82): Neue Kindtabelle
   `plugin_zuchtschau_teilwertungen` (`ergebnis_id` FK mit

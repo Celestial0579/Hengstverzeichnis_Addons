@@ -53,8 +53,8 @@ class ReleaseConsistencyTest extends TestCase {
         $this->assertNotSame(0, $exitCode);
         $this->assertStringContainsString('core_compatibility', $output);
 
-        // Linie 0.5 reißt die Obergrenze core_supported_max 0.4.
-        [$exitCode, $output] = $this->runScript('v0.5.0');
+        // Linie 0.6 reißt die Obergrenze core_supported_max 0.5.
+        [$exitCode, $output] = $this->runScript('v0.6.0');
         $this->assertNotSame(0, $exitCode);
         $this->assertStringContainsString('core_supported_max', $output);
     }
