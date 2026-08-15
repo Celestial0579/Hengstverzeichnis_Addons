@@ -205,14 +205,24 @@ class ExportController extends BaseController {
         // Ohne is_published-Einschränkung: Der Export ist bewusst eine
         // Backoffice-Funktion und enthält auch unveröffentlichte Personen
         // (siehe README).
+        // Seit Framework #246 gilt dort die Regel: Wo ueln/foreign_ueln
+        // durchsucht wird, wird auch die Kindtabelle horse_registrations
+        // (weitere Lebensnummern) einbezogen - foreign_ueln bleibt als
+        // Kompatibilitäts-Fallback dabei. Der Export spiegelt die Filter des
+        // Kerns (ApiController::buildFilters()) und zieht deshalb mit; sonst
+        // fände der Export ein Pferd nicht, das der Katalog über dieselbe
+        // Nummer findet.
         if ($search !== '') {
             $like = '%' . $search . '%';
             $where[] = "(h.name LIKE ? OR h.ueln LIKE ? OR h.foreign_ueln LIKE ? OR h.sire_name LIKE ? OR h.dam_name LIKE ? OR bs.name LIKE ? OR h.breeding_station LIKE ? OR EXISTS (
+                SELECT 1 FROM horse_registrations hreg
+                WHERE hreg.horse_id = h.id AND hreg.registration_number LIKE ?
+            ) OR EXISTS (
                 SELECT 1 FROM horse_persons hps
                 JOIN persons ps ON ps.id = hps.person_id AND ps.deleted_at IS NULL
                 WHERE hps.horse_id = h.id AND ps.name LIKE ?
             ))";
-            array_push($params, $like, $like, $like, $like, $like, $like, $like, $like);
+            array_push($params, $like, $like, $like, $like, $like, $like, $like, $like, $like);
         }
         if ($qName !== '') {
             $where[] = "h.name LIKE ?";
@@ -220,8 +230,11 @@ class ExportController extends BaseController {
         }
         if ($qUeln !== '') {
             $like = '%' . $qUeln . '%';
-            $where[] = "(h.ueln LIKE ? OR h.foreign_ueln LIKE ?)";
-            array_push($params, $like, $like);
+            $where[] = "(h.ueln LIKE ? OR h.foreign_ueln LIKE ? OR EXISTS (
+                SELECT 1 FROM horse_registrations hreg
+                WHERE hreg.horse_id = h.id AND hreg.registration_number LIKE ?
+            ))";
+            array_push($params, $like, $like, $like);
         }
         if ($birthYearFrom !== null) {
             $where[] = "h.birth_year >= ?";

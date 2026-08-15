@@ -8,6 +8,29 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+### Behoben
+
+- **Weitere Lebensnummern wurden von zwei Addons nicht mitgesucht** (#91).
+  Der Kern zieht seit Framework #246 die Kindtabelle `horse_registrations`
+  überall dort mit heran, wo `ueln`/`foreign_ueln` durchsucht wird. Zwei
+  Addons, die Kern-Abfragen spiegeln, taten das nicht:
+  - *Anpaarungs-Empfehlung:* Der kantenbasierte `AncestorTreeBuilder` löste
+    einen Freitext-Elternteil nur über `ueln`/`foreign_ueln` auf. Ein Pferd,
+    dessen Elternteil über eine weitere Lebensnummer referenziert ist, wurde
+    dort als Platzhalter statt als echter Ahn geführt — mit abweichendem
+    Abstammungsbaum und damit abweichendem Inzuchtkoeffizienten gegenüber dem
+    Kern. Der Gleichlauf-Test gegen `PedigreeBuilder` deckt den Fall jetzt ab
+    (auch die Gegenprobe: die Nummer eines gelöschten Pferdes darf *nicht*
+    auflösen).
+  - *Katalog-Export:* Volltext- und UELN-Suche fanden ein Pferd nicht, das
+    der Katalog über dieselbe Nummer findet.
+
+### Geändert
+
+- `composer.lock` hebt `hengstverzeichnis/framework` von `e1f760b` auf
+  `7f54071` (Stand Kern-`main`). Damit laufen Suite und CI wieder gegen den
+  Kern, gegen den die Addons tatsächlich betrieben werden.
+
 ## [0.5.0] – 2026-08-11
 
 Alle 17 Addons deklarieren jetzt die Kern-Linie 0.5 (`core_supported_max`,

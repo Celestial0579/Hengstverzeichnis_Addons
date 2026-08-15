@@ -173,34 +173,75 @@ final class AncestorTreeBuilder {
         . 'sire_id, sire_name, sire_ueln, dam_id, dam_name, dam_ueln '
         . 'FROM horses WHERE deleted_at IS NULL';
 
+    /**
+     * Zweite geschlossene Abfrage: die weiteren Lebensnummern (Framework #246).
+     * Bewusst getrennt statt als JOIN in EDGE_SQL - eine Verkettung je Pferd
+     * bräuchte GROUP_CONCAT, und dessen Trennzeichen-Syntax unterscheidet sich
+     * zwischen MariaDB und dem SQLite des Unit-Tests. Zwei Abfragen mit fester
+     * Anzahl bleiben im Sinne von #69 (kein N+1 je Baum).
+     */
+    public const REGISTRATION_SQL = 'SELECT horse_id, registration_number FROM horse_registrations';
+
     /** @var array<int, array<string, mixed>> id => Zeile (ohne id-Spalte, FETCH_UNIQUE-Form) */
     private array $rows;
 
-    /** @var array<string, int> kleingeschriebene UELN/Fremd-UELN => Pferde-ID */
+    /** @var array<string, int> kleingeschriebene UELN/Fremd-UELN/Lebensnummer => Pferde-ID */
     private array $uelnIndex = [];
 
     /** @var array<string, int> kleingeschriebener Name => Pferde-ID */
     private array $nameIndex = [];
 
-    /** @param array<int, array<string, mixed>> $rowsById */
-    private function __construct(array $rowsById) {
+    /**
+     * @param array<int, array<string, mixed>> $rowsById
+     * @param array<int, array{horse_id: mixed, registration_number: mixed}> $registrations
+     *   Weitere Lebensnummern je Pferd (#246); leer, wenn keine vorliegen.
+     */
+    private function __construct(array $rowsById, array $registrations = []) {
         $this->rows = $rowsById;
 
         // Lookup-Indizes für die Freitext-Auflösung (Spiegel von
-        // PedigreeBuilder::findParentByUelnOrName): je Zeile erst UELN, dann
-        // Fremd-UELN; bei Kollisionen gewinnt die zuerst gesehene (= kleinste)
-        // ID - deterministisches Pendant zum LIMIT 1 der DB.
+        // PedigreeBuilder::findParentByUelnOrName): UELN, Fremd-UELN und seit
+        // Framework #246 auch die weiteren Lebensnummern stehen dort in EINEM
+        // OR gleichrangig nebeneinander. Deshalb wird hier je Schlüssel die
+        // kleinste ID über alle drei Quellen hinweg genommen - deterministisches
+        // Pendant zum unbestimmten LIMIT 1 der DB, und anders als ein
+        // "erster Treffer gewinnt" unabhängig davon, in welcher Reihenfolge
+        // die beiden Abfragen ihre Zeilen liefern.
         foreach ($rowsById as $id => $row) {
             foreach ([$row['ueln'] ?? null, $row['foreign_ueln'] ?? null] as $ueln) {
-                $key = mb_strtolower(trim((string) $ueln));
-                if ($key !== '' && !isset($this->uelnIndex[$key])) {
-                    $this->uelnIndex[$key] = (int) $id;
-                }
+                self::rememberSmallestId($this->uelnIndex, $ueln, (int) $id);
             }
             $nameKey = mb_strtolower(trim((string) ($row['name'] ?? '')));
             if ($nameKey !== '' && !isset($this->nameIndex[$nameKey])) {
                 $this->nameIndex[$nameKey] = (int) $id;
             }
+        }
+
+        foreach ($registrations as $registration) {
+            $horseId = (int) ($registration['horse_id'] ?? 0);
+            // Eine Nummer, deren Pferd gelöscht ist, darf nicht auflösen: der
+            // Kern filtert im selben Query mit deleted_at IS NULL, EDGE_SQL
+            // liefert gelöschte Pferde gar nicht erst mit.
+            if ($horseId <= 0 || !isset($rowsById[$horseId])) {
+                continue;
+            }
+            self::rememberSmallestId($this->uelnIndex, $registration['registration_number'] ?? null, $horseId);
+        }
+    }
+
+    /**
+     * Trägt $id unter dem normalisierten $rawKey ein, sofern der Schlüssel
+     * nicht leer ist und noch keine kleinere ID dort steht.
+     *
+     * @param array<string, int> $index
+     */
+    private static function rememberSmallestId(array &$index, mixed $rawKey, int $id): void {
+        $key = mb_strtolower(trim((string) $rawKey));
+        if ($key === '') {
+            return;
+        }
+        if (!isset($index[$key]) || $id < $index[$key]) {
+            $index[$key] = $id;
         }
     }
 
@@ -208,15 +249,18 @@ final class AncestorTreeBuilder {
         // PDO::FETCH_UNIQUE: die erste Spalte (id) wird Array-Schlüssel und
         // aus der Zeile entfernt - genau die Form, die fromRows() erwartet.
         $rows = $db->query(self::EDGE_SQL)->fetchAll(PDO::FETCH_ASSOC | PDO::FETCH_UNIQUE);
-        return self::fromRows($rows);
+        $registrations = $db->query(self::REGISTRATION_SQL)->fetchAll(PDO::FETCH_ASSOC);
+        return self::fromRows($rows, $registrations);
     }
 
     /**
      * @param array<int, array<string, mixed>> $rowsById id => Zeile mit den
      *   Spalten aus EDGE_SQL (ohne id, die steckt im Schlüssel)
+     * @param array<int, array{horse_id: mixed, registration_number: mixed}> $registrations
+     *   Zeilen aus REGISTRATION_SQL; leer heißt "keine weiteren Lebensnummern".
      */
-    public static function fromRows(array $rowsById): self {
-        return new self($rowsById);
+    public static function fromRows(array $rowsById, array $registrations = []): self {
+        return new self($rowsById, $registrations);
     }
 
     /**
