@@ -8,6 +8,25 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+### Geändert
+
+- **Galerie (1.2.0):** Medienpflege hängt jetzt über `horse.edit_sections`
+  direkt im Bearbeitungsformular des Hengstes (#88). Wer Medien zu *einem*
+  Pferd pflegt, musste dafür bisher die bestandsweite Verwaltungsseite öffnen
+  und das Pferd dort erneut heraussuchen, obwohl er längst in dessen Datensatz
+  stand. Die `horse_id` kommt jetzt aus dem Aufrufkontext.
+  - Der Abschnitt bringt sein eigenes `enctype="multipart/form-data"`-Formular
+    mit — ohne die Kodierung käme der Upload als leeres `$_FILES` an, ohne
+    Fehlermeldung.
+  - Bild **oder** Video-Link, mit ausdrücklichem Hinweis: Bei beidem gewinnt
+    der Upload, der Link verfiele sonst stillschweigend.
+  - **Keine Lightbox** im Abschnitt — sie hängt an JS/CSS der öffentlichen
+    Detailseite und wäre im Bearbeitungsformular funktionslos.
+  - Nach dem Anlegen und Löschen geht es zurück in den Pferdedatensatz, nicht
+    auf die Verwaltungsseite.
+  - Die Verwaltungsseite bleibt als bestandsweite Übersicht bestehen, und auf
+    einem Kern ohne den Hook passiert schlicht nichts.
+
 ### Behoben
 
 - **Weitere Lebensnummern wurden von zwei Addons nicht mitgesucht** (#91).

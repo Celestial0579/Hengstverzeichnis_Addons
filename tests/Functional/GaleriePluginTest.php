@@ -21,6 +21,71 @@ class GaleriePluginTest extends FunctionalTestCase {
 
     private const SLUG = 'galerie';
 
+    /**
+     * Integration in die Hengstverwaltung (#88, Framework-Hook
+     * horse.edit_sections).
+     *
+     * Anders als bei #87 ist hier nicht die Performance der Punkt, sondern die
+     * UI-Verlagerung - und drei Eigenheiten, die man beim Verlagern still
+     * verliert:
+     *
+     * 1. `enctype="multipart/form-data"`. Der Abschnitt steht ausserhalb des
+     *    Kern-Formulars und muss die Kodierung selbst deklarieren. Fehlt sie,
+     *    kommt der Upload als leeres $_FILES an - ohne Fehlermeldung, der
+     *    Bearbeiter sieht nur, dass nichts passiert.
+     * 2. `zurueck=pferd`. Ohne den Rücksprung landet man nach dem Anlegen auf
+     *    der bestandsweiten Verwaltungsseite, obwohl man mit dem Pferd noch
+     *    nicht fertig ist.
+     * 3. KEINE Lightbox. Sie hängt an JS/CSS der öffentlichen Detailseite und
+     *    wäre im Bearbeitungsformular funktionslos.
+     */
+    public function testEditFormCarriesTheGallerySection(): void {
+        $admin = $this->authenticatedClient();
+
+        $admin->post('/admin/plugins/toggle', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'slug' => self::SLUG,
+            'enable' => '1',
+        ]);
+
+        $horseId = $this->createHorse($admin, 'GalerieAbschnitt-' . uniqid(), ['status' => 'active']);
+        $form = $admin->get('/admin/horses/edit?id=' . $horseId);
+        $this->assertSame(200, $form->statusCode);
+
+        $this->assertStringContainsString(
+            'Galerie',
+            $form->body,
+            'Der Galerie-Abschnitt erscheint nicht im Bearbeitungsformular - genau das ist #88.'
+        );
+        $this->assertStringContainsString(
+            '/plugin/galerie/verwaltung/store',
+            $form->body,
+            'Das Erfassungsformular des Abschnitts fehlt.'
+        );
+
+        // Der Upload braucht die Kodierung, sonst kommt $_FILES leer an.
+        $this->assertMatchesRegularExpression(
+            '/<form[^>]*action="\/plugin\/galerie\/verwaltung\/store"[^>]*enctype="multipart\/form-data"/',
+            $form->body,
+            'Ohne enctype="multipart/form-data" scheitert der Upload lautlos.'
+        );
+
+        // Die horse_id kommt aus dem Aufrufkontext - keine erneute Pferdesuche.
+        $this->assertMatchesRegularExpression(
+            '/name="horse_id" value="' . $horseId . '"/',
+            $form->body,
+            'Die horse_id muss aus dem Kontext stammen, nicht erneut gesucht werden.'
+        );
+        $this->assertStringContainsString('name="zurueck" value="pferd"', $form->body);
+
+        // Und ausdruecklich NICHT: die Lightbox der oeffentlichen Detailseite.
+        $this->assertStringNotContainsString(
+            'galerie-lightbox',
+            $form->body,
+            'Die Lightbox ist im Bearbeitungsformular funktionslos und gehoert nicht hinein.'
+        );
+    }
+
     public function testFullPluginLifecycle(): void {
         $admin = $this->authenticatedClient();
 

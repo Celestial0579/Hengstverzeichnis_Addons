@@ -38,7 +38,126 @@ class Plugin {
     public function register(HookManager $hooks): void {
         $this->ensureTable();
         $hooks->addFilter('horse.detail_sections', [$this, 'addDetailSection']);
+        $hooks->addFilter('horse.edit_sections', [$this, 'addEditSection']);
         $hooks->addFilter('admin.dashboard_tiles', [$this, 'addDashboardTile']);
+    }
+
+    /**
+     * Filter (#88, Framework#255): hängt die Medienpflege direkt in das
+     * Admin-Bearbeitungsformular des Hengstes.
+     *
+     * Anders als bei #87 geht es hier NICHT um Performance - die
+     * Pferdeauswahl läuft seit `5fe4c1c` bereits über eine begrenzte
+     * AJAX-Suche. Es geht um dasselbe strukturelle Muster: Wer Medien zu EINEM
+     * Pferd pflegt, öffnet dafür bisher eine bestandsweite Verwaltungsseite
+     * und sucht das Pferd dort erneut heraus, obwohl er längst in dessen
+     * Datensatz steht.
+     *
+     * Drei Dinge unterscheiden diesen Abschnitt von dem in #87:
+     *
+     * - **`enctype="multipart/form-data"`.** Der Abschnitt bringt sein eigenes
+     *   Formular mit (der Hook setzt es ausserhalb des Kern-Formulars ab), es
+     *   muss die Kodierung also selbst deklarieren - sonst käme der Upload als
+     *   leeres $_FILES an, und zwar ohne Fehlermeldung.
+     * - **Zwei einander ausschliessende Medienarten.** Bild ODER Video-Link.
+     *   Der Text sagt das ausdrücklich, weil `store()` bei beidem den Upload
+     *   gewinnen lässt und der Video-Link stillschweigend verfiele.
+     * - **Keine Lightbox.** Die öffentliche Detailseite bindet dafür JS und CSS
+     *   ein; im Bearbeitungsformular wäre sie funktionslos. Die Vorschau bleibt
+     *   ein einfaches Vorschaubild.
+     *
+     * Auf einem Kern ohne den Hook passiert schlicht nichts; die
+     * Verwaltungsseite bleibt deshalb als Pflegeweg bestehen und dient
+     * weiterhin der bestandsweiten Übersicht.
+     */
+    public function addEditSection(array $sections, array $horse): array {
+        // Das Bearbeitungsformular verlangt horses.edit, diese Daten aber
+        // galerie.manage. Ohne diese Prüfung sähe ein Redakteur ein Formular,
+        // das beim Absenden 403 liefert. Fail-closed, wie in #87.
+        if (!\App\Permission\GroupMembership::hasPermission(
+            (int) ($_SESSION['user_id'] ?? 0), 'galerie', 'manage'
+        )) {
+            return $sections;
+        }
+
+        $horseId = (int) ($horse['id'] ?? 0);
+        if ($horseId <= 0) {
+            return $sections;
+        }
+
+        $stmt = Database::getInstance()->prepare(
+            'SELECT id, type, file_path, video_url, caption, sort_order
+             FROM `plugin_galerie_media`
+             WHERE horse_id = :id
+             ORDER BY sort_order ASC, id ASC'
+        );
+        $stmt->execute(['id' => $horseId]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $csrfToken = Router::generateCsrfToken();
+        $esc = static fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
+
+        $html = '<h3 style="margin-top:0;">🖼️ Galerie</h3>';
+
+        if ($rows) {
+            $html .= '<table style="width:100%;border-collapse:collapse;margin-bottom:1rem;">';
+            $html .= '<thead><tr style="text-align:left;border-bottom:2px solid var(--border-color);">'
+                . '<th>Vorschau</th><th>Art</th><th>Bildunterschrift</th><th>Reihenfolge</th><th></th></tr></thead><tbody>';
+            foreach ($rows as $row) {
+                $html .= '<tr style="border-bottom:1px solid var(--border-color);"><td style="padding:0.4rem 0;">';
+                if ($row['type'] === 'image' && !empty($row['file_path'])) {
+                    // Bewusst ohne Lightbox: Sie hängt an JS/CSS der
+                    // öffentlichen Detailseite und wäre hier funktionslos.
+                    $html .= '<img src="' . $esc($row['file_path']) . '" alt="" loading="lazy" decoding="async"'
+                        . ' style="width:64px;height:64px;object-fit:cover;border-radius:var(--border-radius, 4px);border:1px solid var(--border-color);">';
+                } else {
+                    $html .= '<span style="font-size:1.5rem;" aria-hidden="true">🎬</span>';
+                }
+                $html .= '</td><td>' . ($row['type'] === 'image' ? 'Bild' : 'Video') . '</td>'
+                    . '<td>' . $esc($row['caption'] ?? '–') . '</td>'
+                    . '<td>' . (int) $row['sort_order'] . '</td>'
+                    . '<td><form method="POST" action="/plugin/galerie/verwaltung/delete" style="margin:0;"'
+                    . ' onsubmit="return confirm(\'Medium wirklich löschen? Eine hochgeladene Datei wird dabei mit entfernt.\');">'
+                    . '<input type="hidden" name="csrf_token" value="' . $esc($csrfToken) . '">'
+                    . '<input type="hidden" name="id" value="' . (int) $row['id'] . '">'
+                    . '<input type="hidden" name="horse_id" value="' . $horseId . '">'
+                    . '<input type="hidden" name="zurueck" value="pferd">'
+                    . '<button type="submit" class="btn btn-secondary" style="color:var(--danger-fg);">Löschen</button>'
+                    . '</form></td></tr>';
+            }
+            $html .= '</tbody></table>';
+        } else {
+            $html .= '<p style="color:var(--text-muted);">Für dieses Pferd sind noch keine Medien erfasst.</p>';
+        }
+
+        // enctype ist hier NICHT optional - siehe Methodenkommentar.
+        $html .= '<form method="POST" action="/plugin/galerie/verwaltung/store" enctype="multipart/form-data">';
+        $html .= '<input type="hidden" name="csrf_token" value="' . $esc($csrfToken) . '">';
+        $html .= '<input type="hidden" name="horse_id" value="' . $horseId . '">';
+        $html .= '<input type="hidden" name="zurueck" value="pferd">';
+        $html .= '<p style="color:var(--text-muted);font-size:0.85rem;margin-top:0;">'
+            . 'Entweder eine Bilddatei hochladen <strong>oder</strong> einen Video-Link angeben. '
+            . 'Wird beides ausgefüllt, gewinnt der Upload und der Link wird verworfen.</p>';
+        $html .= '<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">';
+        $html .= '<div class="form-group"><label for="gal_image">Bilddatei (max. 5 MB)</label>'
+            . '<input type="file" name="image" id="gal_image" class="form-control" accept="image/jpeg,image/png,image/webp,image/gif"></div>';
+        $html .= '<div class="form-group"><label for="gal_video">Video-Link</label>'
+            . '<input type="url" name="video_url" id="gal_video" class="form-control" placeholder="https://www.youtube.com/watch?v=…"></div>';
+        $html .= '</div>';
+        $html .= '<div style="display:grid;grid-template-columns:2fr 1fr;gap:1rem;">';
+        $html .= '<div class="form-group"><label for="gal_caption">Bildunterschrift</label>'
+            . '<input type="text" name="caption" id="gal_caption" class="form-control" maxlength="255"></div>';
+        $html .= '<div class="form-group"><label for="gal_sort">Reihenfolge</label>'
+            . '<input type="number" name="sort_order" id="gal_sort" class="form-control" value="' . (count($rows) * 10) . '"></div>';
+        $html .= '</div>';
+        // Beschriftung bewusst nicht "Speichern": Auf der Seite gibt es zwei
+        // Knöpfe, und wer hier drückt, verliert ungespeicherte Stammdaten oben.
+        $html .= '<p><button type="submit" class="btn">Medium hinzufügen</button>'
+            . ' <span style="color:var(--text-muted);font-size:0.85rem;">Änderungen an den Stammdaten oben bitte zuerst speichern.</span></p>';
+        $html .= '</form>';
+
+        $sections[] = $html;
+        return $sections;
     }
 
     /**
@@ -460,6 +579,15 @@ class VerwaltungController extends BaseController {
             }
         }
 
+        // Zurueck dorthin, wo die Pflege stattfand (#88): Aus dem
+        // Bearbeitungsformular des Hengstes heraus in die bestandsweite
+        // Verwaltungsseite zu springen waere ein Kontextverlust - der
+        // Bearbeiter ist mit diesem einen Pferd noch nicht fertig.
+        if (($_POST['zurueck'] ?? '') === 'pferd' && $horseId) {
+            header('Location: /admin/horses/edit?id=' . $horseId);
+            exit;
+        }
+
         header('Location: /plugin/galerie/verwaltung');
         exit;
     }
@@ -489,6 +617,13 @@ class VerwaltungController extends BaseController {
                 $deleteStmt = $db->prepare('DELETE FROM `plugin_galerie_media` WHERE id = :id');
                 $deleteStmt->execute(['id' => $id]);
             }
+        }
+
+        // Aus dem Bearbeitungsformular heraus dorthin zurueck (#88).
+        $horseId = (int) ($_POST['horse_id'] ?? 0);
+        if (($_POST['zurueck'] ?? '') === 'pferd' && $horseId > 0) {
+            header('Location: /admin/horses/edit?id=' . $horseId);
+            exit;
         }
 
         // Zurück auf die Listenseite, von der gelöscht wurde (#74); index()
