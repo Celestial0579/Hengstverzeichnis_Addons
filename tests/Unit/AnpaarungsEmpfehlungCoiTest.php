@@ -142,10 +142,13 @@ class AnpaarungsEmpfehlungCoiTest extends TestCase {
      *
      * Der Bestand deckt die Auflösungsfälle des PedigreeBuilder ab:
      * FK-Eltern, gemeinsame Ahnen über mehrere Kandidaten, Freitext-Eltern
-     * per Name (mit abweichender Groß-/Kleinschreibung), per UELN und per
-     * Fremd-UELN, unauflösbarer Freitext (Platzhalter), gelöschte Eltern,
-     * einen Zyklus in Altdaten sowie eine lange Ahnenkette, die erst jenseits
-     * der Standardtiefe einen gemeinsamen Vorfahren erreicht (Tiefendeckel).
+     * per Name (mit abweichender Groß-/Kleinschreibung), per UELN, per
+     * Fremd-UELN und per weiterer Lebensnummer aus horse_registrations
+     * (Framework #246, Kandidat 26), unauflösbarer Freitext (Platzhalter),
+     * gelöschte Eltern - auch solche, die nur über eine Lebensnummer
+     * erreichbar wären -, einen Zyklus in Altdaten sowie eine lange
+     * Ahnenkette, die erst jenseits der Standardtiefe einen gemeinsamen
+     * Vorfahren erreicht (Tiefendeckel).
      */
     public function testKantenbasierteBaeumeLiefernIdentischeCoiWieDerPedigreeBuilder(): void {
         $pdo = self::fakeDatabase();
@@ -154,7 +157,7 @@ class AnpaarungsEmpfehlungCoiTest extends TestCase {
         $graph = AncestorTreeBuilder::loadFromDatabase($pdo);
 
         $baseId = 20;
-        $candidateIds = [21, 22, 23, 24, 25];
+        $candidateIds = [21, 22, 23, 24, 25, 26];
         $sawPositiveCoi = false;
 
         foreach ([3, 6, 8] as $depth) {
@@ -193,6 +196,39 @@ class AnpaarungsEmpfehlungCoiTest extends TestCase {
             $sawPositiveCoi,
             'Der konstruierte Bestand sollte verwandte Verpaarungen enthalten - sonst vergleicht der Test nur Nullen.'
         );
+    }
+
+    /**
+     * Framework #246 ausdrücklich: Ein Freitext-Elternteil, dessen Nummer nur
+     * in horse_registrations steht, muss auflösen - und zwar auf beiden Wegen
+     * gleich. Der große Vergleichstest oben deckt das mit ab, meldet dann aber
+     * nur "Baum weicht ab"; dieser Test benennt die Ursache.
+     *
+     * Die Gegenprobe steckt im selben Kandidaten: DE555 gehört einem
+     * gelöschten Pferd. Der Kern filtert im selben Query mit
+     * deleted_at IS NULL, die Nummer darf also NICHT auflösen - sonst würde
+     * ein gelöschtes Pferd über seine Zweitnummer wieder im Baum auftauchen.
+     */
+    public function testWeitereLebensnummerLoestFreitextElternAufWieDerKern(): void {
+        $pdo = self::fakeDatabase();
+        self::injectDatabase($pdo);
+        $graph = AncestorTreeBuilder::loadFromDatabase($pdo);
+
+        foreach (['kantenbasiert' => $graph->build(26, 3), 'PedigreeBuilder' => PedigreeBuilder::build(26, 3)] as $weg => $baum) {
+            $this->assertSame(
+                8,
+                $baum['sire']['id'] ?? null,
+                "Der Weg '{$weg}' hat die weitere Lebensnummer DE777 nicht auf Pferd 8 aufgelöst."
+            );
+            $this->assertFalse(
+                !empty($baum['sire']['is_placeholder']),
+                "Der Weg '{$weg}' hat DE777 als Platzhalter statt als echten Ahnen geliefert."
+            );
+            $this->assertTrue(
+                !empty($baum['dam']['is_placeholder']),
+                "Der Weg '{$weg}' hat DE555 aufgelöst, obwohl das Pferd gelöscht ist."
+            );
+        }
     }
 
     /**
@@ -268,6 +304,17 @@ class AnpaarungsEmpfehlungCoiTest extends TestCase {
             is_published INTEGER NOT NULL DEFAULT 1
         )');
 
+        // Weitere Lebensnummern (Framework #246). Seit dieser Kindtabelle löst
+        // PedigreeBuilder::findParentByUelnOrName() einen Freitext-Elternteil
+        // auch über eine hier hinterlegte Nummer auf - der Testbestand muss
+        // sie also führen, sonst prüft der Vergleich diesen Zweig gar nicht.
+        $pdo->exec('CREATE TABLE horse_registrations (
+            id INTEGER PRIMARY KEY,
+            horse_id INTEGER NOT NULL,
+            registration_number TEXT COLLATE NOCASE,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        )');
+
         $insert = $pdo->prepare(
             'INSERT INTO horses
                 (id, name, ueln, foreign_ueln, birth_year, sex,
@@ -290,6 +337,7 @@ class AnpaarungsEmpfehlungCoiTest extends TestCase {
             ['id' => 3, 'name' => 'Thunder'],                       // Ziel des Namens-Lookups (als "THUNDER" referenziert)
             ['id' => 4, 'name' => 'Foreign Star', 'foreign_ueln' => 'FR999'], // Ziel des Fremd-UELN-Lookups
             ['id' => 5, 'name' => 'Deleted Duke', 'deleted_at' => '2026-01-01 00:00:00'],
+            ['id' => 8, 'name' => 'Reg Star', 'sire_id' => 1],       // Ziel des Lebensnummern-Lookups (DE777), s. $registrations
             ['id' => 6, 'name' => 'Loop A', 'sire_id' => 7],        // Zyklus in Altdaten
             ['id' => 7, 'name' => 'Loop B', 'sire_id' => 6],
             // Mittlere Generation
@@ -306,6 +354,12 @@ class AnpaarungsEmpfehlungCoiTest extends TestCase {
             ['id' => 23, 'name' => 'Kandidat Drei', 'sire_id' => 1, 'dam_id' => 12],
             ['id' => 24, 'name' => 'Unverwandt', 'sex' => 'stallion'],
             ['id' => 25, 'name' => 'Kandidat Kette', 'sex' => 'stallion', 'sire_id' => 30],
+            // Freitext-Eltern, die NUR über horse_registrations auflösbar wären:
+            // DE777 gehört dem lebenden Pferd 8 (muss auflösen), DE555 dem
+            // gelöschten Pferd 5 (darf NICHT auflösen - der Kern filtert im
+            // selben Query mit deleted_at IS NULL, es bleibt der Platzhalter).
+            ['id' => 26, 'name' => 'Kandidat Lebensnummer', 'sex' => 'stallion',
+             'sire_ueln' => 'DE777', 'dam_ueln' => 'DE555'],
             // Lange Ahnenkette bis zu Old Rex (erst bei Tiefe > 6 im Baum)
             ['id' => 30, 'name' => 'Kette 0', 'sire_id' => 31],
             ['id' => 31, 'name' => 'Kette 1', 'sire_id' => 32],
@@ -316,6 +370,19 @@ class AnpaarungsEmpfehlungCoiTest extends TestCase {
 
         foreach ($herd as $row) {
             $insert->execute($row + $defaults);
+        }
+
+        $registrationInsert = $pdo->prepare(
+            'INSERT INTO horse_registrations (horse_id, registration_number, sort_order)
+             VALUES (:horse_id, :registration_number, :sort_order)'
+        );
+        $registrations = [
+            ['horse_id' => 8, 'registration_number' => 'DE777', 'sort_order' => 0],
+            // Zweitnummer eines gelöschten Pferdes: darf keinen Elternteil auflösen.
+            ['horse_id' => 5, 'registration_number' => 'DE555', 'sort_order' => 0],
+        ];
+        foreach ($registrations as $registration) {
+            $registrationInsert->execute($registration);
         }
 
         return $pdo;
