@@ -117,6 +117,13 @@ class VergleichController extends BaseController {
         ));
         if ($nachzuladen !== []) {
             $stmt = $db->prepare(
+                // Nur die ANZAHL der Platzhalter ist variabel, nicht ihr
+                // Inhalt: implode() baut daraus "?,?,?", die IDs selbst gehen
+                // gebunden in execute(). Ein Platzhalter-String laesst sich
+                // nicht binden - die Anzahl der Parameter ist Teil der
+                // Abfragestruktur. Gleiche Stelle, gleiche Begruendung wie in
+                // merkliste.
+                // nosemgrep: php.lang.security.injection.tainted-sql-string.tainted-sql-string
                 'SELECT id, name, birth_year FROM horses'
                 . ' WHERE deleted_at IS NULL AND is_published = 1'
                 . ' AND id IN (' . implode(',', array_fill(0, count($nachzuladen), '?')) . ')'
