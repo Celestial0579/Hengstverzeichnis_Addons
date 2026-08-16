@@ -8,6 +8,29 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+### Geändert (Prüfkette)
+
+- **Semgrep läuft jetzt auch über die Addons** (`.github/workflows/semgrep.yml`,
+  Aufbau identisch zum Kern). Die einzige PHP-Analyse hier war bisher
+  `security/plugin-security-scan.sh` - 144 Zeilen grep. Der Scanner ist gut
+  darin, wofür er gebaut wurde, arbeitet aber zeilenweise und ohne Datenfluss:
+  Mehrzeilig zusammengesetztes SQL sieht er nicht, und ob ein interpolierter
+  Wert aus einem Literal oder aus `$_GET` stammt, kann er nicht unterscheiden.
+  Die rund 8.000 Zeilen PHP in `plugins/` liefen damit ohne die Analyse, die
+  der Kern längst hat - obwohl sie im selben Prozess mit denselben Rechten
+  laufen. Der Gate-Scan nutzt `--error`, weil `semgrep scan` sich sonst auch
+  bei Funden mit Exit 0 beendet (dieselbe Falle, in die der Kern schon einmal
+  gelaufen ist).
+- **pre-commit läuft in der CI** (`.github/workflows/pre-commit.yml`). Bisher
+  rein lokal - wer die Hooks nicht installiert hatte, umging gitleaks und
+  shellcheck vollständig.
+- **shellcheck-Falschbefund gekennzeichnet:** Die Suchmuster in
+  `plugin-security-scan.sh` stehen in einfachen Anführungszeichen, weil das
+  `$` darin ein Regex-Anker ist und kein Shell-Variablenname. Doppelte
+  Anführungszeichen würden die Muster von der Shell expandieren lassen und die
+  Prüfung lautlos entkernen - deshalb eine begründete `disable`-Direktive
+  statt einer Umschreibung.
+
 ### Hinzugefügt
 
 - **Neues Addon `embed-widget` (1.0.0):** erzeugt im Admin-Bereich den

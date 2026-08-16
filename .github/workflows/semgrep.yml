@@ -1,0 +1,71 @@
+# Semgrep SAST
+#
+# WARUM DIESES REPO ES BRAUCHT: Die einzige PHP-Analyse hier war bisher
+# security/plugin-security-scan.sh - 144 Zeilen grep. Der Scanner ist gut
+# darin, wofür er gebaut wurde (eval, Backticks, dynamische Includes), aber er
+# arbeitet zeilenweise und ohne Datenfluss: Mehrzeilig zusammengesetztes SQL
+# sieht er nicht, und ob ein interpolierter Wert aus einem Literal oder aus
+# $_GET stammt, kann er nicht unterscheiden. Der Kern lässt aus genau diesem
+# Grund seit Langem Semgrep laufen - die rund 8.000 Zeilen PHP in plugins/
+# waren davon schlicht nicht erfasst, obwohl sie im selben Prozess mit
+# denselben Rechten laufen wie der Kern (docs/plugin-development.md,
+# "kein Sandbox").
+#
+# Aufbau bewusst identisch zum Kern (.github/workflows/semgrep.yml dort),
+# damit beide Repos dieselbe Aussage treffen und niemand zwei Fassungen
+# derselben Regeln pflegen muss:
+#   1. Voller Scan (alle Severities) - rein informativ, landet als SARIF im
+#      Security-Tab, blockiert nie.
+#   2. Gate-Scan, nur ERROR-Severity, mit --error. Ohne dieses Flag beendet
+#      sich "semgrep scan" auch bei Funden mit Exit 0 - im Kern sah der Gate
+#      deshalb lange grün aus, während zwei ERROR-Funde offenstanden. Dieselbe
+#      Falle hier nicht noch einmal aufstellen.
+name: Semgrep
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    - cron: "30 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    name: Semgrep SAST
+    runs-on: ubuntu-latest
+    container:
+      # Per Digest festgenagelt (Supply-Chain-Härtung). Achtung: Dependabot
+      # (docker) erfasst nur Dockerfile/Compose, NICHT container:-Images in
+      # Workflows - dieser Digest wird manuell/periodisch nachgezogen, wie im
+      # Kern.
+      image: semgrep/semgrep@sha256:bdf7013b2c3634a487671158da77c554f531742326b543a9464d2adf6c433ac8
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run Semgrep (voller Scan für Security-Tab)
+        run: semgrep scan --config=p/php --config=p/security-audit --config=p/owasp-top-ten --sarif --output=semgrep-results.sarif
+        continue-on-error: true
+
+      - name: Upload SARIF results
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        with:
+          sarif_file: semgrep-results.sarif
+
+      - name: Gate auf ERROR-Findings
+        # --error ist zwingend, siehe Kopfkommentar.
+        run: semgrep scan --config=p/php --config=p/security-audit --config=p/owasp-top-ten --severity ERROR --error
