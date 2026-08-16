@@ -8,7 +8,51 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- **Neues Addon `embed-widget` (1.0.0):** erzeugt im Admin-Bereich den
+  fertigen iframe-Schnipsel, mit dem sich der öffentliche Pferdekatalog auf
+  einer fremden Website einbetten lässt (#89) — der Anwendungsfall, für den
+  Kern-#260 die Voraussetzung geschaffen hat.
+  - **Baut den Katalog bewusst NICHT nach.** Der Kern rendert ihn seit
+    #260/#264 selbst einbettbar (`/katalog?embed=1` über `layout_embed.php`),
+    inklusive Filter, Nachladen, Sprachen, Bildauslieferung mit
+    `is_published`-Prüfung und dem Hook `catalog.card_sections`. Ein Nachbau
+    hätte all das dupliziert und wäre bei jeder Kern-Änderung zurückgefallen.
+    Das Addon liefert den Weg dorthin: absolute Adresse, Vorfilter, Maße.
+  - **Sagt vorher, was sonst als Fehler zurückkommt.** Ohne
+    `EMBED_ALLOWED_DOMAINS` bleibt der Rahmen beim Empfänger leer — das ist
+    beabsichtigter Clickjacking-Schutz und keine Störung. Die Seite nennt den
+    Zustand, die nötige Einstellung und die aktuell freigegebenen Domains.
+    Fehlt `base_url`, wird das ebenfalls benannt statt ersatzweise der
+    Host-Header genommen: Der ist vom Aufrufer bestimmbar, und ein daraus
+    gebauter Schnipsel zeigte stillschweigend auf eine falsche Domain.
+  - Vorfilter (Suche, Rasse, Farbe, Deckstation, Züchter, Besitzer,
+    Geschlecht) als Adressparameter; der Besucher kann im Rahmen weiter
+    filtern. Maße mit Grenzen, feste Höhe — ein iframe wächst nicht mit
+    seinem Inhalt, und dieses Addon liefert dafür bewusst **kein** Skript zum
+    Einbinden auf der fremden Seite: Das ist eine andere Vertrauensfrage als
+    ein Rahmen.
+  - Deklariert ehrlich `core_compatibility: >=0.5.1`. Der eingebundene Kern
+    weist noch `CORE_VERSION 0.5.0` aus (der Versionsstring wird erst beim
+    nächsten Kern-Release nachgezogen), weshalb `PluginManager` das Addon
+    derzeit fail-closed abweist. Die Logik ist deshalb framework-frei in
+    `EmbedCode` gekapselt und dort geprüft; der Lebenszyklus-Test gehört
+    nachgezogen, sobald der Kern 0.5.1 ausweist.
+
 ### Geändert
+
+- **Release-Gate prüft gegen die echte Tag-Version statt gegen `X.Y.0`.**
+  `scripts/check-release-consistency.php` leitete bisher stur die
+  Linien-Untergrenze ab: Ein Release `v0.5.1` wurde gegen `0.5.0` geprüft.
+  Damit fiel jedes Addon durch, das eine erst im Patch-Release dazugekommene
+  Kern-Funktion braucht — es hätte `>=0.5.0` behaupten müssen, obwohl es dort
+  nachweislich nicht läuft. Aufgefallen am Embed-Widget (siehe oben).
+  Die Obergrenze `core_supported_max` bleibt bewusst auf `Major.Minor`: Sie
+  sagt „bis zu dieser Linie geprüft" und soll nicht bei jedem Patch-Release
+  nachgezogen werden müssen. Ein Test hält beide Richtungen fest (`>=0.5.1`
+  geht für `v0.5.1` durch und für `v0.5.0` nicht) — nachgewiesen, dass er mit
+  dem alten Gate rot ist.
 
 - **Galerie (1.2.0):** Medienpflege hängt jetzt über `horse.edit_sections`
   direkt im Bearbeitungsformular des Hengstes (#88). Wer Medien zu *einem*

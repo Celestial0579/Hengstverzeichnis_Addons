@@ -31,7 +31,21 @@ if (!preg_match('/^v?(\d+)\.(\d+)\.(\d+)$/', (string)$tag, $m)) {
     fail("Tag '{$tagArg}' hat nicht die Form vX.Y.z (Versionierung folgt dem Framework, siehe docs/releasing.md).");
 }
 $line = $m[1] . '.' . $m[2];
-$lineVersion = $line . '.0';
+
+// Geprüft wird gegen die ECHTE Tag-Version, nicht gegen X.Y.0.
+//
+// Bis dahin leitete das Gate stur die Linien-Untergrenze ab: Ein Release
+// v0.5.1 wurde gegen "0.5.0" geprüft. Damit fiel jedes Addon durch, das eine
+// Funktion des Kerns braucht, die erst in einem Patch-Release dazukam - es
+// müsste `>=0.5.0` behaupten, obwohl es auf 0.5.0 nachweislich nicht läuft,
+// oder ganz draußen bleiben. Aufgefallen am Embed-Widget (#89), das
+// layout_embed.php und FrameGuard aus Kern-#260 voraussetzt und deshalb
+// ehrlich `>=0.5.1` deklariert.
+//
+// Die Obergrenze core_supported_max bleibt bewusst auf Major.Minor: Sie sagt
+// "bis zu dieser Linie geprüft" und soll nicht bei jedem Patch-Release
+// nachgezogen werden müssen.
+$lineVersion = $m[1] . '.' . $m[2] . '.' . $m[3];
 
 // Ein-Operator-Vergleich, exakt wie App\Plugin\PluginManager::constraintSatisfied()
 // im Framework - Bereichs-Syntax ist dort fail-closed ungültig.
