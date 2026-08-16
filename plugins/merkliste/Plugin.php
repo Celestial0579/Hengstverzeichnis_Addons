@@ -287,7 +287,6 @@ class MerklisteController extends BaseController {
 
         $placeholders = implode(',', array_fill(0, count($ids), '?'));
         $stmt = Database::getInstance()->prepare(
-            // nosemgrep: php.lang.security.injection.tainted-sql-string.tainted-sql-string
             // Falschbefund, geprueft: $placeholders enthaelt keine
             // Nutzereingabe, sondern ausschliesslich die Zeichenkette "?,?,?"
             // - erzeugt aus implode(',', array_fill(0, count($ids), '?')).
@@ -295,6 +294,7 @@ class MerklisteController extends BaseController {
             // sich nicht binden (die ANZAHL der Parameter ist Teil der
             // Abfragestruktur), deshalb steht er interpoliert da; Semgrep
             // sieht nur "Variable im Query-String".
+            // nosemgrep: php.lang.security.injection.tainted-sql-string.tainted-sql-string
             "SELECT id, name, birth_year, image_url
              FROM horses
              WHERE id IN ({$placeholders}) AND deleted_at IS NULL AND is_published = 1"

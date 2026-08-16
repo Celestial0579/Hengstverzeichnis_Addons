@@ -339,7 +339,6 @@ class VerwaltungController extends BaseController {
                 $content .= '–';
             }
             $content .= '</td>';
-            // nosemgrep: php.lang.security.injection.tainted-sql-string.tainted-sql-string
             // Falschbefund, geprueft: Das ist HTML, kein SQL - und $page
             // ist keine Nutzereingabe mehr. Es entsteht aus
             // min($pageCount, max(1, (int) $_GET['seite'])), also
@@ -347,6 +346,7 @@ class VerwaltungController extends BaseController {
             // Seitenbereich. Semgreps Taint-Analyse erkennt den
             // (int)-Cast nicht als Bereinigung; derselbe Grund steht im
             // Kern an PublicController.php.
+            // nosemgrep: php.lang.security.injection.tainted-sql-string.tainted-sql-string
             $content .= '<td><form method="POST" action="/plugin/gesundheitstests/verwaltung/delete" style="margin:0;" onsubmit="return confirm(\'Eintrag (inkl. Dokument) wirklich löschen?\');">'
                 . '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">'
                 . '<input type="hidden" name="seite" value="' . $page . '">'
