@@ -32,7 +32,15 @@ use PDO;
 class Plugin {
 
     public function register(HookManager $hooks): void {
-        $this->ensureTable();
+        // Kein ensureTable() mehr: Die Tabelle legt install() an, das der
+        // PluginManager bei Aktivierung und nach jedem Addon-Update genau
+        // einmal aufruft (Framework #75). Die frueher hier stehende Probe
+        // ("SELECT 1 FROM ... LIMIT 1", sonst install() nachholen) war ein
+        // Rueckfall fuer Kerne OHNE diesen Hook - den es laut der
+        // core_compatibility-Untergrenze in plugin.json nicht mehr gibt.
+        // Geblieben waere nur der Preis: eine zusaetzliche Abfrage pro Plugin
+        // und Anfrage, bei sieben Addons also sieben Roundtrips, bevor die
+        // erste Zeile der Seite steht.
         $hooks->addFilter('horse.detail_sections', [$this, 'addDetailSection']);
         $hooks->addFilter('admin.dashboard_tiles', [$this, 'addDashboardTile']);
     }
@@ -60,31 +68,6 @@ class Plugin {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
         );
     }
-
-    /**
-     * Fallback für ältere Kerne ohne install()-Hook (#75) - bewusst OHNE
-     * Marker-Datei: Der Kern gibt das Plugin-Verzeichnis über einen
-     * Inhalts-Fingerabdruck frei, in den auch Dotfiles einfließen. Jede zur
-     * Laufzeit dorthin geschriebene Datei änderte den Fingerabdruck, und der
-     * Kern deaktivierte das Plugin als unfreigegeben verändert. Statt DDL
-     * pro Request (siehe Issue) läuft deshalb nur noch eine billige
-     * SELECT-Probe je Request; erst wenn sie fehlschlägt, legt install()
-     * die Tabelle an. Auf Kernen mit install()-Hook existiert die Tabelle
-     * ohnehin - dort bleibt es bei der Probe.
-     */
-    private function ensureTable(): void {
-        static $checked = false;
-        if ($checked) {
-            return;
-        }
-        try {
-            Database::getInstance()->query('SELECT 1 FROM `plugin_gesundheitstests` LIMIT 1');
-        } catch (\Throwable $e) {
-            $this->install();
-        }
-        $checked = true;
-    }
-
     /**
      * Ablageverzeichnis für hochgeladene Dokumente: bewusst AUSSERHALB des
      * Webroots (public/), damit Dateien nie direkt per URL abrufbar sind,
@@ -640,8 +623,22 @@ class DownloadController extends BaseController {
         // die Gast-Gruppe) darf diese Route für Anonyme nie öffnen. Für
         // Besucher ohne Sitzung zählt deshalb ausschließlich der
         // Opt-in-Pfad $publiclyVisible.
-        $managerAccess = isset($_SESSION['user_id'])
-            && $this->hasPermission('gesundheitstests', 'manage');
+        // ... und die Sitzung muss dieselbe Prüfung bestehen wie überall
+        // sonst im Backend. `isset($_SESSION['user_id'])` allein fragt nur, ob
+        // irgendwann einmal jemand angemeldet war: Eine Sitzung, deren Konto
+        // gelöscht wurde, deren Passwort anderswo geändert wurde (#113,
+        // session_version), die von einem anderen User-Agent kommt oder die
+        // längst abgelaufen ist, flöge über checkAuth() überall hinaus - hier
+        // aber lieferte sie weiterhin Gesundheitsdokumente aus.
+        //
+        // checkAuth() wird nur betreten, wenn der öffentliche Opt-in-Pfad NICHT
+        // greift: Es leitet Sitzungslose auf /login um, und das wäre für einen
+        // anonymen Abruf eines freigegebenen Dokuments die falsche Antwort.
+        $managerAccess = false;
+        if (!$publiclyVisible && isset($_SESSION['user_id'])) {
+            $this->checkAuth();
+            $managerAccess = $this->hasPermission('gesundheitstests', 'manage');
+        }
 
         if (!$entry || empty($entry['file_name'])
             || (!$publiclyVisible && !$managerAccess)) {

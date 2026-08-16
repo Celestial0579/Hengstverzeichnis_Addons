@@ -96,6 +96,114 @@ class Plugin {
 }
 
 
+/**
+ * Welche Dateien ein Import-Archiv unter uploads/ mitbringen darf.
+ *
+ * Steht als eigene Klasse neben TarWriter/TarReader und nicht im Controller:
+ * Es ist eine reine Regel ohne Framework-Bezug, und genau so lässt sie sich
+ * ohne Datenbank und ohne Kern-Instanz prüfen (tests/Unit).
+ */
+final class UploadNamePolicy {
+
+    /**
+     * Positivliste, keine Sperrliste: Eine Liste verbotener Endungen ist immer
+     * unvollständig (.php5, .phtml, .phar, .htaccess selbst), eine Liste
+     * erlaubter nicht.
+     *
+     * Der Umfang orientiert sich daran, was tatsächlich in public/uploads
+     * liegt: Bilder (Kern, galerie), PDFs (Dokumente) und schlichte
+     * Textdaten. Bewusst NICHT enthalten sind Archive und Office-Formate -
+     * sie gehören nicht in ein öffentlich ausgeliefertes Verzeichnis.
+     *
+     * Trifft ein Import auf eine Datei außerhalb dieser Liste, bricht er ab
+     * und NENNT die Datei, statt sie stillschweigend zu überspringen. Bei
+     * einem Umzug ist ein stiller Datenverlust die schlechtere Antwort: Der
+     * Betreiber soll entscheiden, ob die Datei ins Archiv gehört oder die
+     * Liste erweitert wird.
+     *
+     * @var array<int, string>
+     */
+    public const ERLAUBTE_ENDUNGEN = [
+        'jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'svg',
+        'pdf', 'txt', 'csv',
+    ];
+
+    /**
+     * Endungen, die AN JEDER STELLE des Namens unzulässig sind - nicht nur als
+     * letzte.
+     *
+     * Grund ist der Apache-Klassiker: Steht dort
+     * `AddHandler application/x-httpd-php .php`, wertet der Server ALLE
+     * Endungen eines Namens aus und führt auch "bild.php.jpg" als PHP aus. Die
+     * Positivliste oben allein würde diesen Namen durchlassen, weil die letzte
+     * Endung sauber ist.
+     *
+     * Umgekehrt darf die Regel nicht jede Endung gegen die Positivliste
+     * prüfen: "stute.2024.jpg" ist ein völlig gewöhnlicher Dateiname, und ein
+     * Import, der daran scheitert, wird umgangen statt befolgt. (Genau daran
+     * ist der erste Entwurf im Test hängengeblieben.)
+     *
+     * @var array<int, string>
+     */
+    public const NIE_ERLAUBTE_ENDUNGEN = [
+        'php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phps', 'phtml', 'pht', 'phar',
+        'cgi', 'pl', 'py', 'rb', 'sh', 'bash', 'jsp', 'asp', 'aspx', 'exe', 'htaccess', 'htpasswd',
+    ];
+
+    private function __construct() {}
+
+    /**
+     * Webserver-Steuerdateien werden aus dem Archiv NICHT übernommen, aber
+     * sie brechen den Import auch nicht ab.
+     *
+     * Ein Export enthält zwangsläufig die `.htaccess`, mit der der Kern PHP in
+     * public/uploads abschaltet - sie liegt ja in genau diesem Verzeichnis.
+     * Sie zu übernehmen hieße, den Ausführungsschutz vom Inhalt des Archivs
+     * bestimmen zu lassen; den Import daran scheitern zu lassen hieße, dass
+     * kein einziger echter Export mehr einspielbar wäre. Also: überspringen
+     * und den Schutz nach dem Umschalten aus dem Kern-Bestand neu schreiben
+     * (siehe MigrationController::restoreUploadsProtection()).
+     */
+    public static function istWebserverSteuerdatei(string $rel): bool {
+        return in_array(strtolower(basename($rel)), ['.htaccess', '.htpasswd', 'web.config'], true);
+    }
+
+    /**
+     * @throws \RuntimeException wenn der Name nicht zulässig ist
+     */
+    public static function assertAllowed(string $rel): void {
+        $base = basename($rel);
+
+        // Punktdateien: .htaccess wäre die wirkungsvollste davon - die wird
+        // aber schon vorher aussortiert (siehe istWebserverSteuerdatei()).
+        // Was hier ankommt, ist eine andere versteckte Datei, und für die
+        // gibt es in einem Upload-Verzeichnis keinen Grund.
+        if (str_starts_with($base, '.')) {
+            throw new \RuntimeException("Punktdateien sind im Archiv nicht zulässig: {$rel}");
+        }
+
+        $teile = explode('.', $base);
+        array_shift($teile); // der Name selbst
+        if ($teile === []) {
+            throw new \RuntimeException("Datei ohne Endung ist im Archiv nicht zulässig: {$rel}");
+        }
+
+        // Keine ausführbare Endung an irgendeiner Stelle.
+        foreach ($teile as $endung) {
+            if (in_array(strtolower($endung), self::NIE_ERLAUBTE_ENDUNGEN, true)) {
+                throw new \RuntimeException("Ausführbare Dateiendung im Archiv: {$rel}");
+            }
+        }
+
+        // Und die tatsächliche Endung muss auf der Positivliste stehen.
+        $letzte = strtolower((string) end($teile));
+        if (!in_array($letzte, self::ERLAUBTE_ENDUNGEN, true)) {
+            throw new \RuntimeException("Nicht erlaubte Dateiendung im Archiv: {$rel}");
+        }
+    }
+}
+
+
 // ---------------------------------------------------------------------------
 // Archiv: minimaler ustar-Schreiber/-Leser (pure PHP, streamend)
 // ---------------------------------------------------------------------------
@@ -333,6 +441,49 @@ class MigrationController extends BaseController {
         $this->checkAuth();
     }
 
+    /**
+     * Export und Import verlangen zusätzlich zur Modulberechtigung
+     * Administratorrechte.
+     *
+     * Die Berechtigungen `datenmigration.export`/`.import` sehen aus wie jede
+     * andere Modulberechtigung und lassen sich im Gruppen-Editor an jede
+     * Gruppe vergeben - ihre Wirkung ist aber eine ganz andere:
+     *
+     *   Export liefert den VOLLSTÄNDIGEN Datenbank-Dump aus, inklusive
+     *   `users` (Passwort-Hashes, TOTP-Secrets), `api_keys` und aller
+     *   personenbezogenen Daten. Wer ihn auslösen darf, hat faktisch
+     *   Lesezugriff auf alles.
+     *
+     *   Import ERSETZT die gesamte Datenbank - also auch die Benutzertabelle.
+     *   Wer ihn auslösen darf, kann sich mit einem selbst gebauten Archiv zum
+     *   Administrator machen.
+     *
+     * Beides sind im Kern bewusst admin-only-Fähigkeiten (Backup, Update,
+     * Systemreset). Ein Addon darf sie nicht über eine gewöhnliche, an
+     * "Redakteure" vergebbare Berechtigung öffnen. Die Berechtigung bleibt
+     * erhalten - sie erlaubt dem Betreiber weiterhin, die Funktion für
+     * einzelne Administratoren abzuschalten -, sie genügt nur nicht mehr für
+     * sich allein.
+     */
+    private function requireAdminForFullAccess(string $aktion): void {
+        if ($this->isAdmin()) {
+            return;
+        }
+
+        AuditLogger::log(
+            'Datenmigration abgelehnt: Administratorrechte erforderlich',
+            'security',
+            "Aktion '{$aktion}' ohne Admin-Rechte angefordert",
+            $_SESSION['user_id'] ?? null,
+            $_SESSION['username'] ?? null
+        );
+
+        $this->renderForbidden(
+            'Zugriff verweigert: Export und Import der Datenmigration betreffen den gesamten Datenbestand '
+            . '(inklusive Benutzerkonten und Zugangsdaten) und stehen deshalb ausschließlich Administratoren offen.'
+        );
+    }
+
     private function rootDir(): string {
         return dirname(__DIR__, 2);
     }
@@ -454,6 +605,7 @@ class MigrationController extends BaseController {
 
     public function export(): void {
         $this->requirePermission('datenmigration', 'export');
+        $this->requireAdminForFullAccess('export');
 
         $inventory = $this->localInventory();
         $uploadFiles = $this->collectUploads();
@@ -517,6 +669,7 @@ class MigrationController extends BaseController {
 
     public function upload(): void {
         $this->requirePermission('datenmigration', 'import');
+        $this->requireAdminForFullAccess('import');
         if (!Router::verifyCsrfToken($_POST['csrf_token'] ?? '')) {
             $this->renderForbidden('CSRF-Sicherheits-Token ungültig oder abgelaufen.');
             return;
@@ -544,6 +697,7 @@ class MigrationController extends BaseController {
 
     public function preview(): void {
         $this->requirePermission('datenmigration', 'import');
+        $this->requireAdminForFullAccess('import');
         $path = $this->stagedPath((string) ($_GET['datei'] ?? ''));
         if ($path === null) {
             $this->fail('Archiv nicht gefunden.');
@@ -676,6 +830,7 @@ class MigrationController extends BaseController {
 
     public function apply(): void {
         $this->requirePermission('datenmigration', 'import');
+        $this->requireAdminForFullAccess('import');
         if (!Router::verifyCsrfToken($_POST['csrf_token'] ?? '')) {
             $this->renderForbidden('CSRF-Sicherheits-Token ungültig oder abgelaufen.');
             return;
@@ -706,13 +861,21 @@ class MigrationController extends BaseController {
         // 2. Archiv in einem Durchlauf anwenden: SQL sammeln, Uploads in ein
         //    Nebenverzeichnis entpacken; erst wenn beides fehlerfrei durch ist,
         //    wird umgeschaltet.
-        $uploadsNew = $this->uploadsDir() . '.import-neu';
+        //
+        // Das Nebenverzeichnis liegt AUSSERHALB von public/. Vorher hieß es
+        // "public/uploads.import-neu" und lag damit im Webroot: Zwischen dem
+        // ersten geschriebenen Eintrag und dem Umschalten war jede Datei des
+        // Archivs unter ihrem eigenen Namen über den Webserver erreichbar -
+        // inklusive einer .php. Es kostet nichts, das Fenster ganz zu
+        // schließen; var/ ist ohnehin schon die Ablage dieses Addons.
+        $uploadsNew = $this->stageDir() . '/uploads-neu';
         $this->removeDir($uploadsNew);
         mkdir($uploadsNew, 0755, true);
         $sql = null;
+        $uebersprungen = 0;
         $reader = new TarReader($path);
         try {
-            $reader->each(function (string $name, int $size, callable $read) use (&$sql, $uploadsNew) {
+            $reader->each(function (string $name, int $size, callable $read) use (&$sql, &$uebersprungen, $uploadsNew) {
                 if ($name === 'database.sql') {
                     $data = '';
                     while (($chunk = $read()) !== '') {
@@ -727,6 +890,24 @@ class MigrationController extends BaseController {
                     if ($rel === '' || str_contains($rel, '..') || str_starts_with($rel, '/') || str_contains($rel, "\0")) {
                         throw new \RuntimeException("Unzulässiger Pfad im Archiv: {$name}");
                     }
+                    // ... und keine ausführbaren Dateien. Die Pfadhärtung
+                    // darüber prüfte, WOHIN geschrieben wird, aber nicht WAS -
+                    // und das Ziel ist am Ende public/uploads. Der Inhalt
+                    // stammt aus einer hochgeladenen Datei, das Recht dafür ist
+                    // an jede Gruppe vergebbar. Ohne diese Prüfung genügte ein
+                    // Archiv mit einer .php darin für Codeausführung.
+                    // Webserver-Steuerdateien werden verworfen, nicht
+                    // übernommen - der Ausführungsschutz des Zielverzeichnisses
+                    // darf nicht aus dem Archiv stammen. Er wird nach dem
+                    // Umschalten neu geschrieben.
+                    if (UploadNamePolicy::istWebserverSteuerdatei($rel)) {
+                        $uebersprungen++;
+                        while ($read() !== '') { // Datenstrom verwerfen
+                        }
+                        return;
+                    }
+                    UploadNamePolicy::assertAllowed($rel);
+
                     $target = $uploadsNew . '/' . $rel;
                     if (!is_dir(dirname($target))) {
                         mkdir(dirname($target), 0755, true);
@@ -755,7 +936,37 @@ class MigrationController extends BaseController {
         }
 
         // 3. Datenbank ersetzen (Dump bringt DROP/CREATE/INSERT je Tabelle mit).
-        Database::getInstance()->exec($sql);
+        //
+        // Unter Wartungsmodus, und das ist keine Kosmetik: Der Dump wirft jede
+        // Tabelle einzeln weg und legt sie neu an. Zwischen dem DROP der
+        // ersten und dem letzten INSERT gibt es ein Zeitfenster von Sekunden
+        // bis Minuten, in dem parallele Anfragen auf eine halb ersetzte
+        // Datenbank treffen - Besucher sehen Fehlerseiten, ein laufender
+        // Cron-Lauf schreibt in Tabellen, die gleich wieder verschwinden, und
+        // der Kern legt beim nächsten Verbindungsaufbau womöglich mitten im
+        // Import eine Migration los. DDL in MariaDB ist zudem
+        // transaktions-autocommittend: Ein "einfach in eine Transaktion
+        // packen" gibt es hier nicht, der Wartungsmodus ist die vorhandene und
+        // richtige Antwort (App\Service\Maintenance, vom Kern in
+        // public/index.php vor jedem DB-Zugriff geprüft).
+        //
+        // Schlägt das Einspielen fehl, wird der zuvor geschriebene
+        // Sicherungs-Dump zurückgespielt. Ohne das bliebe die Zielinstanz mit
+        // halbem Bestand stehen, und der Rückweg wäre Handarbeit auf einer
+        // Datenbank, die niemand mehr benutzen kann.
+        \App\Service\Maintenance::enable('Datenmigrations-Import läuft');
+        try {
+            Database::getInstance()->exec($sql);
+        } catch (\Throwable $e) {
+            $this->rollbackFromBackup($backupName, $e);
+            \App\Service\Maintenance::disable();
+            $this->removeDir($uploadsNew);
+            $this->fail(
+                'Import fehlgeschlagen, der Sicherungsstand wurde zurückgespielt: ' . $e->getMessage()
+            );
+            return;
+        }
+        \App\Service\Maintenance::disable();
 
         // 4. Uploads umschalten (alter Stand bleibt als .import-alt liegen,
         //    bis der nächste Import ihn ersetzt - zweiter Rückweg neben dem Dump).
@@ -764,15 +975,130 @@ class MigrationController extends BaseController {
         if (is_dir($this->uploadsDir())) {
             rename($this->uploadsDir(), $uploadsOld);
         }
-        rename($uploadsNew, $this->uploadsDir());
+        // rename() über Verzeichnisgrenzen hinweg schlägt fehl, wenn Staging
+        // und Ziel auf verschiedenen Dateisystemen liegen - seit das Staging
+        // in var/ liegt, ist das kein theoretischer Fall mehr (eigenes Volume
+        // für uploads, siehe docker-compose.yml des Kerns). Deshalb mit
+        // Kopier-Rückfall statt eines stillen false.
+        if (!@rename($uploadsNew, $this->uploadsDir())) {
+            $this->copyDir($uploadsNew, $this->uploadsDir());
+            $this->removeDir($uploadsNew);
+        }
+
+        // Ausführungsschutz wiederherstellen - der Verzeichnistausch hat die
+        // .htaccess des Kerns mitgenommen.
+        $this->restoreUploadsProtection();
 
         AuditLogger::log('Datenmigrations-Import angewendet', 'datenmigration',
-            basename($path) . ' (Quelle: ' . (string) ($manifest['site_name'] ?? '?') . ', Sicherung: ' . $backupName . ')');
+            basename($path) . ' (Quelle: ' . (string) ($manifest['site_name'] ?? '?') . ', Sicherung: ' . $backupName
+            . ($uebersprungen > 0 ? ', ' . $uebersprungen . ' Webserver-Steuerdatei(en) verworfen' : '') . ')');
 
         // 5. Sitzung beenden: Die Benutzerkonten wurden soeben ersetzt.
         session_destroy();
         header('Location: /login?import=fertig');
         exit;
+    }
+
+    /**
+     * Schreibt den Ausführungsschutz für public/uploads neu - unabhängig
+     * davon, was im Archiv stand.
+     *
+     * Der Verzeichnistausch ersetzt public/uploads VOLLSTÄNDIG, also auch die
+     * dort mitgelieferte .htaccess des Kerns, die PHP in diesem Verzeichnis
+     * abschaltet. Ein Archiv ohne diese Datei entfernte den Schutz still; ein
+     * Archiv MIT einer eigenen Fassung hätte ihn ersetzt. Beides ist jetzt
+     * ausgeschlossen: Punktdateien kommen gar nicht erst durch (siehe oben),
+     * und die Schutzdatei wird nach dem Umschalten aus dem Kern-Bestand
+     * zurückgeschrieben.
+     */
+    private function restoreUploadsProtection(): void {
+        $ziel = $this->uploadsDir() . '/.htaccess';
+        if (is_file($ziel)) {
+            return;
+        }
+
+        // Bevorzugt die Fassung, die im Kern mitgeliefert wird - sie ist die
+        // gepflegte Quelle. Nur wenn sie fehlt (etwa weil das Verzeichnis
+        // gerade erst entstanden ist), greift die eingebaute Mindestfassung.
+        $vorlage = $this->rootDir() . '/public/uploads.import-alt/.htaccess';
+        if (is_file($vorlage)) {
+            copy($vorlage, $ziel);
+            return;
+        }
+
+        file_put_contents($ziel, <<<'HTACCESS'
+        # Wiederhergestellt nach einem Datenmigrations-Import.
+        # Kein PHP in diesem Verzeichnis - hier liegen ausschliesslich Daten.
+        <FilesMatch "\.(php|phtml|php[0-9]|phar|pl|py|cgi|sh)$">
+            Require all denied
+        </FilesMatch>
+        Options -Indexes -ExecCGI
+        AddType text/plain .php .phtml .phar
+        HTACCESS);
+    }
+
+    /**
+     * Spielt den unmittelbar vor dem Import geschriebenen Sicherungs-Dump
+     * zurück. Wirft NICHT weiter: Der Aufrufer meldet dem Benutzer den
+     * ursprünglichen Fehler, und ein zweiter Fehler beim Zurückrollen darf
+     * die Meldung nicht verdrängen - er gehört ins Protokoll, weil dann
+     * Handarbeit nötig ist.
+     */
+    private function rollbackFromBackup(string $backupName, \Throwable $ursache): void {
+        $pfad = $this->stageDir() . '/' . $backupName;
+
+        try {
+            if (!is_file($pfad)) {
+                throw new \RuntimeException("Sicherungs-Dump nicht gefunden: {$backupName}");
+            }
+            $dump = str_ends_with($backupName, '.gz')
+                ? (string) gzdecode((string) file_get_contents($pfad))
+                : (string) file_get_contents($pfad);
+            if ($dump === '') {
+                throw new \RuntimeException('Sicherungs-Dump ist leer.');
+            }
+
+            Database::getInstance()->exec($dump);
+
+            AuditLogger::log(
+                'Datenmigrations-Import zurückgerollt',
+                'datenmigration',
+                'Grund: ' . $ursache->getMessage() . ' - Sicherung ' . $backupName . ' eingespielt'
+            );
+        } catch (\Throwable $e) {
+            AuditLogger::log(
+                'Datenmigration: Zurückrollen FEHLGESCHLAGEN',
+                'security',
+                'Import scheiterte (' . $ursache->getMessage() . '), das Zurückspielen von '
+                . $backupName . ' ebenfalls (' . $e->getMessage() . ') - die Datenbank ist in einem '
+                . 'unvollständigen Zustand und muss von Hand aus var/datenmigration/' . $backupName
+                . ' wiederhergestellt werden.'
+            );
+            error_log('Datenmigration: Rollback fehlgeschlagen - ' . $e->getMessage());
+        }
+    }
+
+    /** Rückfall für rename() über Dateisystemgrenzen hinweg. */
+    private function copyDir(string $from, string $to): void {
+        if (!is_dir($to) && !mkdir($to, 0755, true) && !is_dir($to)) {
+            throw new \RuntimeException("Zielverzeichnis konnte nicht angelegt werden: {$to}");
+        }
+        $it = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($from, \FilesystemIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::SELF_FIRST
+        );
+        foreach ($it as $item) {
+            $ziel = $to . '/' . $it->getSubPathname();
+            if ($item->isDir()) {
+                if (!is_dir($ziel) && !mkdir($ziel, 0755, true) && !is_dir($ziel)) {
+                    throw new \RuntimeException("Verzeichnis konnte nicht angelegt werden: {$ziel}");
+                }
+                continue;
+            }
+            if (!copy($item->getPathname(), $ziel)) {
+                throw new \RuntimeException("Datei konnte nicht kopiert werden: {$ziel}");
+            }
+        }
     }
 
     private function removeDir(string $dir): void {

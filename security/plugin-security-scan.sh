@@ -106,9 +106,16 @@ for dir in "${plugdirs[@]}"; do
     finding HIGH "$plug" "$(loc_of "$m")" "Backtick-Shell-Ausfuehrung"; had=1
   done < <(scan "$plug" '`[^`]*\$')
 
+  # Nach dem Schluesselwort MUSS Whitespace oder eine oeffnende Klammer
+  # folgen. Ohne diese Bedingung traf das Muster jeden Methodennamen, der mit
+  # "require"/"include" beginnt und irgendwo eine Variable im Argument hat -
+  # etwa requireAdminForFullAccess(string $aktion) oder
+  # $this->requirePermission($modul, $aktion). Ein Gate, das bei sauberem Code
+  # ausschlaegt, wird umbenannt statt behoben; dann faellt beim naechsten Mal
+  # der echte Fund nicht mehr auf.
   while IFS= read -r m; do [[ -z "$m" ]] && continue
     finding HIGH "$plug" "$(loc_of "$m")" "Dynamisches include/require mit Variable"; had=1
-  done < <(scan "$plug" '(^|[^_[:alnum:]])(include|require)(_once)?[[:space:]]*\(?[^;]*\$')
+  done < <(scan "$plug" '(^|[^_[:alnum:]])(include|require)(_once)?([[:space:]]+|[[:space:]]*\()[^;]*\$')
 
   while IFS= read -r m; do [[ -z "$m" ]] && continue
     finding HIGH "$plug" "$(loc_of "$m")" "SQL mit Variable im Query-String (Interpolation)"; had=1

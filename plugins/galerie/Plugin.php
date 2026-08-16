@@ -36,7 +36,15 @@ use PDO;
 class Plugin {
 
     public function register(HookManager $hooks): void {
-        $this->ensureTable();
+        // Kein ensureTable() mehr: Die Tabelle legt install() an, das der
+        // PluginManager bei Aktivierung und nach jedem Addon-Update genau
+        // einmal aufruft (Framework #75). Die frueher hier stehende Probe
+        // ("SELECT 1 FROM ... LIMIT 1", sonst install() nachholen) war ein
+        // Rueckfall fuer Kerne OHNE diesen Hook - den es laut der
+        // core_compatibility-Untergrenze in plugin.json nicht mehr gibt.
+        // Geblieben waere nur der Preis: eine zusaetzliche Abfrage pro Plugin
+        // und Anfrage, bei sieben Addons also sieben Roundtrips, bevor die
+        // erste Zeile der Seite steht.
         $hooks->addFilter('horse.detail_sections', [$this, 'addDetailSection']);
         $hooks->addFilter('horse.edit_sections', [$this, 'addEditSection']);
         $hooks->addFilter('admin.dashboard_tiles', [$this, 'addDashboardTile']);
@@ -180,31 +188,6 @@ class Plugin {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
         );
     }
-
-    /**
-     * Fallback für ältere Kerne ohne install()-Hook (#75) - bewusst OHNE
-     * Marker-Datei: Der Kern gibt das Plugin-Verzeichnis über einen
-     * Inhalts-Fingerabdruck frei, in den auch Dotfiles einfließen. Jede zur
-     * Laufzeit dorthin geschriebene Datei änderte den Fingerabdruck, und der
-     * Kern deaktivierte das Plugin als unfreigegeben verändert. Statt DDL
-     * pro Request (siehe Issue) läuft deshalb nur noch eine billige
-     * SELECT-Probe je Request; erst wenn sie fehlschlägt, legt install()
-     * die Tabelle an. Auf Kernen mit install()-Hook existiert die Tabelle
-     * ohnehin - dort bleibt es bei der Probe.
-     */
-    private function ensureTable(): void {
-        static $checked = false;
-        if ($checked) {
-            return;
-        }
-        try {
-            Database::getInstance()->query('SELECT 1 FROM `plugin_galerie_media` LIMIT 1');
-        } catch (\Throwable $e) {
-            $this->install();
-        }
-        $checked = true;
-    }
-
     /**
      * Erlaubte Video-Hosts: nur bekannte Plattformen, ausschließlich https.
      * Rückgabe ist die normalisierte URL oder null (Eingabe verworfen).
@@ -222,7 +205,38 @@ class Plugin {
             return null;
         }
 
-        return $url;
+        // Zurückgegeben wird eine NEU GEBAUTE URL aus genau den Teilen, die
+        // oben geprüft wurden - nicht die Eingabe.
+        //
+        // Grund ist eine ganze Fehlerklasse, nicht ein einzelner Trick: Die
+        // Prüfung macht PHPs parse_url(), angezeigt wird die Zeichenkette
+        // später in einem <iframe src>, also im Parser des Browsers. Solange
+        // die Eingabe unverändert durchgereicht wird, muss man sich darauf
+        // verlassen, dass beide Parser jede Eingabe gleich lesen - und genau
+        // solche Abweichungen sind der Stoff, aus dem Allowlist-Umgehungen
+        // gemacht sind (Benutzerinfo vor dem @, Rückwärtsschrägstriche,
+        // Steuerzeichen, doppelte Fragmente).
+        //
+        // Wird die URL neu zusammengesetzt, ist diese Frage gegenstandslos:
+        // Was der Browser sieht, ist per Konstruktion das, was hier geprüft
+        // wurde. Benutzerinfo und Fragment fallen dabei ganz weg - beide
+        // haben in einer eingebetteten Video-URL nichts zu suchen.
+        $rebuilt = 'https://' . $host;
+        if (isset($parts['port'])) {
+            $rebuilt .= ':' . (int) $parts['port'];
+        }
+        $rebuilt .= $parts['path'] ?? '/';
+        if (isset($parts['query']) && $parts['query'] !== '') {
+            $rebuilt .= '?' . $parts['query'];
+        }
+
+        // Steuerzeichen können in Pfad/Query stehen, ohne dass parse_url
+        // stolpert - im Attribut beenden sie unter Umständen den Wert.
+        if (preg_match('/[\x00-\x1F\x7F"\'<>\\\\]/', $rebuilt) === 1) {
+            return null;
+        }
+
+        return $rebuilt;
     }
 
     /**

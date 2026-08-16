@@ -8,6 +8,100 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+### Sicherheit
+
+- **datenmigration: Import kann keinen ausführbaren Code mehr in den Webroot
+  legen.** Die Pfadhärtung beim Entpacken prüfte Traversal, absolute Pfade und
+  NUL - also WOHIN geschrieben wird, aber nicht WAS. Ziel war
+  `public/uploads.import-neu` (im Webroot), und der abschließende
+  Verzeichnistausch ersetzte `public/uploads` samt der `.htaccess`, die dort
+  die PHP-Ausführung abschaltet. Ein Archiv mit einer `.php` darin genügte für
+  Codeausführung - ausgelöst von einem Benutzer ohne Administratorrechte.
+  - Das Staging liegt jetzt **außerhalb** von `public/`
+    (`var/datenmigration/uploads-neu`); zwischen erstem Schreiben und
+    Umschalten ist nichts über den Webserver erreichbar.
+  - Neue `UploadNamePolicy`: Positivliste erlaubter Endungen plus eine Liste
+    ausführbarer Endungen, die an **jeder** Stelle des Namens unzulässig sind
+    (`bild.php.jpg` wird von einem Apache mit `AddHandler` ausgeführt).
+  - Die Schutz-`.htaccess` wird nach dem Umschalten neu geschrieben; eine im
+    Archiv enthaltene wird verworfen statt übernommen - ein echter Export
+    enthält sie zwangsläufig, sie darf den Import also weder abbrechen noch
+    den Ausführungsschutz bestimmen.
+- **Export und Import verlangen zusätzlich Administratorrechte.** Die
+  Berechtigungen `datenmigration.export`/`.import` sahen aus wie jede andere
+  Modulberechtigung und ließen sich an jede Gruppe vergeben - ihre Wirkung ist
+  eine andere: Export liefert den vollständigen Datenbank-Dump inklusive
+  `users` (Passwort-Hashes, TOTP-Secrets) und `api_keys`; Import ersetzt die
+  gesamte Datenbank, also auch die Benutzertabelle, womit sich ein Angreifer
+  mit einem selbst gebauten Archiv zum Administrator machen kann. Im Kern sind
+  vergleichbare Fähigkeiten (Backup, Update, Systemreset) bewusst admin-only.
+  Die Berechtigung bleibt erhalten, sie genügt nur nicht mehr allein.
+
+### Behoben
+
+- **datenmigration: Import läuft unter Wartungsmodus und rollt bei einem
+  Fehler zurück.** Der Dump wirft jede Tabelle einzeln weg und legt sie neu
+  an; im Fenster dazwischen trafen parallele Anfragen auf eine halb ersetzte
+  Datenbank. DDL ist in MariaDB autocommittend, eine Transaktion gibt es hier
+  also nicht - der Wartungsmodus des Kerns (`App\Service\Maintenance`) ist die
+  richtige Antwort. Schlägt das Einspielen fehl, wird der unmittelbar zuvor
+  geschriebene Sicherungs-Dump automatisch zurückgespielt; scheitert auch
+  das, sagt das Audit-Log genau, welche Datei von Hand einzuspielen ist.
+- **Der Verzeichnistausch fällt auf Kopieren zurück**, wenn `rename()` über
+  eine Dateisystemgrenze scheitert - seit das Staging in `var/` liegt, ist das
+  kein theoretischer Fall mehr (eigenes Volume für `uploads`).
+
+### Geändert
+
+- `security/plugin-security-scan.sh`: Das Muster für dynamische
+  `include`/`require` verlangt jetzt Whitespace oder eine öffnende Klammer
+  nach dem Schlüsselwort. Vorher traf es jeden Methodennamen, der damit
+  beginnt und eine Variable im Argument hat (`requireAdminForFullAccess(string
+  $aktion)`, `$this->requirePermission($modul, $aktion)`). Ein Gate, das bei
+  sauberem Code ausschlägt, wird umbenannt statt behoben - und dann fällt der
+  echte Fund beim nächsten Mal nicht mehr auf.
+
+- **gesundheitstests: Der Verwaltungs-Zweig des Dokument-Downloads prüft die
+  Sitzung jetzt wie das übrige Backend.** `isset($_SESSION['user_id'])` fragt
+  nur, ob irgendwann einmal jemand angemeldet war - eine Sitzung, deren Konto
+  gelöscht wurde, deren Passwort anderswo geändert wurde (Framework #113),
+  die von einem anderen User-Agent kommt oder die längst abgelaufen ist, flog
+  über `checkAuth()` überall hinaus, lieferte hier aber weiterhin
+  Gesundheitsdokumente aus. `checkAuth()` wird nur betreten, wenn der
+  öffentliche Opt-in-Pfad nicht greift - für einen anonymen Abruf eines
+  freigegebenen Dokuments wäre eine Umleitung auf `/login` die falsche
+  Antwort.
+- **galerie: Video-Links werden aus den geprüften Teilen neu gebaut**, statt
+  die Eingabe durchzureichen. Geprüft wird mit PHPs `parse_url()`, angezeigt
+  wird die Zeichenkette im `<iframe src>` des Browsers; solange die Eingabe
+  unverändert weitergereicht wird, hängt die Allowlist daran, dass beide
+  Parser jede Eingabe gleich lesen. Benutzerinfo und Fragment fallen beim
+  Neubau weg, Steuer- und attributbrechende Zeichen führen zur Ablehnung.
+  (Der ursprünglich vermutete Rückwärtsschrägstrich-Trick greift bei
+  `parse_url()` übrigens nicht - der Host wird korrekt als `evil.tld` erkannt
+  und abgelehnt. Die Härtung schließt die Fehlerklasse, nicht den Einzelfall.)
+
+### Behoben
+
+- **Sieben Addons setzten pro Anfrage eine überflüssige Datenbankabfrage ab.**
+  `register()` prüfte mit `SELECT 1 FROM <tabelle> LIMIT 1`, ob die eigene
+  Tabelle existiert, und holte sonst `install()` nach - ein Rückfall für Kerne
+  ohne den `install()`-Hook (Framework #75). Den gibt es nicht mehr: Die
+  `core_compatibility`-Untergrenze in `plugin.json` verlangt eine Kern-Version,
+  die ihn sicher hat. Geblieben war nur der Preis, bei allen sieben aktivierten
+  Addons sieben zusätzliche Roundtrips, bevor die erste Zeile der Seite steht.
+- **zuchtschau-ergebnisse: drei unbegrenzte Abfragen gedeckelt.** Die Übersicht
+  lud den kompletten Pferdebestand, alle Ergebnisse **und** alle
+  Teilwertungen - letztere, um höchstens ein paar Dutzend sichtbare Zeilen zu
+  beschriften. Jetzt: Pferdeauswahl auf 500, Ergebnisliste auf die 200
+  neuesten (mit sichtbarem Hinweis), Teilwertungen nur noch für die tatsächlich
+  angezeigten Ergebnis-IDs.
+- **genealogie-vergleich: die anonyme Route lud den gesamten veröffentlichten
+  Bestand** und rendert ihn zweimal, einmal je Auswahlfeld - auch dann, wenn
+  gar kein Vergleich angefordert war. Jetzt gedeckelt; bereits gewählte Pferde
+  werden gezielt nachgeladen, damit die Auswahl beim nächsten Seitenaufruf
+  nicht still leer wird.
+
 ### Geändert (Prüfkette)
 
 - **Semgrep läuft jetzt auch über die Addons** (`.github/workflows/semgrep.yml`,
