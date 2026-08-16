@@ -78,6 +78,9 @@ class VergleichController extends BaseController {
     // der Kern selbst.
     private const MAX_DEPTH = 6;
 
+    /** Obergrenze der beiden Auswahllisten. */
+    private const HORSE_OPTION_LIMIT = 500;
+
     public function show(): void {
         // Öffentliche Sichtbarkeit exakt wie im Kern (PublicController::horseDetail):
         // ohne Lese-Recht der Gast-Gruppe wird das Tool wie nicht vorhanden behandelt.
@@ -87,12 +90,43 @@ class VergleichController extends BaseController {
 
         // Nur veröffentlichte Pferde im Auswahl-Dropdown - sonst würden hier die
         // Namen aller (auch unveröffentlichter) Pferde an anonyme Besucher leaken.
-        $horses = Database::getInstance()->query(
-            'SELECT id, name, birth_year FROM horses WHERE deleted_at IS NULL AND is_published = 1 ORDER BY name ASC'
-        )->fetchAll(PDO::FETCH_ASSOC);
-
         $horseAId = !empty($_GET['horse_a']) ? (int) $_GET['horse_a'] : null;
         $horseBId = !empty($_GET['horse_b']) ? (int) $_GET['horse_b'] : null;
+
+        // Gedeckelt. Die Route ist anonym erreichbar und lud den gesamten
+        // veroeffentlichten Bestand - zweimal gerendert, einmal je Dropdown.
+        // Das waechst linear mit dem Verzeichnis und kostet bei jedem Aufruf,
+        // auch wenn gar kein Vergleich angefordert wurde.
+        $db = Database::getInstance();
+        $horses = $db->query(
+            'SELECT id, name, birth_year FROM horses WHERE deleted_at IS NULL AND is_published = 1'
+            . ' ORDER BY name ASC LIMIT ' . (self::HORSE_OPTION_LIMIT + 1)
+        )->fetchAll(PDO::FETCH_ASSOC);
+        $horsesCapped = count($horses) > self::HORSE_OPTION_LIMIT;
+        if ($horsesCapped) {
+            array_pop($horses);
+        }
+
+        // Die bereits gewaehlten Pferde muessen in der Liste bleiben, auch
+        // wenn sie hinter der Obergrenze liegen - sonst faellt die Auswahl
+        // beim naechsten Seitenaufruf still auf leer zurueck.
+        $vorhandene = array_column($horses, 'id');
+        $nachzuladen = array_values(array_filter(
+            [$horseAId, $horseBId],
+            static fn (?int $id): bool => $id !== null && !in_array($id, array_map('intval', $vorhandene), true)
+        ));
+        if ($nachzuladen !== []) {
+            $stmt = $db->prepare(
+                'SELECT id, name, birth_year FROM horses'
+                . ' WHERE deleted_at IS NULL AND is_published = 1'
+                . ' AND id IN (' . implode(',', array_fill(0, count($nachzuladen), '?')) . ')'
+            );
+            $stmt->execute($nachzuladen);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $horses[] = $row;
+            }
+            usort($horses, static fn (array $a, array $b): int => strcmp((string) $a['name'], (string) $b['name']));
+        }
         $depth = isset($_GET['depth']) ? max(2, min(self::MAX_DEPTH, (int) $_GET['depth'])) : self::DEFAULT_DEPTH;
 
         // publishedOnly=true: unveröffentlichte Wurzelpferde/Vorfahren fließen nicht

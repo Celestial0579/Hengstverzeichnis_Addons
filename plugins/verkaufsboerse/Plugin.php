@@ -45,7 +45,15 @@ class Plugin {
     private ?array $listingHorseIds = null;
 
     public function register(HookManager $hooks): void {
-        $this->ensureTable();
+        // Kein ensureTable() mehr: Die Tabelle legt install() an, das der
+        // PluginManager bei Aktivierung und nach jedem Addon-Update genau
+        // einmal aufruft (Framework #75). Die frueher hier stehende Probe
+        // ("SELECT 1 FROM ... LIMIT 1", sonst install() nachholen) war ein
+        // Rueckfall fuer Kerne OHNE diesen Hook - den es laut der
+        // core_compatibility-Untergrenze in plugin.json nicht mehr gibt.
+        // Geblieben waere nur der Preis: eine zusaetzliche Abfrage pro Plugin
+        // und Anfrage, bei sieben Addons also sieben Roundtrips, bevor die
+        // erste Zeile der Seite steht.
         $hooks->addFilter('horse.detail_sections', [$this, 'addDetailSection']);
         $hooks->addFilter('admin.dashboard_tiles', [$this, 'addDashboardTile']);
         // Lösch-/Papierkorb-Hooks des Kerns (#51 / Framework #164): Das Inserat
@@ -136,31 +144,6 @@ class Plugin {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
         );
     }
-
-    /**
-     * Fallback für ältere Kerne ohne install()-Hook (#75) - bewusst OHNE
-     * Marker-Datei: Der Kern gibt das Plugin-Verzeichnis über einen
-     * Inhalts-Fingerabdruck frei, in den auch Dotfiles einfließen. Jede zur
-     * Laufzeit dorthin geschriebene Datei änderte den Fingerabdruck, und der
-     * Kern deaktivierte das Plugin als unfreigegeben verändert. Statt DDL
-     * pro Request (siehe Issue) läuft deshalb nur noch eine billige
-     * SELECT-Probe je Request; erst wenn sie fehlschlägt, legt install()
-     * die Tabelle an. Auf Kernen mit install()-Hook existiert die Tabelle
-     * ohnehin - dort bleibt es bei der Probe.
-     */
-    private function ensureTable(): void {
-        static $checked = false;
-        if ($checked) {
-            return;
-        }
-        try {
-            Database::getInstance()->query('SELECT 1 FROM `plugin_verkaufsboerse_listings` LIMIT 1');
-        } catch (\Throwable $e) {
-            $this->install();
-        }
-        $checked = true;
-    }
-
     /**
      * Filter-Beispiel: zeigt ein "Zum Verkauf"-Badge samt Preis und
      * Kontaktformular an, wenn für dieses Pferd ein aktives Inserat existiert
