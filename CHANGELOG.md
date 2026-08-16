@@ -6,7 +6,7 @@ sich an [Keep a Changelog](https://keepachangelog.com/de/1.1.0/); die
 Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 (siehe [docs/releasing.md](docs/releasing.md)).
 
-## [Unreleased]
+## [0.5.1] – 2026-08-16
 
 ### Hinzugefügt
 
