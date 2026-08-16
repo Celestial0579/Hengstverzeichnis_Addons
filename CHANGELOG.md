@@ -8,6 +8,59 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+### Sicherheit
+
+- **datenmigration: Import kann keinen ausführbaren Code mehr in den Webroot
+  legen.** Die Pfadhärtung beim Entpacken prüfte Traversal, absolute Pfade und
+  NUL - also WOHIN geschrieben wird, aber nicht WAS. Ziel war
+  `public/uploads.import-neu` (im Webroot), und der abschließende
+  Verzeichnistausch ersetzte `public/uploads` samt der `.htaccess`, die dort
+  die PHP-Ausführung abschaltet. Ein Archiv mit einer `.php` darin genügte für
+  Codeausführung - ausgelöst von einem Benutzer ohne Administratorrechte.
+  - Das Staging liegt jetzt **außerhalb** von `public/`
+    (`var/datenmigration/uploads-neu`); zwischen erstem Schreiben und
+    Umschalten ist nichts über den Webserver erreichbar.
+  - Neue `UploadNamePolicy`: Positivliste erlaubter Endungen plus eine Liste
+    ausführbarer Endungen, die an **jeder** Stelle des Namens unzulässig sind
+    (`bild.php.jpg` wird von einem Apache mit `AddHandler` ausgeführt).
+  - Die Schutz-`.htaccess` wird nach dem Umschalten neu geschrieben; eine im
+    Archiv enthaltene wird verworfen statt übernommen - ein echter Export
+    enthält sie zwangsläufig, sie darf den Import also weder abbrechen noch
+    den Ausführungsschutz bestimmen.
+- **Export und Import verlangen zusätzlich Administratorrechte.** Die
+  Berechtigungen `datenmigration.export`/`.import` sahen aus wie jede andere
+  Modulberechtigung und ließen sich an jede Gruppe vergeben - ihre Wirkung ist
+  eine andere: Export liefert den vollständigen Datenbank-Dump inklusive
+  `users` (Passwort-Hashes, TOTP-Secrets) und `api_keys`; Import ersetzt die
+  gesamte Datenbank, also auch die Benutzertabelle, womit sich ein Angreifer
+  mit einem selbst gebauten Archiv zum Administrator machen kann. Im Kern sind
+  vergleichbare Fähigkeiten (Backup, Update, Systemreset) bewusst admin-only.
+  Die Berechtigung bleibt erhalten, sie genügt nur nicht mehr allein.
+
+### Behoben
+
+- **datenmigration: Import läuft unter Wartungsmodus und rollt bei einem
+  Fehler zurück.** Der Dump wirft jede Tabelle einzeln weg und legt sie neu
+  an; im Fenster dazwischen trafen parallele Anfragen auf eine halb ersetzte
+  Datenbank. DDL ist in MariaDB autocommittend, eine Transaktion gibt es hier
+  also nicht - der Wartungsmodus des Kerns (`App\Service\Maintenance`) ist die
+  richtige Antwort. Schlägt das Einspielen fehl, wird der unmittelbar zuvor
+  geschriebene Sicherungs-Dump automatisch zurückgespielt; scheitert auch
+  das, sagt das Audit-Log genau, welche Datei von Hand einzuspielen ist.
+- **Der Verzeichnistausch fällt auf Kopieren zurück**, wenn `rename()` über
+  eine Dateisystemgrenze scheitert - seit das Staging in `var/` liegt, ist das
+  kein theoretischer Fall mehr (eigenes Volume für `uploads`).
+
+### Geändert
+
+- `security/plugin-security-scan.sh`: Das Muster für dynamische
+  `include`/`require` verlangt jetzt Whitespace oder eine öffnende Klammer
+  nach dem Schlüsselwort. Vorher traf es jeden Methodennamen, der damit
+  beginnt und eine Variable im Argument hat (`requireAdminForFullAccess(string
+  $aktion)`, `$this->requirePermission($modul, $aktion)`). Ein Gate, das bei
+  sauberem Code ausschlägt, wird umbenannt statt behoben - und dann fällt der
+  echte Fund beim nächsten Mal nicht mehr auf.
+
 ### Hinzugefügt
 
 - **Neues Addon `embed-widget` (1.0.0):** erzeugt im Admin-Bereich den

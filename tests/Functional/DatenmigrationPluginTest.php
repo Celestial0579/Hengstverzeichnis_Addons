@@ -130,7 +130,7 @@ class DatenmigrationPluginTest extends FunctionalTestCase {
             'datei' => $stagedName,
             'bestaetigt' => '1',
         ]);
-        $this->assertSame('/login?import=fertig', $apply->location());
+        $this->assertSame('/login?import=fertig', $apply->location(), "Import fehlgeschlagen, Body: {$apply->body}");
 
         // Rundreise geprüft: Pferdename wieder original, Upload-Datei zurück.
         $restored = $db->query("SELECT COUNT(*) FROM horses WHERE name = " . $db->quote($horseName))->fetchColumn();
