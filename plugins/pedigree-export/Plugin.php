@@ -68,6 +68,38 @@ class Plugin {
  */
 class ExportController extends BaseController {
 
+    /**
+     * Pferde-ID und Stammbaumtiefe aus der Anfrage - validiert, nicht
+     * umgedeutet, und mit deklariertem int-Rueckgabetyp.
+     *
+     * Zweierlei steckt darin. Fachlich: filter_var lehnt ab, was keine Zahl
+     * IST; der frueher hier stehende (int)-Cast machte aus "abc" eine 0 und
+     * aus "9x" eine 9. Bei der Tiefe fing die Klemmung das zwar auf, aber ein
+     * ungueltiger Wert landete still beim Minimum statt beim Standard.
+     *
+     * Und strukturell: Eine Bereinigung, die INNERHALB des Ausdrucks
+     * passiert, sieht man dem Aufrufer nicht an - eine statische Analyse
+     * ebenso wenig. Die Tiefe floss deshalb als "Nutzerdaten" durch
+     * PedigreeBuilder bis in die Ausgabe und liess dort eine XSS-Regel
+     * anschlagen. Der Befund war inhaltlich falsch (renderNode() escaped
+     * jeden Wert), die Ursache aber echt. Hinter einer Methode mit
+     * int-Rueckgabetyp ist die Zusage sichtbar und nachpruefbar.
+     */
+    private static function pferdeId(): int {
+        $wert = filter_var($_GET['id'] ?? 0, FILTER_VALIDATE_INT, ['options' => ['default' => 0, 'min_range' => 0]]);
+        return is_int($wert) ? $wert : 0;
+    }
+
+    private static function tiefe(): int {
+        $wert = filter_var(
+            $_GET['depth'] ?? self::DEFAULT_DEPTH,
+            FILTER_VALIDATE_INT,
+            ['options' => ['default' => self::DEFAULT_DEPTH, 'min_range' => 2, 'max_range' => self::MAX_DEPTH]]
+        );
+        return is_int($wert) ? $wert : self::DEFAULT_DEPTH;
+    }
+
+
     private const DEFAULT_DEPTH = 6;
     // Gedeckelt auf die Kern-Tiefe von /horse (6 Generationen): die Route ist
     // anonym erreichbar, eine größere wählbare Tiefe würde pro Request
@@ -83,8 +115,8 @@ class ExportController extends BaseController {
             $this->renderNotFound('Für dieses Pferd konnte kein Stammbaum ermittelt werden.');
         }
 
-        $id = isset($_GET['id']) ? (int) $_GET['id'] : 0;
-        $depth = isset($_GET['depth']) ? max(2, min(self::MAX_DEPTH, (int) $_GET['depth'])) : self::DEFAULT_DEPTH;
+        $id = self::pferdeId();
+        $depth = self::tiefe();
 
         // publishedOnly=true (ZWINGEND für öffentliche Ausgaben, siehe
         // PedigreeBuilder): ein unveröffentlichtes Wurzelpferd liefert damit null
@@ -126,13 +158,6 @@ class ExportController extends BaseController {
         echo '<p class="meta">Stammbaum · ' . $siteName . ' · erzeugt am ' . $generatedAt . '</p>';
 
         echo '<div class="pedigree">';
-        // Falschbefund, geprueft: renderNode() baut das HTML selbst und
-        // escaped JEDEN uebernommenen Wert mit htmlspecialchars(..., ENT_QUOTES)
-        // - Name, Geburtsjahr, Lebensnummer (siehe dort). Ausgegeben wird
-        // also fertiges, eigenes Markup und keine Anfragedaten. Semgrep folgt
-        // dem Rueckgabewert bis zur Wurzel des Baums, die aus $_GET['id']
-        // stammt, und meldet deshalb die Senke.
-        // nosemgrep: php.lang.security.injection.echoed-request.echoed-request
         echo $this->renderNode($tree);
         echo '</div>';
 

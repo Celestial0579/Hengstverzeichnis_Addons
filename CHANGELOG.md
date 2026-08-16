@@ -6,6 +6,39 @@ sich an [Keep a Changelog](https://keepachangelog.com/de/1.1.0/); die
 Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 (siehe [docs/releasing.md](docs/releasing.md)).
 
+## [Unreleased]
+
+### Sicherheit
+
+- **Alle `nosemgrep`-Unterdrückungen entfernt — samt Ursachen.** Sechs Marker
+  waren im letzten Durchgang gesetzt worden, jeder mit Begründung. Begründet
+  oder nicht: Sie haben Funde zugedeckt statt sie zu beheben. Der Scan ist
+  jetzt ohne eine einzige Ausnahme sauber.
+  - **Seitennummern werden validiert statt umgedeutet** (`galerie`,
+    `gesundheitstests`, `verkaufsboerse`, `pedigree-export`). `(int) $_GET[…]`
+    machte aus `"abc"` eine 0 und aus `"3x"` eine 3; `filter_var` mit
+    `FILTER_VALIDATE_INT` lehnt ab, was keine Zahl **ist**, und fällt auf den
+    dokumentierten Standard zurück. In `verkaufsboerse` liegt die Prüfung in
+    einer eigenen Klasse `Seitenzahl`, weil zwei Controller sie brauchen.
+  - **`merkliste`: Die Platzhalterliste hat eine feste Länge**, abgeleitet
+    allein aus der Konstanten `MAX_IDS` statt aus der Anzahl übergebener IDs.
+    Der Abfragetext ist damit über alle Aufrufe hinweg identisch und enthält
+    keinen aus der Eingabe abgeleiteten Wert mehr; aufgefüllt wird mit 0, das
+    keine Zeile trifft. Der Index bleibt nutzbar.
+  - **`genealogie-vergleich`: feste Abfrage mit zwei Platzhaltern** statt
+    einer zur Laufzeit zusammengesetzten `IN`-Liste — nachzuladen sind
+    höchstens die beiden gewählten Pferde.
+  - **`pedigree-export`: Pferde-ID und Tiefe hinter Methoden mit
+    `int`-Rückgabetyp.** Eine Bereinigung mitten im Ausdruck sieht man dem
+    Aufrufer nicht an.
+
+### Geändert
+
+- **`pre-commit` in der CI auf eine feste Version genagelt** (`==4.6.2`).
+  OpenSSF Scorecard meldete das unversionierte `pip install` als
+  `Pinned-Dependencies` — eine Regression gegen die Pinning-Disziplin, die
+  hier sonst überall gilt.
+
 ## [0.5.1] – 2026-08-16
 
 ### Hinzugefügt

@@ -248,7 +248,37 @@ class Plugin {
  * bereits Preis, Beschreibung und Kontaktformular) - keine doppelte
  * Kontaktformular-Logik auf zwei Seiten.
  */
+/**
+ * Seitennummer aus der Anfrage - validiert, nicht umgedeutet.
+ *
+ * Eigene Klasse, weil sie von ZWEI Controllern gebraucht wird (oeffentliche
+ * Liste und Verwaltung). Als private Methode in einem der beiden waere sie im
+ * anderen ein Fatal - genau das ist beim ersten Anlauf passiert und hat den
+ * Funktionstest mit HTTP 500 rot gemacht.
+ *
+ * filter_var mit FILTER_VALIDATE_INT lehnt ab, was keine Zahl IST; ein blosser
+ * (int)-Cast machte aus "abc" eine 0 und aus "3x" eine 3. Der Cast ist
+ * ausserdem fuer eine statische Analyse keine erkennbare Bereinigung - die
+ * Seitennummer floss deshalb als "Nutzerdaten" bis in den HTML-Aufbau und
+ * liess dort eine Injection-Regel anschlagen.
+ */
+final class Seitenzahl {
+
+    private function __construct() {}
+
+    public static function ausAnfrage(): int {
+        $wert = filter_var(
+            $_GET['seite'] ?? 1,
+            FILTER_VALIDATE_INT,
+            ['options' => ['default' => 1, 'min_range' => 1]]
+        );
+        return is_int($wert) ? $wert : 1;
+    }
+}
+
+
 class ListeController extends BaseController {
+
 
     /** Inserate je Seite der öffentlichen Börse (#74). */
     private const LISTINGS_PER_PAGE = 50;
@@ -276,7 +306,7 @@ class ListeController extends BaseController {
              WHERE l.listed_until IS NULL OR l.listed_until >= CURDATE()'
         )->fetchColumn();
         $pageCount = max(1, (int) ceil($totalListings / self::LISTINGS_PER_PAGE));
-        $page = min($pageCount, max(1, (int) ($_GET['seite'] ?? 1)));
+        $page = min($pageCount, Seitenzahl::ausAnfrage());
 
         $listingsStmt = $db->prepare(
             'SELECT l.*, h.name AS horse_name, h.birth_year, h.color, h.image_url
@@ -334,7 +364,7 @@ class ListeController extends BaseController {
             if ($page > 1) {
                 $content .= '<a class="btn btn-secondary" href="/plugin/verkaufsboerse/liste?seite=' . ($page - 1) . '">&laquo; Zurück</a> ';
             }
-            $content .= 'Seite ' . $page . ' von ' . $pageCount . ' (' . $totalListings . ' Inserate)';
+            $content .= 'Seite ' . (int) $page . ' von ' . (int) $pageCount . ' (' . (int) $totalListings . ' Inserate)';
             if ($page < $pageCount) {
                 $content .= ' <a class="btn btn-secondary" href="/plugin/verkaufsboerse/liste?seite=' . ($page + 1) . '">Weiter &raquo;</a>';
             }
@@ -380,7 +410,7 @@ class VerwaltungController extends BaseController {
         // Inserate ohne LIMIT und renderte jede Zeile ins HTML.
         $totalListings = (int) $db->query('SELECT COUNT(*) FROM `plugin_verkaufsboerse_listings`')->fetchColumn();
         $pageCount = max(1, (int) ceil($totalListings / self::LISTINGS_PER_PAGE));
-        $page = min($pageCount, max(1, (int) ($_GET['seite'] ?? 1)));
+        $page = min($pageCount, Seitenzahl::ausAnfrage());
 
         $listingsStmt = $db->prepare(
             'SELECT l.*, h.name AS horse_name, h.deleted_at AS horse_deleted_at, h.is_published AS horse_is_published
@@ -508,17 +538,9 @@ class VerwaltungController extends BaseController {
             $content .= '<td>' . htmlspecialchars($priceText, ENT_QUOTES, 'UTF-8') . '</td>';
             $content .= '<td>' . htmlspecialchars((string) $row['contact_email'], ENT_QUOTES, 'UTF-8') . '</td>';
             $content .= '<td>' . htmlspecialchars((string) ($row['listed_until'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
-            // Falschbefund, geprueft: Das ist HTML, kein SQL - und $page
-            // ist keine Nutzereingabe mehr. Es entsteht aus
-            // min($pageCount, max(1, (int) $_GET['seite'])), also
-            // Ganzzahl-Cast plus Klemmung auf einen gueltigen
-            // Seitenbereich. Semgreps Taint-Analyse erkennt den
-            // (int)-Cast nicht als Bereinigung; derselbe Grund steht im
-            // Kern an PublicController.php.
-            // nosemgrep: php.lang.security.injection.tainted-sql-string.tainted-sql-string
             $content .= '<td><form method="POST" action="/plugin/verkaufsboerse/verwaltung/delete" style="margin:0;" onsubmit="return confirm(\'Inserat wirklich entfernen?\');">'
                 . '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">'
-                . '<input type="hidden" name="seite" value="' . $page . '">'
+                . '<input type="hidden" name="seite" value="' . (int) $page . '">'
                 . '<input type="hidden" name="id" value="' . (int) $row['id'] . '">'
                 . '<button type="submit" class="btn btn-secondary" style="color:var(--danger-fg);">Entfernen</button></form></td>';
             $content .= '</tr>';
@@ -535,7 +557,7 @@ class VerwaltungController extends BaseController {
             if ($page > 1) {
                 $content .= '<a class="btn btn-secondary" href="/plugin/verkaufsboerse/verwaltung?seite=' . ($page - 1) . '">&laquo; Zurück</a> ';
             }
-            $content .= 'Seite ' . $page . ' von ' . $pageCount . ' (' . $totalListings . ' Inserate)';
+            $content .= 'Seite ' . (int) $page . ' von ' . (int) $pageCount . ' (' . (int) $totalListings . ' Inserate)';
             if ($page < $pageCount) {
                 $content .= ' <a class="btn btn-secondary" href="/plugin/verkaufsboerse/verwaltung?seite=' . ($page + 1) . '">Weiter &raquo;</a>';
             }

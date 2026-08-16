@@ -185,6 +185,30 @@ class VerwaltungController extends BaseController {
         $this->requirePermission('gesundheitstests', 'manage');
     }
 
+    /**
+     * Seitennummer aus der Anfrage - validiert, nicht umgedeutet.
+     *
+     * Vorher stand hier "(int) ($_GET['seite'] ?? 1)". Ein Cast macht aus
+     * jeder Eingabe eine Zahl: "abc" wird zu 0, "3x" zu 3. filter_var mit
+     * FILTER_VALIDATE_INT lehnt ab, was keine Zahl IST, und faellt auf 1
+     * zurueck - die Absicht steht damit im Code statt im Kopf des Lesers.
+     *
+     * Nebenwirkung, die hier den Ausschlag gab: Der Cast ist fuer eine
+     * statische Analyse keine erkennbare Bereinigung, filter_var schon. Die
+     * Seitennummer floss deshalb als "Nutzerdaten" bis in den HTML-Aufbau
+     * und liess dort eine Injection-Regel anschlagen. Der Befund war
+     * inhaltlich falsch, die Ursache aber echt: Dem Code sah man die
+     * Bereinigung nicht an.
+     */
+    private static function seitenNummer(): int {
+        $wert = filter_var(
+            $_GET['seite'] ?? 1,
+            FILTER_VALIDATE_INT,
+            ['options' => ['default' => 1, 'min_range' => 1]]
+        );
+        return is_int($wert) ? $wert : 1;
+    }
+
     public function index(): void {
         $db = Database::getInstance();
 
@@ -192,7 +216,7 @@ class VerwaltungController extends BaseController {
         // Eintragstabelle per JOIN ohne LIMIT und renderte jede Zeile ins HTML.
         $totalEntries = (int) $db->query('SELECT COUNT(*) FROM `plugin_gesundheitstests`')->fetchColumn();
         $pageCount = max(1, (int) ceil($totalEntries / self::ENTRIES_PER_PAGE));
-        $page = min($pageCount, max(1, (int) ($_GET['seite'] ?? 1)));
+        $page = min($pageCount, self::seitenNummer());
 
         $entriesStmt = $db->prepare(
             'SELECT g.*, h.name AS horse_name
@@ -322,17 +346,9 @@ class VerwaltungController extends BaseController {
                 $content .= '–';
             }
             $content .= '</td>';
-            // Falschbefund, geprueft: Das ist HTML, kein SQL - und $page
-            // ist keine Nutzereingabe mehr. Es entsteht aus
-            // min($pageCount, max(1, (int) $_GET['seite'])), also
-            // Ganzzahl-Cast plus Klemmung auf einen gueltigen
-            // Seitenbereich. Semgreps Taint-Analyse erkennt den
-            // (int)-Cast nicht als Bereinigung; derselbe Grund steht im
-            // Kern an PublicController.php.
-            // nosemgrep: php.lang.security.injection.tainted-sql-string.tainted-sql-string
             $content .= '<td><form method="POST" action="/plugin/gesundheitstests/verwaltung/delete" style="margin:0;" onsubmit="return confirm(\'Eintrag (inkl. Dokument) wirklich löschen?\');">'
                 . '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">'
-                . '<input type="hidden" name="seite" value="' . $page . '">'
+                . '<input type="hidden" name="seite" value="' . (int) $page . '">'
                 . '<input type="hidden" name="id" value="' . (int) $row['id'] . '">'
                 . '<button type="submit" class="btn btn-secondary" style="color:var(--danger-fg);">Löschen</button></form></td>';
             $content .= '</tr>';
@@ -349,7 +365,7 @@ class VerwaltungController extends BaseController {
             if ($page > 1) {
                 $content .= '<a class="btn btn-secondary" href="/plugin/gesundheitstests/verwaltung?seite=' . ($page - 1) . '">&laquo; Zurück</a> ';
             }
-            $content .= 'Seite ' . $page . ' von ' . $pageCount . ' (' . $totalEntries . ' Einträge)';
+            $content .= 'Seite ' . (int) $page . ' von ' . (int) $pageCount . ' (' . (int) $totalEntries . ' Einträge)';
             if ($page < $pageCount) {
                 $content .= ' <a class="btn btn-secondary" href="/plugin/gesundheitstests/verwaltung?seite=' . ($page + 1) . '">Weiter &raquo;</a>';
             }

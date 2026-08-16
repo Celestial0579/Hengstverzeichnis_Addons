@@ -116,19 +116,18 @@ class VergleichController extends BaseController {
             static fn (?int $id): bool => $id !== null && !in_array($id, array_map('intval', $vorhandene), true)
         ));
         if ($nachzuladen !== []) {
+            // Feste Abfrage mit genau zwei Platzhaltern statt einer zur
+            // Laufzeit zusammengesetzten IN-Liste: Nachzuladen sind
+            // hoechstens die beiden gewaehlten Pferde (horse_a, horse_b).
+            // Der Abfragetext ist damit eine Konstante - es gibt keinen aus
+            // der Eingabe abgeleiteten Wert mehr darin.
             $stmt = $db->prepare(
-                // Nur die ANZAHL der Platzhalter ist variabel, nicht ihr
-                // Inhalt: implode() baut daraus "?,?,?", die IDs selbst gehen
-                // gebunden in execute(). Ein Platzhalter-String laesst sich
-                // nicht binden - die Anzahl der Parameter ist Teil der
-                // Abfragestruktur. Gleiche Stelle, gleiche Begruendung wie in
-                // merkliste.
-                // nosemgrep: php.lang.security.injection.tainted-sql-string.tainted-sql-string
                 'SELECT id, name, birth_year FROM horses'
                 . ' WHERE deleted_at IS NULL AND is_published = 1'
-                . ' AND id IN (' . implode(',', array_fill(0, count($nachzuladen), '?')) . ')'
+                . ' AND id IN (?, ?)'
             );
-            $stmt->execute($nachzuladen);
+            // Auf zwei Werte auffuellen; 0 trifft keine Zeile.
+            $stmt->execute(array_pad(array_slice($nachzuladen, 0, 2), 2, 0));
             foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
                 $horses[] = $row;
             }
