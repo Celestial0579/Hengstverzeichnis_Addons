@@ -21,6 +21,16 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   laufen. Der Gate-Scan nutzt `--error`, weil `semgrep scan` sich sonst auch
   bei Funden mit Exit 0 beendet (dieselbe Falle, in die der Kern schon einmal
   gelaufen ist).
+  - **Der erste Lauf hat prompt fünf ERROR-Funde geliefert - alle fünf sind
+    geprüfte Falschbefunde und einzeln begründet unterdrückt.** Dreimal
+    `tainted-sql-string` auf `value="' . $page . '"`: Das ist HTML und kein
+    SQL, und `$page` entsteht aus `min($pageCount, max(1, (int) $_GET['seite']))`
+    - Semgreps Taint-Analyse erkennt den `(int)`-Cast nicht als Bereinigung
+    (derselbe Grund wie beim einzigen `nosemgrep` des Kerns). Einmal auf dem
+    Platzhalter-String `?,?,?` in `merkliste` und einmal auf
+    `echo $this->renderNode($tree)` in `pedigree-export`, wo die Funktion jeden
+    Wert selbst escaped. Jede Unterdrückung nennt die Regel-ID und den Grund;
+    eine pauschale Ausnahme gibt es nicht.
 - **pre-commit läuft in der CI** (`.github/workflows/pre-commit.yml`). Bisher
   rein lokal - wer die Hooks nicht installiert hatte, umging gitleaks und
   shellcheck vollständig.
