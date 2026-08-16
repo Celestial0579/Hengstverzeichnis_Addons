@@ -85,6 +85,12 @@ echo "== Statischer Plugin-Sicherheits-Check ==" >&2
 mapfile -t plugdirs < <(find "$PLUGINS" -mindepth 1 -maxdepth 1 -type d | sort)
 echo "Plugins: ${#plugdirs[@]}" >&2
 
+# Die Suchmuster unten stehen bewusst in EINFACHEN Anfuehrungszeichen: Sie sind
+# regulaere Ausdruecke, das '$' darin ist ein Regex-Anker bzw. der Anfang eines
+# PHP-Variablennamens im geprueften Quelltext - keine Shell-Variable. Doppelte
+# Anfuehrungszeichen wuerden die Muster von der Shell expandieren lassen und die
+# Pruefung damit lautlos entkernen. shellcheck kann das nicht wissen (SC2016).
+# shellcheck disable=SC2016
 for dir in "${plugdirs[@]}"; do
   plug="$(basename "$dir")"
   build_stripped "$dir" "$plug"

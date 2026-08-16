@@ -506,6 +506,14 @@ class VerwaltungController extends BaseController {
             $content .= '</td>';
             $content .= '<td>' . htmlspecialchars((string) ($row['caption'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
             $content .= '<td>' . (int) $row['sort_order'] . '</td>';
+            // Falschbefund, geprueft: Das ist HTML, kein SQL - und $page
+            // ist keine Nutzereingabe mehr. Es entsteht aus
+            // min($pageCount, max(1, (int) $_GET['seite'])), also
+            // Ganzzahl-Cast plus Klemmung auf einen gueltigen
+            // Seitenbereich. Semgreps Taint-Analyse erkennt den
+            // (int)-Cast nicht als Bereinigung; derselbe Grund steht im
+            // Kern an PublicController.php.
+            // nosemgrep: php.lang.security.injection.tainted-sql-string.tainted-sql-string
             $content .= '<td><form method="POST" action="/plugin/galerie/verwaltung/delete" style="margin:0;" onsubmit="return confirm(\'Medium wirklich entfernen?\');">'
                 . '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">'
                 . '<input type="hidden" name="seite" value="' . $page . '">'

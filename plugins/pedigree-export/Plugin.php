@@ -126,6 +126,13 @@ class ExportController extends BaseController {
         echo '<p class="meta">Stammbaum · ' . $siteName . ' · erzeugt am ' . $generatedAt . '</p>';
 
         echo '<div class="pedigree">';
+        // Falschbefund, geprueft: renderNode() baut das HTML selbst und
+        // escaped JEDEN uebernommenen Wert mit htmlspecialchars(..., ENT_QUOTES)
+        // - Name, Geburtsjahr, Lebensnummer (siehe dort). Ausgegeben wird
+        // also fertiges, eigenes Markup und keine Anfragedaten. Semgrep folgt
+        // dem Rueckgabewert bis zur Wurzel des Baums, die aus $_GET['id']
+        // stammt, und meldet deshalb die Senke.
+        // nosemgrep: php.lang.security.injection.echoed-request.echoed-request
         echo $this->renderNode($tree);
         echo '</div>';
 

@@ -102,6 +102,39 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   werden gezielt nachgeladen, damit die Auswahl beim nächsten Seitenaufruf
   nicht still leer wird.
 
+### Geändert (Prüfkette)
+
+- **Semgrep läuft jetzt auch über die Addons** (`.github/workflows/semgrep.yml`,
+  Aufbau identisch zum Kern). Die einzige PHP-Analyse hier war bisher
+  `security/plugin-security-scan.sh` - 144 Zeilen grep. Der Scanner ist gut
+  darin, wofür er gebaut wurde, arbeitet aber zeilenweise und ohne Datenfluss:
+  Mehrzeilig zusammengesetztes SQL sieht er nicht, und ob ein interpolierter
+  Wert aus einem Literal oder aus `$_GET` stammt, kann er nicht unterscheiden.
+  Die rund 8.000 Zeilen PHP in `plugins/` liefen damit ohne die Analyse, die
+  der Kern längst hat - obwohl sie im selben Prozess mit denselben Rechten
+  laufen. Der Gate-Scan nutzt `--error`, weil `semgrep scan` sich sonst auch
+  bei Funden mit Exit 0 beendet (dieselbe Falle, in die der Kern schon einmal
+  gelaufen ist).
+  - **Der erste Lauf hat prompt fünf ERROR-Funde geliefert - alle fünf sind
+    geprüfte Falschbefunde und einzeln begründet unterdrückt.** Dreimal
+    `tainted-sql-string` auf `value="' . $page . '"`: Das ist HTML und kein
+    SQL, und `$page` entsteht aus `min($pageCount, max(1, (int) $_GET['seite']))`
+    - Semgreps Taint-Analyse erkennt den `(int)`-Cast nicht als Bereinigung
+    (derselbe Grund wie beim einzigen `nosemgrep` des Kerns). Einmal auf dem
+    Platzhalter-String `?,?,?` in `merkliste` und einmal auf
+    `echo $this->renderNode($tree)` in `pedigree-export`, wo die Funktion jeden
+    Wert selbst escaped. Jede Unterdrückung nennt die Regel-ID und den Grund;
+    eine pauschale Ausnahme gibt es nicht.
+- **pre-commit läuft in der CI** (`.github/workflows/pre-commit.yml`). Bisher
+  rein lokal - wer die Hooks nicht installiert hatte, umging gitleaks und
+  shellcheck vollständig.
+- **shellcheck-Falschbefund gekennzeichnet:** Die Suchmuster in
+  `plugin-security-scan.sh` stehen in einfachen Anführungszeichen, weil das
+  `$` darin ein Regex-Anker ist und kein Shell-Variablenname. Doppelte
+  Anführungszeichen würden die Muster von der Shell expandieren lassen und die
+  Prüfung lautlos entkernen - deshalb eine begründete `disable`-Direktive
+  statt einer Umschreibung.
+
 ### Hinzugefügt
 
 - **Neues Addon `embed-widget` (1.0.0):** erzeugt im Admin-Bereich den

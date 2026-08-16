@@ -11,6 +11,11 @@ repos:
   rev: 3.0.0
   hooks:
   - id: shellcheck
+    # Schwelle ausdruecklich festgelegt: Ohne sie entscheidet die
+    # shellcheck-Version, ob das Gate rot ist - lokal und im GitHub-Runner
+    # liefen unterschiedliche Fassungen mit unterschiedlichen info-/style-Funden.
+    # Ein Pflicht-Check, dessen Ergebnis von der Laufumgebung abhaengt, ist keiner.
+    args: ["--severity=warning"]
 - repo: https://github.com/pre-commit/pre-commit-hooks
   rev: v6.0.0
   hooks:
