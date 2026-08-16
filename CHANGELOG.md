@@ -34,10 +34,16 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ### Geändert
 
-- **`pre-commit` in der CI auf eine feste Version genagelt** (`==4.6.2`).
-  OpenSSF Scorecard meldete das unversionierte `pip install` als
-  `Pinned-Dependencies` — eine Regression gegen die Pinning-Disziplin, die
-  hier sonst überall gilt.
+- **`pre-commit` in der CI per Hash festgenagelt**
+  (`.github/pre-commit-requirements.txt`, erzeugt mit
+  `pip-compile --generate-hashes`). OpenSSF Scorecard meldete das
+  unversionierte `pip install` als `Pinned-Dependencies` — eine Regression
+  gegen die Pinning-Disziplin, die hier sonst überall gilt.
+
+  Eine Versionsangabe allein genügt dafür nicht: `pre-commit==4.6.2` stand
+  bereits im Workflow, und Scorecard flaggte die Zeile im Lauf gegen
+  `4844a9f` weiter, weil der Abhängigkeitsbaum darunter offen blieb.
+  `--require-hashes` schließt ihn. Gleiche Fassung wie im Framework-Repo.
 
 ## [0.5.1] – 2026-08-16
 
