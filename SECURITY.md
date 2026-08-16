@@ -31,10 +31,15 @@ Bitte gib nach Möglichkeit an:
 
 ## Unterstützte Versionen
 
-Dieses Repository veröffentlicht keine Tags oder Releases; maßgeblich ist
-stets der aktuelle Stand von `main`. Sicherheitsupdates erfolgen nur dort -
-bitte gib bei Meldungen deshalb den Commit-Hash an (die `version` in
-`plugins/<slug>/plugin.json` allein reicht zur Eingrenzung nicht aus).
+Dieses Repository veröffentlicht Release-Tags `vX.Y.z`, die der
+Framework-Linie `X.Y` folgen (siehe [docs/releasing.md](docs/releasing.md)).
+Unterstützt wird jeweils **das neueste Release**; Sicherheitsupdates gibt es
+nur dafür und für den aktuellen Stand von `main`.
+
+Bitte gib bei einer Meldung an, gegen welchen Stand du geprüft hast: den
+Release-Tag **oder** den Commit-Hash. Die `version` in
+`plugins/<slug>/plugin.json` allein reicht zur Eingrenzung nicht aus - sie
+zählt je Addon und sagt nichts darüber, welcher Repo-Stand installiert ist.
 
 ## Bereits umgesetzte Schutzmaßnahmen
 
