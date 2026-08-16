@@ -29,7 +29,15 @@ use PDO;
 class Plugin {
 
     public function register(HookManager $hooks): void {
-        $this->ensureTable();
+        // Kein ensureTable() mehr: Die Tabelle legt install() an, das der
+        // PluginManager bei Aktivierung und nach jedem Addon-Update genau
+        // einmal aufruft (Framework #75). Die frueher hier stehende Probe
+        // ("SELECT 1 FROM ... LIMIT 1", sonst install() nachholen) war ein
+        // Rueckfall fuer Kerne OHNE diesen Hook - den es laut der
+        // core_compatibility-Untergrenze in plugin.json nicht mehr gibt.
+        // Geblieben waere nur der Preis: eine zusaetzliche Abfrage pro Plugin
+        // und Anfrage, bei sieben Addons also sieben Roundtrips, bevor die
+        // erste Zeile der Seite steht.
         $hooks->addFilter('horse.detail_sections', [$this, 'addDetailSection']);
     }
 
@@ -79,37 +87,6 @@ class Plugin {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
         );
     }
-
-    /**
-     * Fallback für ältere Kerne ohne install()-Hook (#75) - bewusst OHNE
-     * Marker-Datei: Der Kern gibt das Plugin-Verzeichnis über einen
-     * Inhalts-Fingerabdruck frei, in den auch Dotfiles einfließen. Jede zur
-     * Laufzeit dorthin geschriebene Datei änderte den Fingerabdruck, und der
-     * Kern deaktivierte das Plugin als unfreigegeben verändert. Statt DDL
-     * pro Request (siehe Issue) läuft deshalb nur noch eine billige
-     * SELECT-Probe je Request; erst wenn sie fehlschlägt, legt install()
-     * die Tabelle an. Auf Kernen mit install()-Hook existiert die Tabelle
-     * ohnehin - dort bleibt es bei der Probe.
-     */
-    private function ensureTable(): void {
-        static $checked = false;
-        if ($checked) {
-            return;
-        }
-        try {
-            // Die Probe zielt bewusst auf die JÜNGSTE Tabelle des Addons: Auf
-            // Bestandsinstallationen existiert `plugin_zuchtschau_ergebnisse`
-            // längst - eine Probe nur darauf würde nie fehlschlagen, und die
-            // mit v1.2.0 hinzugekommene Kindtabelle (#82) würde auf Kernen
-            // ohne install()-Hook nie angelegt. Fehlt die Kindtabelle, legt
-            // install() beide Tabellen idempotent an (IF NOT EXISTS).
-            Database::getInstance()->query('SELECT 1 FROM `plugin_zuchtschau_teilwertungen` LIMIT 1');
-        } catch (\Throwable $e) {
-            $this->install();
-        }
-        $checked = true;
-    }
-
     /**
      * Filter-Beispiel: hängt eine chronologische Liste der erfassten
      * Zuchtschau-/Körungsergebnisse des Pferdes an die öffentliche
@@ -257,30 +234,64 @@ class ErgebnisseController extends BaseController {
         $this->requirePermission('zuchtschau-ergebnisse', 'manage');
     }
 
+    /**
+     * Obergrenzen der Uebersicht. Beide bewusst grosszuegig - sie sollen den
+     * Normalbetrieb nicht einschraenken, sondern nur verhindern, dass die
+     * Seite mit dem Bestand mitwaechst.
+     */
+    private const HORSE_OPTION_LIMIT = 500;
+    private const RESULT_LIMIT = 200;
+
     public function index(): void {
         $db = Database::getInstance();
 
+        // Drei Obergrenzen, wo vorher keine war. Die Seite lud den KOMPLETTEN
+        // Pferdebestand, ALLE Ergebnisse und ALLE Teilwertungen - drei
+        // Volltabellen-Abfragen bei jedem Aufruf, deren Ergebnis vollständig
+        // im PHP-Speicher landet. Mit ein paar hundert Zeilen faellt das nicht
+        // auf, mit dem Bestand waechst es linear mit; die Schwester-Addons
+        // (gesundheitstests, galerie, titel-praemierungen, verkaufsboerse)
+        // arbeiten aus genau diesem Grund laengst mit SEARCH_LIMIT.
         $horses = $db->query(
-            'SELECT id, name, birth_year FROM horses WHERE deleted_at IS NULL ORDER BY name ASC'
+            'SELECT id, name, birth_year FROM horses WHERE deleted_at IS NULL'
+            . ' ORDER BY name ASC LIMIT ' . (self::HORSE_OPTION_LIMIT + 1)
         )->fetchAll(PDO::FETCH_ASSOC);
+        $horsesCapped = count($horses) > self::HORSE_OPTION_LIMIT;
+        if ($horsesCapped) {
+            array_pop($horses);
+        }
 
         $results = $db->query(
             'SELECT e.*, h.name AS horse_name
              FROM `plugin_zuchtschau_ergebnisse` e
              JOIN horses h ON h.id = e.horse_id
-             ORDER BY e.event_date DESC, e.id DESC'
+             ORDER BY e.event_date DESC, e.id DESC
+             LIMIT ' . (self::RESULT_LIMIT + 1)
         )->fetchAll(PDO::FETCH_ASSOC);
+        $resultsCapped = count($results) > self::RESULT_LIMIT;
+        if ($resultsCapped) {
+            array_pop($results);
+        }
 
         // Teilwertungen (#82) in einem Rutsch laden und nach Ergebnis
-        // gruppieren - erspart eine Query je Ergebniszeile.
+        // gruppieren - erspart eine Query je Ergebniszeile. Jetzt aber nur
+        // noch fuer die tatsaechlich angezeigten Ergebnisse: Vorher wurde die
+        // gesamte Tabelle geladen, um die Teilwertungen von hoechstens ein
+        // paar Dutzend sichtbaren Zeilen zu beschriften.
         $teilwertungenByErgebnis = [];
-        $twRows = $db->query(
-            'SELECT id, ergebnis_id, bezeichnung, wertung, note, platzierung, distanz, zeit
-             FROM `plugin_zuchtschau_teilwertungen`
-             ORDER BY id ASC'
-        )->fetchAll(PDO::FETCH_ASSOC);
-        foreach ($twRows as $tw) {
-            $teilwertungenByErgebnis[(int) $tw['ergebnis_id']][] = $tw;
+        $ergebnisIds = array_map(static fn (array $r): int => (int) $r['id'], $results);
+        if ($ergebnisIds !== []) {
+            $platzhalter = implode(',', array_fill(0, count($ergebnisIds), '?'));
+            $twStmt = $db->prepare(
+                'SELECT id, ergebnis_id, bezeichnung, wertung, note, platzierung, distanz, zeit
+                 FROM `plugin_zuchtschau_teilwertungen`
+                 WHERE ergebnis_id IN (' . $platzhalter . ')
+                 ORDER BY id ASC'
+            );
+            $twStmt->execute($ergebnisIds);
+            foreach ($twStmt->fetchAll(PDO::FETCH_ASSOC) as $tw) {
+                $teilwertungenByErgebnis[(int) $tw['ergebnis_id']][] = $tw;
+            }
         }
 
         $csrfToken = Router::generateCsrfToken();
@@ -300,6 +311,10 @@ class ErgebnisseController extends BaseController {
         $content .= '<h1>🏆 Zuchtschau-/Körungs-Ergebnisverwaltung</h1>';
 
         $content .= '<h2>Neues Ergebnis erfassen</h2>';
+        if ($horsesCapped) {
+            $content .= '<p style="color: var(--text-muted); font-size: 0.9rem;">Die Auswahl zeigt die ersten '
+                . self::HORSE_OPTION_LIMIT . ' Pferde alphabetisch.</p>';
+        }
         $content .= '<form method="POST" action="/plugin/zuchtschau-ergebnisse/ergebnisse/store">';
         $content .= '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">';
 
@@ -334,6 +349,10 @@ class ErgebnisseController extends BaseController {
         $content .= '</form>';
 
         $content .= '<h2>Erfasste Ergebnisse</h2>';
+        if ($resultsCapped) {
+            $content .= '<p style="color: var(--text-muted); font-size: 0.9rem;">Es werden die '
+                . self::RESULT_LIMIT . ' neuesten Ergebnisse angezeigt.</p>';
+        }
         $content .= '<table><thead><tr><th>Pferd</th><th>Veranstaltung</th><th>Datum</th><th>Note</th><th>Platzierung</th><th></th></tr></thead><tbody>';
         foreach ($results as $row) {
             $content .= '<tr>';

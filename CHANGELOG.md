@@ -8,6 +8,49 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+### Sicherheit
+
+- **gesundheitstests: Der Verwaltungs-Zweig des Dokument-Downloads prüft die
+  Sitzung jetzt wie das übrige Backend.** `isset($_SESSION['user_id'])` fragt
+  nur, ob irgendwann einmal jemand angemeldet war - eine Sitzung, deren Konto
+  gelöscht wurde, deren Passwort anderswo geändert wurde (Framework #113),
+  die von einem anderen User-Agent kommt oder die längst abgelaufen ist, flog
+  über `checkAuth()` überall hinaus, lieferte hier aber weiterhin
+  Gesundheitsdokumente aus. `checkAuth()` wird nur betreten, wenn der
+  öffentliche Opt-in-Pfad nicht greift - für einen anonymen Abruf eines
+  freigegebenen Dokuments wäre eine Umleitung auf `/login` die falsche
+  Antwort.
+- **galerie: Video-Links werden aus den geprüften Teilen neu gebaut**, statt
+  die Eingabe durchzureichen. Geprüft wird mit PHPs `parse_url()`, angezeigt
+  wird die Zeichenkette im `<iframe src>` des Browsers; solange die Eingabe
+  unverändert weitergereicht wird, hängt die Allowlist daran, dass beide
+  Parser jede Eingabe gleich lesen. Benutzerinfo und Fragment fallen beim
+  Neubau weg, Steuer- und attributbrechende Zeichen führen zur Ablehnung.
+  (Der ursprünglich vermutete Rückwärtsschrägstrich-Trick greift bei
+  `parse_url()` übrigens nicht - der Host wird korrekt als `evil.tld` erkannt
+  und abgelehnt. Die Härtung schließt die Fehlerklasse, nicht den Einzelfall.)
+
+### Behoben
+
+- **Sieben Addons setzten pro Anfrage eine überflüssige Datenbankabfrage ab.**
+  `register()` prüfte mit `SELECT 1 FROM <tabelle> LIMIT 1`, ob die eigene
+  Tabelle existiert, und holte sonst `install()` nach - ein Rückfall für Kerne
+  ohne den `install()`-Hook (Framework #75). Den gibt es nicht mehr: Die
+  `core_compatibility`-Untergrenze in `plugin.json` verlangt eine Kern-Version,
+  die ihn sicher hat. Geblieben war nur der Preis, bei allen sieben aktivierten
+  Addons sieben zusätzliche Roundtrips, bevor die erste Zeile der Seite steht.
+- **zuchtschau-ergebnisse: drei unbegrenzte Abfragen gedeckelt.** Die Übersicht
+  lud den kompletten Pferdebestand, alle Ergebnisse **und** alle
+  Teilwertungen - letztere, um höchstens ein paar Dutzend sichtbare Zeilen zu
+  beschriften. Jetzt: Pferdeauswahl auf 500, Ergebnisliste auf die 200
+  neuesten (mit sichtbarem Hinweis), Teilwertungen nur noch für die tatsächlich
+  angezeigten Ergebnis-IDs.
+- **genealogie-vergleich: die anonyme Route lud den gesamten veröffentlichten
+  Bestand** und rendert ihn zweimal, einmal je Auswahlfeld - auch dann, wenn
+  gar kein Vergleich angefordert war. Jetzt gedeckelt; bereits gewählte Pferde
+  werden gezielt nachgeladen, damit die Auswahl beim nächsten Seitenaufruf
+  nicht still leer wird.
+
 ### Hinzugefügt
 
 - **Neues Addon `embed-widget` (1.0.0):** erzeugt im Admin-Bereich den
