@@ -8,6 +8,29 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- **Funktionstest für `embed-widget`** (`tests/Functional/EmbedWidgetPluginTest.php`).
+  Er fehlte, weil das Addon `core_compatibility: ">=0.5.1"` verlangt und der
+  Kern `0.5.0` meldete - der PluginManager wies es fail-closed ab, es liess
+  sich auf keiner Instanz aktivieren und damit auch nicht testen. Mit
+  Framework 0.5.1 (dortiger PR #285) greift es. Der Test prüft genau das,
+  was die Versionsschranke zusichern soll: dass die Aktivierung gelingt.
+  Dazu die Zugriffsgrenzen (Anonyme und Redakteure ohne
+  `embed-widget.manage` kommen nicht an den Generator), dass der Schnipsel
+  **escaped** ausgegeben wird - er soll gelesen und kopiert, nicht ausgeführt
+  werden -, und dass ohne freigegebene Domain **keine** Live-Vorschau
+  gerendert wird, die im eigenen Tab funktioniert und beim Empfänger nicht.
+
+### Geändert
+
+- **`SECURITY.md`: Angabe zu unterstützten Versionen berichtigt.** Dort stand
+  weiterhin, das Repository veröffentliche keine Tags oder Releases - v0.4.0,
+  v0.4.1 und v0.5.0 existieren, und `docs/releasing.md` beschreibt den
+  Tag-Prozess. Für einen Melder ist das keine Kleinigkeit: Die Angabe
+  entscheidet, gegen welchen Stand er prüft und was er in seiner Meldung
+  angibt.
+
 ### Sicherheit
 
 - **datenmigration: Import kann keinen ausführbaren Code mehr in den Webroot
