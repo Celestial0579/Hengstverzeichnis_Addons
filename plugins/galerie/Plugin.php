@@ -360,6 +360,25 @@ class Plugin {
  */
 class VerwaltungController extends BaseController {
 
+    /**
+     * Seitennummer aus der Anfrage - validiert, nicht umgedeutet.
+     *
+     * filter_var mit FILTER_VALIDATE_INT lehnt ab, was keine Zahl IST; ein
+     * blosser (int)-Cast machte aus "abc" eine 0 und aus "3x" eine 3. Der
+     * Cast ist ausserdem fuer eine statische Analyse keine erkennbare
+     * Bereinigung - die Seitennummer floss deshalb als "Nutzerdaten" bis in
+     * den HTML-Aufbau und liess dort eine Injection-Regel anschlagen.
+     */
+    private static function seitenNummer(): int {
+        $wert = filter_var(
+            $_GET['seite'] ?? 1,
+            FILTER_VALIDATE_INT,
+            ['options' => ['default' => 1, 'min_range' => 1]]
+        );
+        return is_int($wert) ? $wert : 1;
+    }
+
+
     /** Treffer-Deckel der Datalist-Suche (#74). */
     private const SEARCH_LIMIT = 50;
 
@@ -379,7 +398,7 @@ class VerwaltungController extends BaseController {
         // Medientabelle per JOIN ohne LIMIT und renderte jede Zeile ins HTML.
         $totalMedia = (int) $db->query('SELECT COUNT(*) FROM `plugin_galerie_media`')->fetchColumn();
         $pageCount = max(1, (int) ceil($totalMedia / self::MEDIA_PER_PAGE));
-        $page = min($pageCount, max(1, (int) ($_GET['seite'] ?? 1)));
+        $page = min($pageCount, self::seitenNummer());
 
         $mediaStmt = $db->prepare(
             'SELECT m.*, h.name AS horse_name
@@ -506,17 +525,9 @@ class VerwaltungController extends BaseController {
             $content .= '</td>';
             $content .= '<td>' . htmlspecialchars((string) ($row['caption'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
             $content .= '<td>' . (int) $row['sort_order'] . '</td>';
-            // Falschbefund, geprueft: Das ist HTML, kein SQL - und $page
-            // ist keine Nutzereingabe mehr. Es entsteht aus
-            // min($pageCount, max(1, (int) $_GET['seite'])), also
-            // Ganzzahl-Cast plus Klemmung auf einen gueltigen
-            // Seitenbereich. Semgreps Taint-Analyse erkennt den
-            // (int)-Cast nicht als Bereinigung; derselbe Grund steht im
-            // Kern an PublicController.php.
-            // nosemgrep: php.lang.security.injection.tainted-sql-string.tainted-sql-string
             $content .= '<td><form method="POST" action="/plugin/galerie/verwaltung/delete" style="margin:0;" onsubmit="return confirm(\'Medium wirklich entfernen?\');">'
                 . '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">'
-                . '<input type="hidden" name="seite" value="' . $page . '">'
+                . '<input type="hidden" name="seite" value="' . (int) $page . '">'
                 . '<input type="hidden" name="id" value="' . (int) $row['id'] . '">'
                 . '<button type="submit" class="btn btn-secondary" style="color:var(--danger-fg);">Entfernen</button></form></td>';
             $content .= '</tr>';
@@ -533,7 +544,7 @@ class VerwaltungController extends BaseController {
             if ($page > 1) {
                 $content .= '<a class="btn btn-secondary" href="/plugin/galerie/verwaltung?seite=' . ($page - 1) . '">&laquo; Zurück</a> ';
             }
-            $content .= 'Seite ' . $page . ' von ' . $pageCount . ' (' . $totalMedia . ' Medien)';
+            $content .= 'Seite ' . (int) $page . ' von ' . (int) $pageCount . ' (' . (int) $totalMedia . ' Medien)';
             if ($page < $pageCount) {
                 $content .= ' <a class="btn btn-secondary" href="/plugin/galerie/verwaltung?seite=' . ($page + 1) . '">Weiter &raquo;</a>';
             }

@@ -285,21 +285,29 @@ class MerklisteController extends BaseController {
             exit;
         }
 
-        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        // Die Platzhalterliste hat eine FESTE Laenge, abgeleitet allein aus
+        // der Konstanten MAX_IDS - nicht aus der Anzahl der uebergebenen IDs.
+        //
+        // Vorher entstand sie aus count($ids), also aus einer Groesse, die an
+        // $_GET haengt. Der Abfragetext wurde damit zur Laufzeit aus einem
+        // Wert zusammengesetzt, dessen Herkunft die Eingabe ist. Dass dabei
+        // nur "?,?,?" herauskommen KANN, muss man wissen - man sieht es dem
+        // Code nicht an, und eine statische Analyse kann es nicht wissen.
+        //
+        // Mit fester Laenge ist der Abfragetext ueber alle Aufrufe hinweg
+        // identisch und enthaelt keinen abgeleiteten Wert mehr. Die Liste wird
+        // mit 0 aufgefuellt; IDs sind oben auf > 0 gefiltert, 0 trifft also
+        // keine Zeile. Der Index auf der Primaerschluesselspalte bleibt
+        // nutzbar, und die Zahl gebundener Parameter ist mit 100 konstant.
+        $platzhalter = rtrim(str_repeat('?,', self::MAX_IDS), ',');
+        $gebunden = array_pad($ids, self::MAX_IDS, 0);
+
         $stmt = Database::getInstance()->prepare(
-            // Falschbefund, geprueft: $placeholders enthaelt keine
-            // Nutzereingabe, sondern ausschliesslich die Zeichenkette "?,?,?"
-            // - erzeugt aus implode(',', array_fill(0, count($ids), '?')).
-            // Die IDs selbst werden gebunden. Ein Platzhalter-String laesst
-            // sich nicht binden (die ANZAHL der Parameter ist Teil der
-            // Abfragestruktur), deshalb steht er interpoliert da; Semgrep
-            // sieht nur "Variable im Query-String".
-            // nosemgrep: php.lang.security.injection.tainted-sql-string.tainted-sql-string
             "SELECT id, name, birth_year, image_url
              FROM horses
-             WHERE id IN ({$placeholders}) AND deleted_at IS NULL AND is_published = 1"
+             WHERE id IN ({$platzhalter}) AND deleted_at IS NULL AND is_published = 1"
         );
-        $stmt->execute($ids);
+        $stmt->execute($gebunden);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         // In der vom Besucher gemerkten Reihenfolge ausgeben.
