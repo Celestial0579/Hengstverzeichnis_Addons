@@ -26,6 +26,9 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
     auf die Verwaltungsseite.
   - Die Verwaltungsseite bleibt als bestandsweite Übersicht bestehen, und auf
     einem Kern ohne den Hook passiert schlicht nichts.
+- `composer.lock` hebt `hengstverzeichnis/framework` von `e1f760b` auf
+  `7f54071` (Stand Kern-`main`). Damit laufen Suite und CI wieder gegen den
+  Kern, gegen den die Addons tatsächlich betrieben werden.
 
 ### Behoben
 
@@ -44,11 +47,23 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   - *Katalog-Export:* Volltext- und UELN-Suche fanden ein Pferd nicht, das
     der Katalog über dieselbe Nummer findet.
 
-### Geändert
+### Titel & Prämierungen (1.1.0)
 
-- `composer.lock` hebt `hengstverzeichnis/framework` von `e1f760b` auf
-  `7f54071` (Stand Kern-`main`). Damit laufen Suite und CI wieder gegen den
-  Kern, gegen den die Addons tatsächlich betrieben werden.
+- Erfassung direkt im Bearbeitungsformular des Hengstes (#87, nutzt den neuen
+  Kern-Hook `horse.edit_sections` aus Framework#255). Im Pferdekontext ist die
+  `horse_id` durch die Seite gegeben — die Auswahl über den gesamten Bestand
+  entfällt dort ersatzlos, geladen wird nur noch, was zu diesem einen Pferd
+  gehört.
+- Die bestandsweite Verwaltungsseite **bleibt** und lädt nicht mehr den
+  gesamten Bestand: Die Pferdeauswahl läuft über ein Textfeld mit
+  `<datalist>` und AJAX-Suche (höchstens 50 Treffer, Muster aus der Galerie),
+  die Liste der Einträge paginiert. Das war der zweite, im Issue nicht
+  genannte Vollscan — ohne ihn wäre #87 nur halb behoben.
+  Die Seite ganz zu streichen kam nicht in Frage: Auf einem Kern ohne den Hook
+  gäbe es sonst überhaupt keinen Weg mehr, eine Auszeichnung zu erfassen.
+- Ohne JavaScript löst `store()` den getippten Text serverseitig zu einer
+  Pferde-ID auf; der Rückweg nach Speichern/Löschen wird aus einem Schalter und
+  einer geprüften Integer gebaut, nie aus einer übergebenen Adresse.
 
 ## [0.5.0] – 2026-08-11
 
