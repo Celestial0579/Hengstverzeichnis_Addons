@@ -43,22 +43,24 @@ class ReleaseConsistencyTest extends TestCase {
         // Addons auf Linie 0.5) - eine Zahl, die niemand nachzieht, ist eine
         // falsche Aussage im Test.
         //
-        // Geprueft wird gegen v0.5.1 und nicht gegen v0.5.0: Seit dem
-        // Embed-Widget (#89) enthaelt der Bestand ein Addon, das Kern-Code
-        // aus #260 braucht und deshalb ehrlich `>=0.5.1` deklariert. Der
-        // frueheste Tag, unter dem sich der Gesamtstand ausliefern laesst,
-        // ist damit v0.5.1 - und genau das soll das Gate durchsetzen.
-        [$exitCode, $output] = $this->runScript('v0.5.1');
+        // Geprueft wird gegen v0.7.0: `kontaktanfrage` und `zucht-suche`
+        // setzen auf Hook-Punkten und Datenfeldern des Kerns 0.7.0 auf
+        // (person./station.detail_sections, person./station.edit_sections,
+        // persons.is_breeder, contact_public) und deklarieren deshalb
+        // ehrlich `>=0.7.0`. Der frueheste Tag, unter dem sich der
+        // Gesamtstand ausliefern laesst, ist damit v0.7.0 - und genau das
+        // soll das Gate durchsetzen.
+        [$exitCode, $output] = $this->runScript('v0.7.0');
         $this->assertSame(0, $exitCode, $output);
-        $this->assertStringContainsString('0.5', $output);
+        $this->assertStringContainsString('0.7', $output);
 
-        [$exitCode] = $this->runScript('refs/tags/v0.5.1');
+        [$exitCode] = $this->runScript('refs/tags/v0.7.0');
         $this->assertSame(0, $exitCode);
 
-        // Gegenprobe: Als v0.5.0 darf derselbe Bestand NICHT durchgehen.
-        [$exitCode, $output] = $this->runScript('v0.5.0');
-        $this->assertNotSame(0, $exitCode, 'embed-widget verlangt >=0.5.1 - v0.5.0 muss abgelehnt werden.');
-        $this->assertStringContainsString('embed-widget', $output);
+        // Gegenprobe: Als v0.6.9 darf derselbe Bestand NICHT durchgehen.
+        [$exitCode, $output] = $this->runScript('v0.6.9');
+        $this->assertNotSame(0, $exitCode, 'kontaktanfrage verlangt >=0.7.0 - Linie 0.6 muss abgelehnt werden.');
+        $this->assertStringContainsString('kontaktanfrage', $output);
     }
 
     public function testFailsWhenTargetLineIsOutsideTheBounds(): void {
@@ -67,8 +69,8 @@ class ReleaseConsistencyTest extends TestCase {
         $this->assertNotSame(0, $exitCode);
         $this->assertStringContainsString('core_compatibility', $output);
 
-        // Linie 0.6 reißt die Obergrenze core_supported_max 0.5.
-        [$exitCode, $output] = $this->runScript('v0.6.0');
+        // Linie 0.8 reißt die Obergrenze core_supported_max 0.7.
+        [$exitCode, $output] = $this->runScript('v0.8.0');
         $this->assertNotSame(0, $exitCode);
         $this->assertStringContainsString('core_supported_max', $output);
     }

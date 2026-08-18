@@ -1,9 +1,9 @@
 {
     "slug": "galerie",
     "name": "Foto-/Video-Galerie",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "core_compatibility": ">=0.4.0",
-    "core_supported_max": "0.5",
+    "core_supported_max": "0.7",
     "description": "Ergänzt das einzelne image_url-Feld um eine Medien-Galerie pro Pferd: mehrere hochgeladene Fotos sowie extern eingebundene Videos (YouTube/Vimeo-Link), sortierbar, mit Grid und schlanker Lightbox auf der öffentlichen Detailseite.",
     "author": "Hengstverzeichnis_Addons",
     "hooks": [
