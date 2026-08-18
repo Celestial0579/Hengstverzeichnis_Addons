@@ -191,7 +191,9 @@ class DeckanfragePluginTest extends FunctionalTestCase {
     }
 
     private function findBreedingStationIdByName(\Tests\Support\HttpClient $admin, string $name): int {
-        $page = $admin->get('/admin/breeding-stations');
+        // Ueber den Namensparameter, damit der Treffer auch dann auf Seite 1
+        // steht, wenn die Liste blaettert (Kern 0.7.0, 50 Zeilen je Seite).
+        $page = $admin->get('/admin/breeding-stations?search=' . urlencode($name));
         preg_match_all('/<tr[^>]*>((?:(?!<\/tr>).)*?)<\/tr>/s', $page->body, $rowMatches);
         foreach ($rowMatches[1] as $rowHtml) {
             if (!str_contains($rowHtml, '<strong>' . $name . '</strong>')) {

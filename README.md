@@ -73,6 +73,14 @@ Danach unter **Admin → Plugins verwalten** (`/admin/plugins`) aktivieren.
 - [`anpaarungs-empfehlung`](plugins/anpaarungs-empfehlung/README.md) - rankt
   für ein ausgewähltes Pferd alle möglichen Partner nach dem voraussichtlichen
   Inzuchtkoeffizienten eines Fohlens (geringste Inzucht zuerst).
+- [`kontaktanfrage`](plugins/kontaktanfrage/README.md) - Kontaktformular auf
+  Personen- und Deckstationsseiten mit E-Mail, Name und fester Gründe-Auswahl,
+  ohne dass die Adresse des Empfängers öffentlich wird. Anfragen gehen an eine
+  Team-Adresse, werden gespeichert und lassen sich im Backend weiterleiten;
+  je Datensatz abschaltbar.
+- [`zucht-suche`](plugins/zucht-suche/README.md) - Öffentliche Einstiegsseite
+  „Zucht": Züchter und Deckstationen suchen und filtern, statt sie nur über ein
+  Pferd zu finden.
 
 ## Automatisierte Tests
 

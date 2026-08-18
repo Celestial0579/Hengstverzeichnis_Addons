@@ -51,7 +51,15 @@ trait HorseListHelper {
     }
 
     private function findHorseIdByName(HttpClient $admin, string $name): int {
-        $page = $admin->get('/admin/horses');
+        // Gesucht wird ueber den Namensparameter der Liste, nicht ueber die
+        // ungefilterte erste Seite: Seit Kern 0.7.0 blaettert /admin/horses
+        // (50 Zeilen je Seite). In der geteilten Testdatenbank sammeln sich
+        // ueber die Suite hinweg mehr als 50 Pferde an - das zuletzt
+        // angelegte stand dann nicht mehr auf Seite 1, und der Helfer fand
+        // es nicht mehr. Der Parameter wirkt auch gegen aeltere Kern-Staende:
+        // dort wird er schlicht ignoriert, und die Liste ist ohnehin
+        // vollstaendig.
+        $page = $admin->get('/admin/horses?search=' . urlencode($name));
 
         preg_match_all('/<tr[^>]*>((?:(?!<\/tr>).)*?)<\/tr>/s', $page->body, $rowMatches);
         foreach ($rowMatches[1] as $rowHtml) {

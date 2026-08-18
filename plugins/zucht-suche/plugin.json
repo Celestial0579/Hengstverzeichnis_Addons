@@ -1,0 +1,17 @@
+{
+    "slug": "zucht-suche",
+    "name": "Zucht-Suche",
+    "version": "1.0.0",
+    "core_compatibility": ">=0.7.0",
+    "core_supported_max": "0.7",
+    "description": "Öffentliche Einstiegsseite 'Zucht': Züchter (persons.is_breeder) und Deckstationen nach Name, Ort, Bundesland/Kanton, Land und Mitgliedsstatus suchen, mit Zahl der zugeordneten veröffentlichten Pferde und Verlinkung auf /person bzw. /station.",
+    "author": "Hengstverzeichnis_Addons",
+    "hooks": [
+        "layout.nav_items",
+        "admin.dashboard_tiles",
+        "horse.detail_sections",
+        "person.detail_sections",
+        "station.detail_sections"
+    ],
+    "entry": "Plugin.php"
+}

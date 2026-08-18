@@ -6,6 +6,86 @@ sich an [Keep a Changelog](https://keepachangelog.com/de/1.1.0/); die
 Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 (siehe [docs/releasing.md](docs/releasing.md)).
 
+## [0.7.0] – 2026-08-18
+
+Diese Linie überspringt 0.6: Der Kern hat mit v0.6.0 und v0.7.0 zwei Releases
+kurz hintereinander bekommen, und `core_supported_max: "0.7"` deckt beide ab.
+Ein eigenes 0.6-Addon-Release hätte denselben Bestand ein zweites Mal
+ausgeliefert.
+
+### Hinzugefügt
+
+- **`zucht-suche` (neu, 1.0.0)** — die öffentliche Einstiegsseite „Zucht".
+  Züchter und Deckstationen lassen sich damit nach Name, Ort,
+  Bundesland/Kanton, Land und Mitgliedsstatus suchen, statt sie nur über ein
+  einzelnes Pferd zu finden. Zwei Reiter, 50 Treffer je Seite, je Eintrag die
+  Zahl der zugeordneten veröffentlichten Pferde.
+
+  Grundlage ist `persons.is_breeder` aus dem Kern 0.7.0 — ein redaktionell
+  gepflegtes Kennzeichen, ausdrücklich **nicht** aus `horse_persons.role`
+  abgeleitet: Wer früher gezüchtet hat, ist heute vielleicht keiner mehr, und
+  umgekehrt.
+
+  Der Menüpunkt „🧬 Zucht" steht neben dem Verzeichnis, über den Filter
+  `layout.nav_items` des Kerns. Er entfällt, wenn Gäste weder Personen noch
+  Deckstationen sehen dürfen — er führte sonst in eine 404, und die Seite
+  selbst antwortet in dem Fall fail-closed mit 404 statt mit einer leeren
+  Liste.
+
+  **Die Suche gibt keine Kontaktdaten aus.** Sie wählt die Spalten gar nicht
+  erst aus. Sie ist ein Einstieg, kein zweiter Weg an `contact_public` vorbei.
+
+- **`kontaktanfrage` (neu, 1.0.0)** — ein Kontaktformular auf Personen- und
+  Deckstationsseiten, **ohne** dass die Adresse des Empfängers öffentlich
+  wird. Abgefragt werden nur E-Mail, Name und ein Grund aus einer festen
+  Auswahl; ein Freitextfeld gibt es bewusst nicht.
+
+  Die Anfrage geht an eine Team-Adresse, nie direkt an die Person. Sie wird
+  gespeichert und lässt sich im Backend weiterleiten. Ein Opt-out je Datensatz
+  sitzt über `person.edit_sections` / `station.edit_sections` im
+  Bearbeitungsformular und liegt in einer **eigenen** Tabelle des Addons — der
+  Kern bekommt dafür keine Spalte.
+
+  Das Opt-out gilt auch rückwirkend: Eine schon gespeicherte Anfrage lässt
+  sich danach nicht mehr weiterleiten. Wer erklärt hat, keine Anfragen zu
+  wollen, ist nicht durch das Datum seiner Erklärung übergangen.
+
+  Härtung: CSRF, Honeypot, zwei Zähler gegen Missbrauch (5/Stunde je Anschluss
+  gegen den einzelnen Absender, 10/Tag je Empfänger gegen wechselnde
+  Anschlüsse), `FILTER_VALIDATE_EMAIL` samt Ablehnung von CR/LF, Gründe gegen
+  eine serverseitige Weißliste, Audit-Log. Fehlender Datensatz, Opt-out oder
+  fehlende Team-Adresse melden dem Besucher „Erfolg" — der Rückgabewert darf
+  kein Orakel dafür sein, welche IDs es gibt und wer Anfragen abgeschaltet hat.
+
+### Geändert
+
+- **Alle 18 bestehenden Addons auf `core_supported_max: "0.7"`.** Mit dem
+  Kern-Release 0.6.0 galten sie als nicht unterstützt und wären nach einem
+  Update kommentarlos deaktiviert worden — die angekündigte Wirkung der
+  Obergrenze, aber eben eine, die jemand nachziehen muss.
+
+- **Das Release-Gate steht auf Linie 0.7** (`ReleaseConsistencyTest`). Es hing
+  noch an v0.5.1. Die Gegenproben sind mitgezogen: Linie 0.6 muss jetzt
+  scheitern (`kontaktanfrage` und `zucht-suche` verlangen `>=0.7.0`), Linie
+  0.8 ebenfalls (`core_supported_max` 0.7).
+
+### Tests
+
+- **Lifecycle-Tests für beide neuen Addons**, nach dem Muster der 18
+  bestehenden — gegen eine echte, per `php -S` gestartete Kern-Instanz. Neu
+  ist der Helfer `PersonStationHelper`, der Personen und Deckstationen über
+  die echten Admin-Endpunkte anlegt; bisher gab es das nur für Pferde.
+
+  `zucht-suche` prüft dabei die Grenze doppelt: dass das Kennzeichen
+  `is_breeder` filtert, dass unveröffentlichte Datensätze draußen bleiben,
+  dass keine Kontaktdaten in der Ausgabe stehen, und dass Menüpunkt wie Seite
+  ohne Sichtrechte verschwinden.
+
+  `kontaktanfrage` prüft unter anderem den Fall, der in dieser Umgebung
+  eintritt: Ohne SMTP schlägt der Versand fehl — die Anfrage muss trotzdem
+  gespeichert und im Backend als unzugestellt erkennbar sein, und der Besucher
+  bekommt ehrlich „Fehler" statt eines falschen Erfolgsversprechens.
+
 ## [0.5.2] – 2026-08-16
 
 ### Sicherheit
