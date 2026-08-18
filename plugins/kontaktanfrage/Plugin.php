@@ -422,11 +422,23 @@ final class Ziel {
             return null;
         }
 
-        $tabelle = $typ === self::PERSON ? 'persons' : 'breeding_stations';
-        $sql = "SELECT id, name, email FROM `{$tabelle}` WHERE id = ? AND deleted_at IS NULL";
-        if ($nurVeroeffentlicht) {
-            $sql .= ' AND is_published = 1';
-        }
+        // Zwei vollstaendige Abfragen als Literale, statt den Tabellennamen in
+        // eine Zeichenkette einzusetzen. Der Wert kaeme zwar aus einem
+        // Zweierlei ueber zwei feste Namen, waere also nie ein Fremdwert - aber
+        // eine zusammengesetzte Abfrage sieht man das nicht an, und der
+        // statische Plugin-Check des Repos liest die Bezeichnerklammern
+        // ausserdem als Shell-Backticks. Ausgeschriebene Literale sind hier
+        // nicht laenger und lassen keine Frage offen.
+        $sql = match (true) {
+            $typ === self::PERSON && $nurVeroeffentlicht
+                => 'SELECT id, name, email FROM persons WHERE id = ? AND deleted_at IS NULL AND is_published = 1',
+            $typ === self::PERSON
+                => 'SELECT id, name, email FROM persons WHERE id = ? AND deleted_at IS NULL',
+            $nurVeroeffentlicht
+                => 'SELECT id, name, email FROM breeding_stations WHERE id = ? AND deleted_at IS NULL AND is_published = 1',
+            default
+                => 'SELECT id, name, email FROM breeding_stations WHERE id = ? AND deleted_at IS NULL',
+        };
 
         $stmt = Database::getInstance()->prepare($sql);
         $stmt->execute([$id]);
@@ -732,7 +744,7 @@ final class Aufraeumen {
         // erhalten (die Zeile existiert weiter, deleted_at ist gesetzt) -
         // eine Wiederherstellung soll das Opt-out nicht verlieren.
         $db->exec(
-            "DELETE o FROM `plugin_kontaktanfrage_optout` o
+            "DELETE o FROM plugin_kontaktanfrage_optout o
              LEFT JOIN persons p ON o.target_type = 'person' AND p.id = o.target_id
              LEFT JOIN breeding_stations s ON o.target_type = 'station' AND s.id = o.target_id
              WHERE p.id IS NULL AND s.id IS NULL"
