@@ -1,0 +1,67 @@
+name: 🐛 Bug Report
+description: Einen Fehler in einem Addon melden
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Danke für die Meldung! Sicherheitslücken bitte **nicht** hier, sondern vertraulich über
+        [Security Advisories](../../security/advisories/new) (siehe [SECURITY.md](../../SECURITY.md)).
+  - type: input
+    id: addon
+    attributes:
+      label: Betroffenes Addon
+      description: Der Slug aus plugin.json, z. B. `galerie`.
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Was ist passiert?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Schritte zur Reproduktion
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Erwartetes Verhalten
+    validations:
+      required: false
+  - type: input
+    id: addon_version
+    attributes:
+      label: Addon-Fassung
+      description: '`version` aus plugin.json oder der Commit-Hash.'
+    validations:
+      required: true
+  - type: input
+    id: core_version
+    attributes:
+      label: Kern-Version
+      description: Version des Hengstverzeichnis_Framework, gegen die das Addon läuft (z. B. v0.7.1).
+    validations:
+      required: true
+  - type: textarea
+    id: permissions
+    attributes:
+      label: Berechtigungen der betroffenen Gruppe
+      description: Viele Addon-Fehler sind Rechtefragen — welche Module/Aktionen hat die Gruppe, mit der du geprüft hast?
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevante Logs/Screenshots
+      description: Bitte keine echten personenbezogenen Daten oder Zugangsdaten einfügen.
+      render: shell
+    validations:
+      required: false
