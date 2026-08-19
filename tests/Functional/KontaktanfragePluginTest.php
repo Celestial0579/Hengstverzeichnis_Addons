@@ -197,6 +197,159 @@ class KontaktanfragePluginTest extends FunctionalTestCase {
      *
      * @param array<string, string> $felder
      */
+    /**
+     * #109: Die vierte Huerde des anonymen Endpunkts - das Rate-Limit.
+     *
+     * CSRF, Honeypot und Gruende-Weissliste waren getestet, die Mengensperre
+     * nicht: weder das IP-Limit (5/Stunde) noch das Empfaenger-Limit
+     * (10/Tag), noch der daraus folgende Status `zuviele`, noch die Buchung
+     * ueber recordAttempt(). Vertauschte Argumente oder ein doppelt
+     * verwendeter Typ-String in RateLimiter::tooManyAttempts() haetten die
+     * Sperre aufgehoben, ohne dass irgendein Test rot wird - ein Bot koennte
+     * dann eine einzelne Person unbegrenzt zumuellen, jede Anfrage mit einer
+     * DB-Zeile und einer Mail ans Team.
+     *
+     * Beide Zaehler werden einzeln belegt. Nur einer von beiden waere leicht
+     * zu umgehen: Der IP-Zaehler bremst den einzelnen Absender, der
+     * Empfaenger-Zaehler die Belaestigung ueber wechselnde Anschluesse.
+     */
+    public function testRateLimitGreiftJeIpUndJeEmpfaenger(): void {
+        $admin = $this->authenticatedClient();
+        $unique = uniqid();
+
+        $admin->post('/admin/plugins/toggle', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'slug' => self::SLUG,
+            'enable' => '1',
+        ]);
+
+        $personId = $this->createPerson($admin, "KALimit-{$unique}", [
+            'email' => "limit-person-{$unique}@example.test",
+        ]);
+
+        $verwaltung = $admin->get(self::VERWALTUNG);
+        $this->assertSame(200, $verwaltung->statusCode);
+        $this->assertSame(
+            self::VERWALTUNG . '?ka=gespeichert',
+            $admin->post('/plugin/kontaktanfrage/verwaltung/einstellungen', [
+                'csrf_token' => $verwaltung->formField('csrf_token') ?? '',
+                'team_email' => "team-limit-{$unique}@example.test",
+                'zusatz_gruende' => '',
+                'aufbewahrung_tage' => '180',
+            ])->location()
+        );
+
+        $besucher = $this->newClient();
+        $zuvieleZiel = "/person?id={$personId}&kontaktanfrage=zuviele";
+
+        // Die Zaehler liegen in login_attempts und ueberdauern den einzelnen
+        // Testfall - der Lebenszyklus-Test darueber hat schon Anfragen
+        // abgesetzt. Ohne dieses Zuruecksetzen liefe die Schwelle hier bei
+        // einem beliebigen Zwischenstand los.
+        $this->leereRateLimitZaehler('kontaktanfrage-ip');
+        $this->leereRateLimitZaehler('kontaktanfrage-ziel');
+
+        // (a) Ein ausgefuellter Honeypot wird VOR der Buchung verworfen und
+        //     darf den Zaehler deshalb nicht belasten. Ein zu scharfes Limit
+        //     wiese sonst echte Besucher nach wenigen Aufrufen ab.
+        $this->sendeAnfrage($besucher, $personId, [
+            'grund' => 'kaufinteresse',
+            'name' => "Bot-{$unique}",
+            'email' => "bot-{$unique}@example.test",
+            'webseite' => 'https://spam.example',
+        ]);
+        $this->assertSame(
+            0,
+            $this->rateLimitStand('kontaktanfrage-ip'),
+            'Ein Honeypot-Treffer darf nicht als Versuch gezaehlt werden'
+        );
+
+        // (b) IP-Limit: Die ersten fuenf gehen durch, die sechste nicht.
+        for ($i = 1; $i <= 5; $i++) {
+            $antwort = $this->sendeAnfrage($besucher, $personId, [
+                'grund' => 'kaufinteresse',
+                'name' => "Absender-{$i}-{$unique}",
+                'email' => "absender-{$i}-{$unique}@example.test",
+            ]);
+            $this->assertNotSame(
+                $zuvieleZiel,
+                $antwort->location(),
+                "Anfrage {$i} von 5 darf noch nicht am Limit scheitern"
+            );
+        }
+
+        $vorher = $this->anzahlAnfragen();
+        $sechste = $this->sendeAnfrage($besucher, $personId, [
+            'grund' => 'kaufinteresse',
+            'name' => "Absender-6-{$unique}",
+            'email' => "absender-6-{$unique}@example.test",
+        ]);
+        $this->assertSame($zuvieleZiel, $sechste->location(), 'Die sechste Anfrage derselben IP muss abgewiesen werden');
+        $this->assertSame(
+            $vorher,
+            $this->anzahlAnfragen(),
+            'Eine abgewiesene Anfrage darf nicht gespeichert werden'
+        );
+
+        // (c) Empfaenger-Limit: unabhaengig von der IP. Der IP-Zaehler wird
+        //     zwischendurch geleert - das ist genau der Angreifer, der ueber
+        //     wechselnde Anschluesse kommt, nur ohne dass der Test dafuer
+        //     einen zweiten Anschluss braeuchte.
+        $this->leereRateLimitZaehler('kontaktanfrage-ip');
+        for ($i = 6; $i <= 10; $i++) {
+            $antwort = $this->sendeAnfrage($besucher, $personId, [
+                'grund' => 'kaufinteresse',
+                'name' => "Absender-{$i}-{$unique}",
+                'email' => "absender-{$i}-{$unique}@example.test",
+            ]);
+            $this->assertNotSame(
+                $zuvieleZiel,
+                $antwort->location(),
+                "Anfrage {$i} an dasselbe Ziel darf noch nicht am Limit scheitern"
+            );
+            $this->leereRateLimitZaehler('kontaktanfrage-ip');
+        }
+
+        $elfte = $this->sendeAnfrage($besucher, $personId, [
+            'grund' => 'kaufinteresse',
+            'name' => "Absender-11-{$unique}",
+            'email' => "absender-11-{$unique}@example.test",
+        ]);
+        $this->assertSame(
+            $zuvieleZiel,
+            $elfte->location(),
+            'Bei frischem IP-Zaehler muss das Empfaenger-Limit greifen - sonst zaehlen beide Sperren dasselbe'
+        );
+
+        // (d) Die Abweisung steht im Protokoll.
+        $stmt = \App\Database::getInstance()->prepare(
+            "SELECT COUNT(*) FROM audit_logs WHERE action = ? AND created_at >= (NOW() - INTERVAL 10 MINUTE)"
+        );
+        $stmt->execute(['Kontaktanfrage abgewiesen (Rate-Limit)']);
+        $this->assertGreaterThan(0, (int)$stmt->fetchColumn(), 'Die Abweisung gehoert ins Audit-Log');
+
+        $this->leereRateLimitZaehler('kontaktanfrage-ip');
+        $this->leereRateLimitZaehler('kontaktanfrage-ziel');
+    }
+
+    private function leereRateLimitZaehler(string $typ): void {
+        \App\Database::getInstance()
+            ->prepare('DELETE FROM login_attempts WHERE type = ?')
+            ->execute([$typ]);
+    }
+
+    private function rateLimitStand(string $typ): int {
+        $stmt = \App\Database::getInstance()->prepare('SELECT COUNT(*) FROM login_attempts WHERE type = ?');
+        $stmt->execute([$typ]);
+        return (int)$stmt->fetchColumn();
+    }
+
+    private function anzahlAnfragen(): int {
+        return (int)\App\Database::getInstance()
+            ->query('SELECT COUNT(*) FROM `plugin_kontaktanfrage_requests`')
+            ->fetchColumn();
+    }
+
     private function sendeAnfrage(HttpClient $client, int $personId, array $felder): \Tests\Support\HttpResponse {
         $seite = $client->get("/person?id={$personId}");
         return $client->post('/plugin/kontaktanfrage/senden', array_merge([

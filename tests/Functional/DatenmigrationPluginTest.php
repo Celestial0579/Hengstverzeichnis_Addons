@@ -159,6 +159,89 @@ class DatenmigrationPluginTest extends FunctionalTestCase {
         }
     }
 
+    /**
+     * #108: Die Berechtigung datenmigration.export/.import genuegt NICHT -
+     * es braucht zusaetzlich Administratorrechte (#97).
+     *
+     * Diese Zusatzhuerde war von keinem Test beruehrt. Faellt sie bei einem
+     * Refactoring weg, laedt ein Redakteur mit der harmlos aussehenden
+     * Berechtigung `datenmigration.export` den vollstaendigen Datenbankdump
+     * herunter - einschliesslich users (Passwort-Hashes, TOTP-Secrets) und
+     * api_keys - und macht sich ueber /import/anwenden mit einem selbstgebauten
+     * Archiv zum Administrator.
+     *
+     * Der Aufbau ist bewusst der unguenstigste: Der Editor bekommt die
+     * Modulrechte AUSDRUECKLICH zugewiesen. Ohne sie schiede er schon an
+     * requirePermission() aus, und der Test bewiese nur, dass die
+     * Rechtepruefung greift - nicht, dass die Adminpflicht dahinter existiert.
+     */
+    public function testExportUndImportVerlangenAdminZusaetzlichZumModulrecht(): void {
+        $admin = $this->authenticatedClient();
+        $unique = uniqid();
+
+        $toggle = $admin->post('/admin/plugins/toggle', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'slug' => self::SLUG,
+            'enable' => '1',
+        ]);
+        $this->assertSame('/admin/plugins?success=1', $toggle->location());
+
+        $editorGroupId = $this->findBuiltinGroupId($admin, 'Editor');
+        $editor = $this->createAndLoginEditor(
+            $admin,
+            "dmtester{$unique}",
+            "datenmigration-test-{$unique}@example.com",
+            [$editorGroupId]
+        );
+        $this->setGroupPermissions($admin, $editorGroupId, self::EDITOR_DEFAULT_PERMISSIONS + [
+            'datenmigration' => ['export', 'import'],
+        ]);
+
+        try {
+            $csrf = $this->currentCsrfToken($editor);
+
+            $export = $editor->get('/plugin/datenmigration/export');
+            $this->assertSame(403, $export->statusCode, 'Export ohne Adminrechte muss abgewiesen werden');
+            $this->assertStringNotContainsString(
+                'password_hash',
+                $export->body,
+                'Die Ablehnung darf keine Spur des Dumps enthalten'
+            );
+
+            $pruefen = $editor->get('/plugin/datenmigration/import/pruefen');
+            $this->assertSame(403, $pruefen->statusCode, 'Import-Vorschau ohne Adminrechte muss abgewiesen werden');
+
+            $hochladen = $editor->post('/plugin/datenmigration/import/hochladen', ['csrf_token' => $csrf]);
+            $this->assertSame(403, $hochladen->statusCode, 'Hochladen ohne Adminrechte muss abgewiesen werden');
+
+            $anwenden = $editor->post('/plugin/datenmigration/import/anwenden', ['csrf_token' => $csrf]);
+            $this->assertSame(403, $anwenden->statusCode, 'Anwenden ohne Adminrechte muss abgewiesen werden');
+
+            // Die Ablehnung wird protokolliert - ohne Eintrag bliebe ein
+            // Versuch, an den gesamten Datenbestand zu kommen, spurlos.
+            $stmt = Database::getInstance()->prepare(
+                "SELECT COUNT(*) FROM audit_logs WHERE action LIKE ? AND created_at >= (NOW() - INTERVAL 10 MINUTE)"
+            );
+            $stmt->execute(['Datenmigration abgelehnt%']);
+            $this->assertGreaterThan(
+                0,
+                (int)$stmt->fetchColumn(),
+                'Der abgewiesene Zugriff muss im Audit-Log stehen'
+            );
+
+            // Gegenprobe: Als Administrator geht derselbe Weg weiterhin - sonst
+            // belegte der Test nur, dass die Route kaputt ist.
+            $this->assertSame(
+                200,
+                $admin->get('/plugin/datenmigration/import/pruefen')->statusCode,
+                'Der Adminweg muss unveraendert offen sein'
+            );
+        } finally {
+            // Die Editor-Gruppe ist geteilter Zustand der Suite.
+            $this->setGroupPermissions($admin, $editorGroupId, self::EDITOR_DEFAULT_PERMISSIONS);
+        }
+    }
+
     public function testImportVerweigertFremdeKernVersion(): void {
         $admin = $this->authenticatedClient();
         $admin->post('/admin/plugins/toggle', [
