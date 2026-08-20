@@ -13,12 +13,12 @@
             "source": {
                 "type": "git",
                 "url": "https://github.com/Celestial0579/Hengstverzeichnis_Framework.git",
-                "reference": "de68c075c71e62804fc7870b2b4ed5a003a91401"
+                "reference": "f5ff8f80b4f0623d63a9bcc0dfccba4ee47d9800"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/Celestial0579/Hengstverzeichnis_Framework/zipball/de68c075c71e62804fc7870b2b4ed5a003a91401",
-                "reference": "de68c075c71e62804fc7870b2b4ed5a003a91401",
+                "url": "https://api.github.com/repos/Celestial0579/Hengstverzeichnis_Framework/zipball/f5ff8f80b4f0623d63a9bcc0dfccba4ee47d9800",
+                "reference": "f5ff8f80b4f0623d63a9bcc0dfccba4ee47d9800",
                 "shasum": ""
             },
             "require": {
@@ -49,10 +49,10 @@
             ],
             "description": "Dev-only Composer-Manifest für die PHPUnit-Testsuite. Die Anwendung selbst läuft weiterhin ohne Composer/vendor (siehe docs/development.md) - dies wird ausschließlich für 'composer test' in lokaler Entwicklung und CI benötigt.",
             "support": {
-                "source": "https://github.com/Celestial0579/Hengstverzeichnis_Framework/tree/v0.8.0-beta.1",
+                "source": "https://github.com/Celestial0579/Hengstverzeichnis_Framework/tree/main",
                 "issues": "https://github.com/Celestial0579/Hengstverzeichnis_Framework/issues"
             },
-            "time": "2026-08-20T19:54:21+00:00"
+            "time": "2026-08-20T22:52:29+00:00"
         },
         {
             "name": "myclabs/deep-copy",
