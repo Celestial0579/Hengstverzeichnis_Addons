@@ -1,0 +1,27 @@
+{
+    "slug": "captcha-altcha",
+    "name": "Spam-Schutz: ALTCHA (selbst gehostet)",
+    "version": "1.0.0",
+    "core_compatibility": ">=0.8.0-beta.1",
+    "core_supported_max": "0.8",
+    "description": "Rechennachweis im Browser (Proof of Work) nach dem ALTCHA-Verfahren - vollständig auf diesem Server, ohne Drittanbieter, ohne Schlüssel, ohne Übermittlung von IP-Adressen und ohne Lockerung der Content-Security-Policy. Die datenschutzfreundlichste der drei Anbieter-Erweiterungen und die einzige, die auch für das DSGVO-Portal in Frage kommt.",
+    "author": "Hengstverzeichnis_Addons",
+    "hooks": [
+        "captcha.providers",
+        "captcha.render",
+        "captcha.verify",
+        "admin.dashboard_tiles"
+    ],
+    "permissions": [
+        "captcha-altcha.manage"
+    ],
+    "owns": {
+        "tables": [],
+        "directories": [],
+        "settings": [
+            "plugin_captcha_altcha_aufwand",
+            "plugin_captcha_altcha_fallback"
+        ]
+    },
+    "entry": "Plugin.php"
+}

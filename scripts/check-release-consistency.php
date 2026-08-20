@@ -27,8 +27,27 @@ function fail(string $message): never {
 
 $tagArg = $argv[1] ?? '';
 $tag = preg_replace('~^refs/tags/~', '', trim($tagArg));
-if (!preg_match('/^v?(\d+)\.(\d+)\.(\d+)$/', (string)$tag, $m)) {
-    fail("Tag '{$tagArg}' hat nicht die Form vX.Y.z (Versionierung folgt dem Framework, siehe docs/releasing.md).");
+
+// Vorabversionen sind zugelassen (v0.8.0-beta.1).
+//
+// Bis v0.8 verlangte dieses Gate genau vX.Y.z - und das war kein bewusster
+// Ausschluss, sondern schlicht der Fall, den es noch nie gegeben hatte. Der
+// Kern kennt den Beta-Kanal seit Langem (UpdateService::CHANNEL_BETA); nur
+// war noch nie eine Vorabversion durch die Release-Kette gegangen, und beim
+// ersten Versuch fiel sie hier durch.
+//
+// Der Zusatz wird für die Prüfung ABGESCHNITTEN, nicht mitverglichen: Eine
+// Vorabversion gehört zur Linie X.Y wie die spätere endgültige Fassung, und
+// ein Addon soll für "0.8" nicht zusätzlich "-beta.1" behaupten müssen. Nach
+// SemVer ist 0.8.0-beta.1 zwar KLEINER als 0.8.0 - für die Frage "welche
+// Kern-Linie ist das?" ist dieser Unterschied ohne Belang, und die
+// Untergrenze eines Addons (>=0.8.0) würde sonst gegen die eigene
+// Vorabversion verlieren und jeden Beta-Release blockieren.
+if (!preg_match('/^v?(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/', (string)$tag, $m)) {
+    fail(
+        "Tag '{$tagArg}' hat nicht die Form vX.Y.z oder vX.Y.z-vorab "
+        . '(Versionierung folgt dem Framework, siehe docs/releasing.md).'
+    );
 }
 $line = $m[1] . '.' . $m[2];
 

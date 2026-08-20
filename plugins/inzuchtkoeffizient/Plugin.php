@@ -8,6 +8,9 @@
 // Verpaarungsrechner zur Verfügung, der den voraussichtlichen COI eines
 // Fohlens aus zwei frei wählbaren Elterntieren schätzt.
 //
+// Die Rechnung selbst steht seit Addons#123 NICHT mehr hier, sondern im
+// gemeinsamen Rechenkern WrightCoi.php (siehe dort für das Warum).
+//
 // Installation (lokal im Framework-Repo):
 //   cp -r inzuchtkoeffizient plugins/inzuchtkoeffizient
 // Danach unter Admin -> Plugins verwalten (/admin/plugins) aktivieren.
@@ -22,7 +25,28 @@ use App\Database;
 use App\Plugin\HookManager;
 use App\Plugin\PluginPage;
 use App\Service\PedigreeBuilder;
+use Hengstverzeichnis\Addons\Shared\WrightCoi;
 use PDO;
+
+// Gemeinsamer COI-Rechenkern (#123). Der Wächter ist nötig, weil dieselbe
+// Datei auch von anderen Addons mitgeliefert wird: Plugins liegen in keinem
+// Autoloader, jedes bindet seine eigene Kopie per require_once ein - zwei
+// verschiedene Dateipfade, dieselbe Klasse, also ohne Wächter ein
+// "Cannot redeclare class". Wer zuerst lädt, gewinnt, und das ist gewollt:
+// Danach rechnen alle beteiligten Addons garantiert mit DERSELBEN Fassung.
+if (!class_exists(WrightCoi::class, false)) {
+    require_once __DIR__ . '/WrightCoi.php';
+}
+
+// Altname aus der Zeit der Doppelung (#123): Vor der Zusammenlegung war
+// CoiCalculator eine eigene Klasse mit eigener Rechnung. Der Alias hält
+// bestehende Verweise (u. a. tests/Unit/InzuchtkoeffizientCoiTest.php und der
+// Querverweis in plugins/genealogie-vergleich) am Leben, OHNE eine zweite
+// Fassung zu sein - class_alias() erzeugt keinen eigenen Code, sondern einen
+// zweiten Namen für exakt dieselbe Klasse.
+if (!class_exists(__NAMESPACE__ . '\\CoiCalculator', false)) {
+    class_alias(WrightCoi::class, __NAMESPACE__ . '\\CoiCalculator');
+}
 
 class Plugin {
 
@@ -72,7 +96,7 @@ class Plugin {
             return $sections;
         }
 
-        $coi = CoiCalculator::fromParentTrees($sireTree, $damTree);
+        $coi = WrightCoi::fromParentTrees($sireTree, $damTree);
         $percent = number_format($coi * 100, 2, ',', '.');
 
         $sections[] = '<div style="margin-top:0.5rem;padding:0.75rem 1rem;background:var(--surface-muted);border-radius:var(--border-radius, 6px);">'
@@ -106,105 +130,17 @@ class Plugin {
      * @return array<int, array{method:string, path:string, callback:array}>
      */
     public function routes(): array {
+        // Die addoneigene Pferdesuche (/suche) ist mit Addons#125 entfallen.
+        // Sieben Addons brachten dieselbe Route und denselben JS-Block mit;
+        // der Kern liefert beides seit Framework#341 unter
+        // /admin/horses/search bzw. /js/horse-search.js.
         return [
             [
                 'method' => 'GET',
                 'path' => '/rechner',
                 'callback' => [RechnerController::class, 'show'],
             ],
-            [
-                'method' => 'GET',
-                'path' => '/suche',
-                'callback' => [RechnerController::class, 'suche'],
-            ],
         ];
-    }
-}
-
-/**
- * Reine Rechen-Logik, unabhängig von HTTP/Controller - so in zwei Kontexten
- * wiederverwendbar: dem automatischen Abschnitt auf der Detailseite (echtes
- * Pferd, bereits vorhandener Baum) und dem Verpaarungsrechner (zwei frei
- * gewählte, ggf. noch nicht verpaarte Elterntiere).
- *
- * Verwendet die im Zuchtwesen übliche Näherungsformel
- * F = Σ (0,5)^(n1+n2+1) über alle gemeinsamen Vorfahren, wobei n1/n2 die
- * Anzahl der Generationsschritte vom jeweiligen Elternteil zum gemeinsamen
- * Vorfahren sind. Wrights Pfadregel verlangt dabei, dass in einem Pfad kein
- * Individuum mehr als einmal vorkommt - unterhalb eines gemeinsamen
- * Vorfahren wird daher nicht weitergesammelt, denn dessen eigene Ahnen sind
- * nur durch ihn hindurch erreichbar und stecken korrekt ausschließlich im
- * Term (1+F_A). Dieser Term selbst wird bewusst nicht rekursiv nachberechnet -
- * das würde bei jedem Aufruf zusätzliche, potenziell exponentiell viele
- * PedigreeBuilder-Abfragen auslösen (kein Caching, siehe
- * docs/plugin-development.md). Für die verfügbare Tiefe (max. 6-8
- * Generationen) ist die dadurch entstehende geringe Unterschätzung in der
- * Praxis vernachlässigbar.
- */
-class CoiCalculator {
-
-    public static function fromParentTrees(?array $sireTree, ?array $damTree): float {
-        // Erster Durchlauf ohne Abbruch: bestimmt die Menge der IDs, die in
-        // beiden Teilbäumen vorkommen (gemeinsame Vorfahren).
-        $sireAll = [];
-        self::collectAncestors($sireTree, 0, $sireAll);
-        $damAll = [];
-        self::collectAncestors($damTree, 0, $damAll);
-        $common = array_intersect_key($sireAll, $damAll);
-
-        // Zweiter Durchlauf: Pfade enden am jeweils ersten gemeinsamen
-        // Vorfahren (Wrights Pfadregel, s. Klassenkommentar).
-        $sireOccurrences = [];
-        self::collectAncestors($sireTree, 0, $sireOccurrences, $common);
-
-        $damOccurrences = [];
-        self::collectAncestors($damTree, 0, $damOccurrences, $common);
-
-        $sum = 0.0;
-        foreach ($sireOccurrences as $ancestorId => $linksFromSire) {
-            if (!isset($damOccurrences[$ancestorId])) {
-                continue;
-            }
-            foreach ($linksFromSire as $n1) {
-                foreach ($damOccurrences[$ancestorId] as $n2) {
-                    $sum += (0.5 ** ($n1 + $n2 + 1));
-                }
-            }
-        }
-
-        return $sum;
-    }
-
-    /**
-     * Sammelt für jeden erreichbaren, echten (nicht-Platzhalter) Vorfahren im
-     * Teilbaum die Anzahl an Generationsschritten ("Links") vom übergebenen
-     * Elternteil aus. Ein Pferd kann mehrfach mit unterschiedlicher
-     * Schrittzahl auftreten (mehrere Abstammungspfade) - alle Vorkommen
-     * fließen einzeln in die Summe ein, das ist im Pfad-Koeffizienten-Verfahren
-     * so vorgesehen.
-     *
-     * Ist `$stopAt` gesetzt (Menge gemeinsamer Vorfahren-IDs), endet die
-     * Rekursion an jedem darin enthaltenen Knoten: seine eigenen Ahnen dürfen
-     * nach Wrights Pfadregel nicht als weitere "gemeinsame Vorfahren" gezählt
-     * werden, da jeder Pfad zu ihnen den bereits gezählten Vorfahren erneut
-     * enthielte.
-     *
-     * @param array<int, list<int>> &$map Vorfahren-ID => Liste der Schrittzahlen
-     * @param array<int, mixed> $stopAt IDs, an denen die Rekursion endet
-     */
-    private static function collectAncestors(?array $node, int $links, array &$map, array $stopAt = []): void {
-        if ($node === null || empty($node['id']) || !empty($node['is_placeholder'])) {
-            return;
-        }
-
-        $map[$node['id']][] = $links;
-
-        if (isset($stopAt[$node['id']])) {
-            return;
-        }
-
-        self::collectAncestors($node['sire'] ?? null, $links + 1, $map, $stopAt);
-        self::collectAncestors($node['dam'] ?? null, $links + 1, $map, $stopAt);
     }
 }
 
@@ -218,8 +154,9 @@ class RechnerController extends BaseController {
 
     private const DEFAULT_DEPTH = 6;
     private const MAX_DEPTH = 8;
-    /** Maximale Trefferzahl der /suche-Route (#74). */
-    private const SUCHE_LIMIT = 50;
+    // Die maximale Trefferzahl der Pferdesuche steht seit Addons#125 im Kern
+    // (HorseSearchController::MAX_TREFFER) - die addoneigene Konstante ist
+    // mit der Route entfallen, die sie deckelte.
 
     public function __construct() {
         parent::__construct();
@@ -235,8 +172,8 @@ class RechnerController extends BaseController {
         // Statt des früheren Komplett-SELECT über den gesamten Pferdebestand
         // (#74) werden nur noch die tatsächlich ausgewählten IDs nachgeschlagen -
         // für die Vorbelegung der Suchfelder und die Geschlechtsprüfung. Die
-        // Auswahl selbst läuft über <input list> + <datalist> mit der
-        // /suche-Route (höchstens SUCHE_LIMIT Treffer).
+        // Auswahl selbst läuft seit Addons#125 über das gemeinsame Suchfeld
+        // des Kerns (/admin/horses/search, dort gedeckelt).
         $selected = self::fetchHorsesById(array_filter([$sireId, $damId]));
 
         // Serverseitige Prüfung (#54): Die Beschriftung "Hengst/Stute" darf
@@ -258,7 +195,7 @@ class RechnerController extends BaseController {
             $sireTree = PedigreeBuilder::build($sireId, $depth);
             $damTree = PedigreeBuilder::build($damId, $depth);
             if ($sireTree !== null && $damTree !== null) {
-                $coi = CoiCalculator::fromParentTrees($sireTree, $damTree);
+                $coi = WrightCoi::fromParentTrees($sireTree, $damTree);
                 $result = number_format($coi * 100, 2, ',', '.');
             }
         }
@@ -281,11 +218,20 @@ class RechnerController extends BaseController {
                 . htmlspecialchars(implode(' ', $sexErrors), ENT_QUOTES, 'UTF-8') . ' Die Auswahl wurde verworfen.</p>';
         }
 
-        // Geschlechtsabhängige Vorschläge (#54) übernimmt die /suche-Route über
-        // den rolle-Parameter: "Hengst (Vater)" liefert keine Stuten/Wallache,
-        // "Stute (Mutter)" keine Hengste/Wallache - Pferde ohne Geschlechts-
-        // angabe (NULL, Altbestand) bleiben in beiden Rollen wählbar,
-        // konsistent zur NULL-Regel des Kerns (Framework #165).
+        // Geschlechtsabhängige Vorschläge (#54) reicht das gemeinsame Suchfeld
+        // als `rolle=sire|dam` an den Kern-Endpunkt durch (Addons#125):
+        // "Hengst (Vater)" soll keine Stuten/Wallache vorschlagen, "Stute
+        // (Mutter)" keine Hengste/Wallache - Pferde ohne Geschlechtsangabe
+        // (NULL, Altbestand) bleiben in beiden Rollen wählbar, konsistent zur
+        // NULL-Regel des Kerns (Framework #165).
+        //
+        // ACHTUNG: Der Kern-Endpunkt versteht unter `rolle` derzeit die Rolle
+        // aus horse_persons (breeder/owner/keeper) und ignoriert sire/dam
+        // stillschweigend - siehe Framework#341. Bis das nachgezogen ist,
+        // sind die VORSCHLÄGE nicht nach Geschlecht gefiltert. Die
+        // eigentliche Prüfung hängt nicht daran: Die rollenwidrige Auswahl
+        // wird oben serverseitig verworfen, ganz gleich, was der Client
+        // schickt.
         $content .= self::searchFieldHtml('sire_id', 'Hengst (Vater)', 'sire',
             $sireId !== null ? ($selected[$sireId] ?? null) : null);
         $content .= self::searchFieldHtml('dam_id', 'Stute (Mutter)', 'dam',
@@ -308,98 +254,32 @@ class RechnerController extends BaseController {
         $content .= '<p style="margin-top:2rem;"><a href="/admin" class="btn btn-secondary">Zurück zum Dashboard</a></p>';
         $content .= '</div>';
 
-        // Befüllt die datalists über die /suche-Route und überträgt die im
-        // "[#id]"-Suffix des gewählten Eintrags kodierte ID in das begleitende
-        // Hidden-Feld (sire_id/dam_id) - die Route erhält also weiterhin
-        // numerische IDs, und Ergebnis-URLs bleiben teilbar wie bisher.
-        $content .= '<script>
-            (function () {
-                var idMuster = /\[#(\d+)\]\s*$/;
-                document.querySelectorAll("input.ik-suchfeld").forEach(function (feld) {
-                    var ziel = document.getElementById(feld.dataset.ziel);
-                    var liste = document.getElementById(feld.getAttribute("list"));
-                    var timer = null;
-
-                    function uebernehmen() {
-                        var treffer = feld.value.match(idMuster);
-                        ziel.value = treffer ? treffer[1] : "";
-                    }
-
-                    feld.addEventListener("input", function () {
-                        uebernehmen();
-                        if (timer) { clearTimeout(timer); }
-                        timer = setTimeout(function () {
-                            var q = feld.value.replace(idMuster, "").trim();
-                            fetch("/plugin/inzuchtkoeffizient/suche?q=" + encodeURIComponent(q)
-                                    + "&rolle=" + encodeURIComponent(feld.dataset.rolle))
-                                .then(function (antwort) { return antwort.ok ? antwort.json() : []; })
-                                .then(function (zeilen) {
-                                    liste.textContent = "";
-                                    zeilen.forEach(function (zeile) {
-                                        var option = document.createElement("option");
-                                        option.value = zeile.label;
-                                        liste.appendChild(option);
-                                    });
-                                })
-                                .catch(function () { /* Vorschläge sind Komfort - still scheitern lassen */ });
-                        }, 200);
-                    });
-                    feld.addEventListener("change", uebernehmen);
-                });
-            })();
-        </script>';
+        // Progressive Enhancement: Das Skript des Kerns (Framework#341)
+        // verdrahtet jedes Feld mit der Klasse `hv-pferdesuche` mit dem
+        // Endpunkt und füllt das über `data-ziel` benannte <select>. Der
+        // frühere addoneigene Block ist mit Addons#125 entfallen - samt
+        // seines unbehandelten Wettlaufs zwischen zwei schnell
+        // aufeinanderfolgenden Anfragen und samt der "[#id]"-Krücke, mit der
+        // er die ID aus dem Anzeigetext zurückgewann.
+        $content .= '<script src="/js/horse-search.js"></script>';
 
         PluginPage::render('Verpaarungsrechner', $content);
     }
 
     /**
-     * JSON-Suchroute für die <datalist>-Auswahlfelder (#74): liefert höchstens
-     * SUCHE_LIMIT Treffer statt des früheren Gesamtbestands im <select>.
-     * Sichtbarkeit wie im Rechner selbst (bewusst auch unveröffentlichte
-     * Pferde, denn die Route läuft durch denselben berechtigungsprüfenden
-     * Konstruktor); rolle=sire/dam wendet die Geschlechtsregeln aus #54
-     * bereits auf die Vorschläge an.
-     */
-    public function suche(): void {
-        header('Content-Type: application/json; charset=utf-8');
-
-        $q = trim((string) ($_GET['q'] ?? ''));
-        $rolle = (string) ($_GET['rolle'] ?? '');
-
-        $where = 'deleted_at IS NULL';
-        $params = [];
-        if ($q !== '') {
-            // Teilstring-Suche, gleiche Bauart wie katalog-export/Kern-Katalog.
-            $where .= ' AND name LIKE ?';
-            $params[] = '%' . $q . '%';
-        }
-        // NOT IN lässt NULL-Zeilen nie passieren, daher das ausdrückliche
-        // "sex IS NULL OR" (NULL-Regel des Kerns, Framework #165).
-        if ($rolle === 'sire') {
-            $where .= " AND (sex IS NULL OR sex NOT IN ('mare', 'gelding'))";
-        } elseif ($rolle === 'dam') {
-            $where .= " AND (sex IS NULL OR sex NOT IN ('stallion', 'gelding'))";
-        }
-
-        $stmt = Database::getInstance()->prepare(
-            "SELECT id, name, birth_year FROM horses WHERE {$where} ORDER BY name ASC LIMIT " . self::SUCHE_LIMIT
-        );
-        $stmt->execute($params);
-
-        $result = [];
-        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-            $result[] = ['id' => (int) $row['id'], 'label' => self::horseLabel($row)];
-        }
-
-        echo json_encode($result);
-        exit;
-    }
-
-    /**
-     * Ein Auswahlfeld als <input list> + <datalist> + Hidden-Feld (#74). Die
-     * datalist wird clientseitig über die /suche-Route befüllt; der sichtbare
-     * Eintragstext endet auf "[#<id>]", woraus das eingebettete Skript die ID
-     * für das Hidden-Feld gewinnt - eindeutig auch bei namensgleichen Pferden.
+     * Ein Auswahlfeld aus dem gemeinsamen Suchfeld des Kerns (Addons#125):
+     * ein Textfeld mit der Klasse `hv-pferdesuche`, das /js/horse-search.js
+     * verdrahtet, und das <select>, das es füllt. Das <select> trägt den
+     * Feldnamen - die Route bekommt also weiterhin eine numerische ID, und
+     * eine Ergebnis-URL bleibt teilbar wie bisher.
+     *
+     * Die "[#<id>]"-Krücke des alten Felds ist damit weg: Sie kodierte die ID
+     * in den ANZEIGETEXT, weil eine <datalist> nur Text zurückgibt. Ein
+     * <option> trägt Wert und Beschriftung getrennt und braucht das nicht.
+     *
+     * Eine bereits getroffene Auswahl wird als einzige Option vorgetragen -
+     * sonst ginge das Pferd verloren, sobald man nur die Generationstiefe
+     * ändert und erneut absendet.
      *
      * @param array{id: int|string, name: string, birth_year: mixed}|null $horse
      *   Bereits ausgewähltes Pferd zur Vorbelegung (oder null).
@@ -408,20 +288,23 @@ class RechnerController extends BaseController {
         $display = $horse !== null ? self::horseLabel($horse) : '';
         return '<div class="form-group">'
             . '<label for="' . $field . '_suche">' . $label . '</label>'
-            . '<input type="text" id="' . $field . '_suche" class="form-control ik-suchfeld" list="' . $field . '_liste"'
+            . '<input type="text" id="' . $field . '_suche" class="form-control hv-pferdesuche"'
             . ' data-rolle="' . $role . '" data-ziel="' . $field . '"'
             . ' placeholder="Name eintippen und Vorschlag übernehmen …" autocomplete="off"'
             . ' value="' . htmlspecialchars($display, ENT_QUOTES, 'UTF-8') . '">'
-            . '<datalist id="' . $field . '_liste"></datalist>'
-            . '<input type="hidden" name="' . $field . '" id="' . $field . '" value="' . ($horse !== null ? (int) $horse['id'] : '') . '">'
+            . '<select name="' . $field . '" id="' . $field . '" class="form-control" style="margin-top:0.4rem;">'
+            . ($horse !== null
+                ? '<option value="' . (int) $horse['id'] . '" selected>'
+                    . htmlspecialchars($display, ENT_QUOTES, 'UTF-8') . '</option>'
+                : '<option value="">– bitte oben suchen –</option>')
+            . '</select>'
             . '</div>';
     }
 
-    /** Anzeigetext eines Treffers/der Vorbelegung, inkl. "[#id]"-Suffix. */
+    /** Anzeigetext der Vorbelegung - "Name (Jahrgang)", wie im Kern-Endpunkt. */
     private static function horseLabel(array $horse): string {
         return $horse['name']
-            . (!empty($horse['birth_year']) ? ' (' . $horse['birth_year'] . ')' : '')
-            . ' [#' . (int) $horse['id'] . ']';
+            . (!empty($horse['birth_year']) ? ' (' . $horse['birth_year'] . ')' : '');
     }
 
     /**

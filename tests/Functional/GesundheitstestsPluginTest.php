@@ -8,32 +8,46 @@ namespace Tests\Functional;
  * `php -S` gestartete Hengstverzeichnis_Framework-Instanz (siehe
  * tests/bootstrap.php und Tests\Functional\FunctionalTestCase).
  *
- * Der Datei-Upload selbst wird hier nicht über das Formular durchgespielt
- * (der Test-HttpClient sendet keine multipart-Anfragen) - abgedeckt sind das
- * Opt-in-Prinzip der öffentlichen Sichtbarkeit, die
- * Berechtigungsdurchsetzung der Verwaltung, das 404-Verhalten der
- * Download-Route für unbekannte/dokumentlose Einträge sowie (#74) die
- * Datalist-Pferdesuche samt No-JS-Fallback und die Paginierung der
- * Eintragsliste.
+ * Seit #120 läuft die Dokumentpflege ausschließlich über den Abschnitt im
+ * Bearbeitungsformular des Pferdes (Kern-Hook `horse.edit_sections`); die
+ * addoneigene Verwaltungsseite, ihre Dashboard-Kachel und ihre Pferdesuche
+ * (Addons#125) sind entfallen. Der Test hält deshalb beides fest: dass der
+ * Pferdeabschnitt den vollen Umfang trägt (anlegen samt Dokument-Upload,
+ * auflisten, löschen) - und dass die alten Adressen wirklich weg sind.
  *
- * Das Zugriffs-Gate der Download-Route für Einträge MIT Dokument (#71) wird
- * über direkt per Database angelegte Einträge plus eine echte Datei im
- * storage-Verzeichnis geprüft - so werden die Gate-Bedingungen (is_public,
- * is_published, Verwaltungs-Berechtigung in angemeldeter Sitzung) erstmals
- * mit `true`-Potenzial ausgewertet statt immer schon am
- * "kein Dokument"-Kurzschluss zu enden.
+ * Der Upload läuft dabei ECHT durch den neuen Abschnitt (HttpClient::postFile),
+ * nicht mehr nur über direkt gesetzte Datenbankzeilen: Der Abschnitt steht
+ * außerhalb des Kern-Formulars und muss `enctype="multipart/form-data"` selbst
+ * mitbringen - ohne das käme der Upload als leeres $_FILES an, und zwar ohne
+ * Fehlermeldung. Geprüft wird beides, das Attribut im HTML und der Weg der
+ * Datei bis in die Download-Route.
+ *
+ * Das Zugriffs-Gate der Download-Route (#71) wird weiterhin über direkt per
+ * Database angelegte Einträge plus eine echte Datei im storage-Verzeichnis
+ * geprüft - so lassen sich die Gate-Bedingungen (is_public, is_published,
+ * Verwaltungs-Berechtigung in angemeldeter Sitzung) einzeln stellen.
  */
 class GesundheitstestsPluginTest extends FunctionalTestCase {
 
     use HorseListHelper;
+    use PferdesucheHelper;
 
     private const SLUG = 'gesundheitstests';
+
+    /** Die entfallene Verwaltungsseite (#120) - hier nur noch als Negativprobe. */
+    private const ALTE_SEITE = '/plugin/gesundheitstests/verwaltung';
+
+    /** Kleinste Datei, die `finfo` als application/pdf erkennt. */
+    private const PDF_INHALT = "%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n";
 
     /**
      * Aktiviert das Plugin idempotent - die Download-Tests (#71) sollen nicht
      * davon abhängen, dass der Lifecycle-Test zuerst gelaufen ist. Der
      * anschließende GET stellt sicher, dass die App einmal mit aktiviertem
-     * Plugin gebootet hat (register() legt die Tabelle notfalls an).
+     * Plugin gebootet hat.
+     *
+     * Seit #120 führt der Abgleich über das Dashboard statt über die eigene
+     * Verwaltungsseite: Die gibt es nicht mehr, ein GET darauf liefert 404.
      */
     private function enablePlugin(\Tests\Support\HttpClient $admin): void {
         $admin->post('/admin/plugins/toggle', [
@@ -41,17 +55,16 @@ class GesundheitstestsPluginTest extends FunctionalTestCase {
             'slug' => self::SLUG,
             'enable' => '1',
         ]);
-        $this->assertSame(200, $admin->get('/plugin/gesundheitstests/verwaltung')->statusCode);
+        $this->assertSame(200, $admin->get('/admin')->statusCode);
     }
 
     /**
      * Legt einen Eintrag MIT Dokument direkt per Database an und schreibt die
      * zugehörige PDF-Datei in das storage-Verzeichnis des vendorierten
      * Framework-Checkouts (identisch zu Plugin::storageDir(), das vom
-     * Plugin-Verzeichnis aus zwei Ebenen nach oben geht). Der Upload-Weg über
-     * das Formular scheidet aus, weil der Test-HttpClient kein multipart für
-     * beliebige Formulare spricht - für das Download-Gate (#71) zählt nur,
-     * dass Zeile und Datei existieren.
+     * Plugin-Verzeichnis aus zwei Ebenen nach oben geht). Für das Download-Gate
+     * (#71) zählt nur, dass Zeile und Datei existieren - der Weg durch das
+     * Formular wird in testUploadUeberDenPferdeabschnitt() gegangen.
      *
      * @return int ID des angelegten Eintrags
      */
@@ -95,46 +108,84 @@ class GesundheitstestsPluginTest extends FunctionalTestCase {
         ]);
         $this->assertSame('/admin/plugins?success=1', $toggleResponse->location());
 
-        // 1. Dashboard-Kachel muss erscheinen.
+        // 1. Weder Kachel noch eigene Seite (#120): Die Kachel führte auf eine
+        //    Seite, die dasselbe Pferd über eine zweite Suche erneut
+        //    heraussuchen ließ, obwohl die Pflege im Pferdedatensatz steht.
         $dashboard = $admin->get('/admin');
-        $this->assertStringContainsString('/plugin/gesundheitstests/verwaltung', $dashboard->body);
+        $this->assertStringNotContainsString(
+            self::ALTE_SEITE . '"',
+            $dashboard->body,
+            'Das Dashboard darf keine Kachel auf die entfallene Verwaltungsseite mehr enthalten (#120).'
+        );
+
+        $this->assertSame(
+            404,
+            $admin->get(self::ALTE_SEITE)->statusCode,
+            'Die addoneigene Verwaltungsseite ist mit #120 entfallen.'
+        );
+        $this->assertEigeneSuchrouteEntfallen($admin, '/plugin/gesundheitstests/suche');
 
         $unique = uniqid();
-        $horseId = $this->createHorse($admin, "GesundheitTestPferd-{$unique}", ['status' => 'active']);
+        $horseName = "GesundheitTestPferd-{$unique}";
+        $horseId = $this->createHorse($admin, $horseName, ['status' => 'active']);
 
-        // 2. Eintrag OHNE Öffentlich-Flag anlegen: erscheint NICHT auf der
-        // öffentlichen Detailseite (Opt-in-Prinzip, Standard aus).
-        $verwaltungPage = $admin->get('/plugin/gesundheitstests/verwaltung');
-        $this->assertSame(200, $verwaltungPage->statusCode);
+        // 2. Der Abschnitt hängt im Bearbeitungsformular des Pferdes, mit der
+        //    horse_id aus dem Aufrufkontext statt einer zweiten Pferdesuche.
+        $form = $admin->get('/admin/horses/edit?id=' . $horseId);
+        $this->assertSame(200, $form->statusCode);
+        $this->assertStringContainsString('🩺 Gesundheitstests', $form->body);
+        $this->assertStringContainsString(self::ALTE_SEITE . '/store', $form->body);
+        $this->assertMatchesRegularExpression(
+            '/name="horse_id" value="' . $horseId . '"/',
+            $form->body,
+            'Die horse_id muss aus dem Kontext stammen, nicht erneut gesucht werden.'
+        );
+        $this->assertStringNotContainsString('list="horse_q_liste"', $form->body);
+        $this->assertStringNotContainsString('<datalist', $form->body);
 
-        // Pferde-Auswahl (#74): Suchfeld mit Datalist statt Voll-<select>
-        // über den gesamten Bestand; die gewählte ID reist im Hidden-Feld.
-        $this->assertStringContainsString('list="horse_q_liste"', $verwaltungPage->body, 'Das Pferd-Feld sollte eine Datalist referenzieren.');
-        $this->assertStringContainsString('<datalist id="horse_q_liste">', $verwaltungPage->body);
-        $this->assertStringContainsString('name="horse_id" id="horse_id" value=""', $verwaltungPage->body);
-        $this->assertStringNotContainsString('<select name="horse_id"', $verwaltungPage->body, 'Der frühere Voll-<select> über alle Pferde darf nicht mehr gerendert werden.');
+        // 2b. Die Falle aus #120: Der Abschnitt steht AUSSERHALB des
+        //     Kern-Formulars und muss die Kodierung selbst mitbringen - ohne
+        //     enctype käme der Upload als leeres $_FILES an, ohne Fehlermeldung.
+        $this->assertMatchesRegularExpression(
+            '/<form[^>]*action="' . preg_quote(self::ALTE_SEITE . '/store', '/') . '"[^>]*enctype="multipart\/form-data"/',
+            $form->body,
+            'Das Formular des Abschnitts muss enctype="multipart/form-data" tragen (#120).'
+        );
 
-        // Suchroute (#74): JSON {id, label}, nur für Berechtigte, leere
-        // Suche liefert eine leere Liste statt des Gesamtbestands.
-        $sucheResponse = $admin->get('/plugin/gesundheitstests/suche?q=' . urlencode("GesundheitTestPferd-{$unique}"));
-        $this->assertSame(200, $sucheResponse->statusCode);
-        $suggestions = json_decode($sucheResponse->body, true);
-        $this->assertIsArray($suggestions, "Suchroute sollte JSON liefern. Body: {$sucheResponse->body}");
-        $this->assertCount(1, $suggestions, 'Der eindeutige Testname sollte genau einen Treffer liefern.');
-        $this->assertSame($horseId, (int) $suggestions[0]['id']);
-        $this->assertStringContainsString("GesundheitTestPferd-{$unique}", (string) $suggestions[0]['label']);
+        // Vollständigkeit (#120): Jedes Feld, das store() auswertet, muss der
+        // Abschnitt anbieten - solange eines fehlt, wäre die alte Seite nicht
+        // überflüssig, sondern die Integration unfertig.
+        foreach (['test_type', 'result_summary', 'issued_by', 'issued_at', 'is_public', 'document'] as $feld) {
+            $this->assertStringContainsString(
+                'name="' . $feld . '"',
+                $form->body,
+                "Der Abschnitt muss das Feld '{$feld}' anbieten (#120)."
+            );
+        }
 
-        $emptySuche = $admin->get('/plugin/gesundheitstests/suche?q=');
-        $this->assertSame('[]', trim($emptySuche->body), 'Ohne Suchbegriff darf die Suchroute nichts ausliefern.');
+        // 2c. Opt-in: Das Freigabe-Kästchen ist leer vorbelegt. Ein `checked`
+        //     hier wäre die Umkehr der Vorgabe, um die es in diesem Addon geht.
+        $this->assertDoesNotMatchRegularExpression(
+            '/<input[^>]*name="is_public"[^>]*checked/',
+            $form->body,
+            'Das Freigabe-Kästchen muss leer vorbelegt sein - Gesundheitsdaten sind Opt-in (#120).'
+        );
 
+        // 3. Eintrag OHNE Öffentlich-Flag anlegen: erscheint NICHT auf der
+        //    öffentlichen Detailseite (Opt-in-Prinzip, Standard aus).
+        $csrf = $form->formField('csrf_token') ?? '';
         $privateType = "Röntgen-{$unique}";
-        $storePrivate = $admin->post('/plugin/gesundheitstests/verwaltung/store', [
-            'csrf_token' => $verwaltungPage->formField('csrf_token') ?? '',
+        $storePrivate = $admin->post(self::ALTE_SEITE . '/store', [
+            'csrf_token' => $csrf,
             'horse_id' => (string) $horseId,
             'test_type' => $privateType,
             'result_summary' => 'Ohne Befund.',
         ]);
-        $this->assertSame('/plugin/gesundheitstests/verwaltung', $storePrivate->location());
+        $this->assertSame(
+            '/admin/horses/edit?id=' . $horseId,
+            $storePrivate->location(),
+            'Der Rückweg führt auf das Pferd, nicht auf die entfallene Seite (#120).'
+        );
 
         $visitor = $this->newClient();
         $detailPrivate = $visitor->get("/horse?id={$horseId}");
@@ -145,70 +196,62 @@ class GesundheitstestsPluginTest extends FunctionalTestCase {
             'Nicht freigegebene Gesundheitsdaten dürfen nie öffentlich erscheinen (Opt-in).'
         );
 
-        // 3. Eintrag MIT Öffentlich-Flag anlegen: erscheint auf der Detailseite.
+        // ... im Abschnitt steht er trotzdem, mit ausgewiesener Freigabe.
+        $formNachPrivat = $admin->get('/admin/horses/edit?id=' . $horseId);
+        $this->assertStringContainsString($privateType, $formNachPrivat->body);
+        $this->assertStringContainsString('Ohne Befund.', $formNachPrivat->body);
+
+        // 4. Eintrag MIT Öffentlich-Flag anlegen: erscheint auf der Detailseite.
         $publicType = "DNA-Abstammungstest-{$unique}";
-        $storePublic = $admin->post('/plugin/gesundheitstests/verwaltung/store', [
-            'csrf_token' => $verwaltungPage->formField('csrf_token') ?? '',
+        $storePublic = $admin->post(self::ALTE_SEITE . '/store', [
+            'csrf_token' => $csrf,
             'horse_id' => (string) $horseId,
             'test_type' => $publicType,
             'result_summary' => 'Abstammung bestätigt.',
             'issued_by' => 'Testlabor',
+            'issued_at' => '2024-03-01',
             'is_public' => '1',
         ]);
-        $this->assertSame('/plugin/gesundheitstests/verwaltung', $storePublic->location());
+        $this->assertSame('/admin/horses/edit?id=' . $horseId, $storePublic->location());
 
         $detailPublic = $visitor->get("/horse?id={$horseId}");
         $this->assertStringContainsString('DNA-/Gesundheitstests', $detailPublic->body);
         $this->assertStringContainsString($publicType, $detailPublic->body);
         $this->assertStringContainsString('Abstammung bestätigt.', $detailPublic->body);
+        $this->assertStringContainsString('Testlabor', $detailPublic->body);
         $this->assertStringNotContainsString($privateType, $detailPublic->body);
 
-        // 3b. No-JS-Fallback (#74): Ohne horse_id löst store() den getippten
-        // Text (horse_q) serverseitig zu einer Pferde-ID auf.
-        $noJsType = "NoJS-Befund-{$unique}";
-        $storeNoJs = $admin->post('/plugin/gesundheitstests/verwaltung/store', [
-            'csrf_token' => $verwaltungPage->formField('csrf_token') ?? '',
-            'horse_q' => "GesundheitTestPferd-{$unique}",
-            'test_type' => $noJsType,
-        ]);
-        $this->assertSame('/plugin/gesundheitstests/verwaltung', $storeNoJs->location());
-
-        $verwaltungAfterNoJs = $admin->get('/plugin/gesundheitstests/verwaltung');
-        $this->assertStringContainsString($noJsType, $verwaltungAfterNoJs->body, 'Ein eindeutiger Name in horse_q sollte serverseitig aufgelöst werden.');
-
-        // ... ein unauflösbarer Text legt nichts an.
-        $storeUnresolved = $admin->post('/plugin/gesundheitstests/verwaltung/store', [
-            'csrf_token' => $verwaltungPage->formField('csrf_token') ?? '',
-            'horse_q' => "GibtEsNicht-{$unique}",
+        // 5. Ein Eintrag ohne Pferd im Kontext (POST von Hand, erfundene ID)
+        //    legt nichts an und endet in der Pferdeliste statt in einem 500er.
+        $storeOhnePferd = $admin->post(self::ALTE_SEITE . '/store', [
+            'csrf_token' => $csrf,
+            'horse_id' => '999999',
             'test_type' => "Verwaist-{$unique}",
         ]);
-        $this->assertSame('/plugin/gesundheitstests/verwaltung', $storeUnresolved->location());
-        $this->assertStringNotContainsString(
-            "Verwaist-{$unique}",
-            $admin->get('/plugin/gesundheitstests/verwaltung')->body,
-            'Ein unauflösbarer Pferdename darf keinen Eintrag anlegen.'
+        $this->assertSame('/admin/horses', $storeOhnePferd->location());
+        $this->assertSame(
+            0,
+            $this->countEntries("Verwaist-{$unique}"),
+            'Eine erfundene horse_id darf keinen Eintrag anlegen.'
         );
 
-        // 3c. Paginierung (#74): Unterhalb der Seitengröße erscheint keine
-        // Blätter-Leiste, und ein zu großer ?seite=-Wert wird auf die letzte
-        // vorhandene Seite geklemmt statt eine leere Liste zu zeigen.
-        $this->assertStringNotContainsString('Seite 1 von 1', $verwaltungAfterNoJs->body, 'Bei nur einer Seite darf keine Blätter-Leiste erscheinen.');
-        $clampedPage = $admin->get('/plugin/gesundheitstests/verwaltung?seite=999');
-        $this->assertSame(200, $clampedPage->statusCode);
-        $this->assertStringContainsString($noJsType, $clampedPage->body, 'Ein überzogener seite-Wert sollte auf die letzte Seite geklemmt werden.');
-
-        // 4. Download-Route: unbekannte ID und Eintrag ohne Dokument liefern
-        // identisch 404 (kein Existenz-Orakel).
+        // 6. Download-Route: unbekannte ID und Eintrag ohne Dokument liefern
+        //    identisch 404 (kein Existenz-Orakel).
         $unknownDownload = $visitor->get('/plugin/gesundheitstests/download?id=999999');
         $this->assertSame(404, $unknownDownload->statusCode);
 
-        preg_match('/name="id" value="(\d+)"/', $admin->get('/plugin/gesundheitstests/verwaltung')->body, $idMatch);
-        $this->assertNotEmpty($idMatch, 'Konnte ID eines erfassten Eintrags nicht ermitteln.');
+        preg_match(
+            '/action="' . preg_quote(self::ALTE_SEITE . '/delete', '/') . '".*?name="id" value="(\d+)"/s',
+            $admin->get('/admin/horses/edit?id=' . $horseId)->body,
+            $idMatch
+        );
+        $this->assertNotEmpty($idMatch, 'Konnte ID eines erfassten Eintrags nicht aus dem Abschnitt ermitteln.');
         $noFileDownload = $visitor->get('/plugin/gesundheitstests/download?id=' . $idMatch[1]);
         $this->assertSame(404, $noFileDownload->statusCode);
 
-        // 5. Berechtigungsdurchsetzung: Editor ohne gesundheitstests.manage
-        // wird abgewiesen ...
+        // 7. Fail-closed: Ohne gesundheitstests.manage erscheint der Abschnitt
+        //    gar nicht - kein Formular, das beim Absenden 403 liefert -, und
+        //    die POST-Route weist ab.
         $editorGroupId = $this->findBuiltinGroupId($admin, 'Editor');
         $editor = $this->createAndLoginEditor(
             $admin,
@@ -217,36 +260,115 @@ class GesundheitstestsPluginTest extends FunctionalTestCase {
             [$editorGroupId]
         );
 
-        $deniedResponse = $editor->get('/plugin/gesundheitstests/verwaltung');
+        $editorFormOhneRecht = $editor->get('/admin/horses/edit?id=' . $horseId);
+        $this->assertSame(200, $editorFormOhneRecht->statusCode);
+        $this->assertStringNotContainsString(
+            self::ALTE_SEITE . '/store',
+            $editorFormOhneRecht->body,
+            'Ohne gesundheitstests.manage darf der Abschnitt nicht erscheinen.'
+        );
+        $this->assertStringNotContainsString(
+            $privateType,
+            $editorFormOhneRecht->body,
+            'Ohne die Berechtigung dürfen auch die erfassten Gesundheitsdaten nicht im Formular stehen.'
+        );
+
+        $deniedResponse = $editor->post(self::ALTE_SEITE . '/store', [
+            'csrf_token' => $editorFormOhneRecht->formField('csrf_token') ?? '',
+            'horse_id' => (string) $horseId,
+            'test_type' => "Unerlaubt-{$unique}",
+        ]);
         $this->assertSame(403, $deniedResponse->statusCode);
 
-        // ... auch von der Suchroute (#74): Pferdenamen (inkl.
-        // unveröffentlichter Pferde) bleiben auf den berechtigten Kreis
-        // beschränkt.
-        $deniedSuche = $editor->get('/plugin/gesundheitstests/suche?q=' . urlencode("GesundheitTestPferd-{$unique}"));
-        $this->assertSame(403, $deniedSuche->statusCode);
-
-        // ... und ist nach Zuweisung der Berechtigung erreichbar.
         $this->setGroupPermissions($admin, $editorGroupId, self::EDITOR_DEFAULT_PERMISSIONS + [
             'gesundheitstests' => ['manage'],
         ]);
 
-        $allowedResponse = $editor->get('/plugin/gesundheitstests/verwaltung');
-        $this->assertSame(200, $allowedResponse->statusCode);
+        $editorFormMitRecht = $editor->get('/admin/horses/edit?id=' . $horseId);
+        $this->assertSame(200, $editorFormMitRecht->statusCode);
+        $this->assertStringContainsString(self::ALTE_SEITE . '/store', $editorFormMitRecht->body);
+        $this->assertStringContainsString($privateType, $editorFormMitRecht->body);
 
-        // 6. Löschen entfernt den öffentlichen Eintrag wieder von der Detailseite.
-        $verwaltungAfter = $admin->get('/plugin/gesundheitstests/verwaltung');
-        preg_match_all('/name="id" value="(\d+)"/', $verwaltungAfter->body, $allIds);
+        // 8. Löschen aus dem Abschnitt heraus entfernt den Eintrag wieder von
+        //    der Detailseite; der Rückweg führt auf das Pferd.
+        $formVorLoeschen = $admin->get('/admin/horses/edit?id=' . $horseId);
+        preg_match_all(
+            '/action="' . preg_quote(self::ALTE_SEITE . '/delete', '/') . '".*?name="id" value="(\d+)"/s',
+            $formVorLoeschen->body,
+            $allIds
+        );
+        $this->assertNotEmpty($allIds[1], 'Der Abschnitt muss je Eintrag ein Löschformular tragen.');
         foreach ($allIds[1] as $entryId) {
-            $deleteResponse = $admin->post('/plugin/gesundheitstests/verwaltung/delete', [
-                'csrf_token' => $verwaltungAfter->formField('csrf_token') ?? '',
+            $deleteResponse = $admin->post(self::ALTE_SEITE . '/delete', [
+                'csrf_token' => $formVorLoeschen->formField('csrf_token') ?? '',
                 'id' => $entryId,
             ]);
-            $this->assertSame('/plugin/gesundheitstests/verwaltung', $deleteResponse->location());
+            $this->assertSame('/admin/horses/edit?id=' . $horseId, $deleteResponse->location());
         }
 
         $detailAfterDelete = $visitor->get("/horse?id={$horseId}");
         $this->assertStringNotContainsString('DNA-/Gesundheitstests', $detailAfterDelete->body);
+    }
+
+    /**
+     * #120: Der Upload geht den echten Weg - Formular des Pferdeabschnitts,
+     * multipart-POST, Ablage außerhalb des Webroots, Auslieferung über die
+     * Download-Route.
+     *
+     * Das prüft die zweite Hälfte der enctype-Falle: Das Attribut im HTML
+     * belegt testFullPluginLifecycle(), dass store() eine hochgeladene Datei
+     * aus dem Abschnitt heraus tatsächlich annimmt und wiederfindet, belegt
+     * dieser Test. Vorher ging der Upload in diesem Repo überhaupt nicht durch
+     * das Formular - die Zeilen wurden direkt in die Datenbank geschrieben.
+     */
+    public function testUploadUeberDenPferdeabschnitt(): void {
+        $admin = $this->authenticatedClient();
+        $this->enablePlugin($admin);
+
+        $unique = uniqid();
+        $horseId = $this->createHorse($admin, "GTestUpload-{$unique}", ['status' => 'active']);
+        $form = $admin->get('/admin/horses/edit?id=' . $horseId);
+
+        $testArt = "Upload-Befund-{$unique}";
+        $antwort = $admin->postFile(
+            self::ALTE_SEITE . '/store',
+            [
+                'csrf_token' => $form->formField('csrf_token') ?? '',
+                'horse_id' => (string) $horseId,
+                'test_type' => $testArt,
+                'is_public' => '1',
+            ],
+            'document',
+            "befund-{$unique}.pdf",
+            self::PDF_INHALT,
+            'application/pdf'
+        );
+        $this->assertSame('/admin/horses/edit?id=' . $horseId, $antwort->location());
+
+        // Der Abschnitt verweist auf das Dokument ...
+        $formNachUpload = $admin->get('/admin/horses/edit?id=' . $horseId);
+        $this->assertStringContainsString($testArt, $formNachUpload->body);
+        $this->assertMatchesRegularExpression(
+            '#/plugin/gesundheitstests/download\?id=\d+#',
+            $formNachUpload->body,
+            'Ein Eintrag mit Dokument muss im Abschnitt einen Download-Verweis tragen.'
+        );
+        preg_match('#/plugin/gesundheitstests/download\?id=(\d+)#', $formNachUpload->body, $treffer);
+
+        // ... und die Datei kommt durch die Download-Route zurück. Käme der
+        // Upload als leeres $_FILES an (fehlendes enctype), stünde hier gar
+        // kein Verweis, und dieser Abruf liefe in die 404 des Gates.
+        $antwortDatei = $admin->get('/plugin/gesundheitstests/download?id=' . $treffer[1]);
+        $this->assertSame(200, $antwortDatei->statusCode);
+        $this->assertStringContainsString('%PDF', $antwortDatei->body);
+        $this->assertSame('application/pdf', $antwortDatei->header('Content-Type'));
+
+        // Die Ablage liegt außerhalb des Webroots - der Dateiname taucht in
+        // keiner Antwort auf, und der rohe Pfad ist nicht abrufbar.
+        $this->assertStringNotContainsString(
+            "befund-{$unique}.pdf",
+            $admin->get('/uploads/plugin_gesundheitstests/')->body
+        );
     }
 
     /**
@@ -332,5 +454,118 @@ class GesundheitstestsPluginTest extends FunctionalTestCase {
         $managerResponse = $manager->get("/plugin/gesundheitstests/download?id={$entryId}");
         $this->assertSame(200, $managerResponse->statusCode, 'Die Verwaltungs-Berechtigung muss das Dokument auch bei unveröffentlichtem Pferd ausliefern.');
         $this->assertStringContainsString('%PDF', $managerResponse->body);
+    }
+
+    /**
+     * #134: Das LÖSCHEN eines Gesundheitsdokuments ist der wichtigste Fall
+     * des ganzen Issues - Gesundheitsdaten sind der heikelste Bestand im
+     * Verzeichnis, und ihr Verschwinden war bisher im Protokoll nicht zu
+     * sehen. Ein Protokoll, das an dieser Stelle schweigt, beweist scheinbar,
+     * daß nichts passiert ist.
+     *
+     * Geprüft wird deshalb beides zusammen: daß der Eintrag entsteht und
+     * aussagekräftig ist (Eintrag, Pferd, Untersuchungsart, entfernte Datei) -
+     * und daß er den INHALT nicht mitnimmt. Das Protokoll wird dauerhaft
+     * aufbewahrt; stünde die Ergebnis-Zusammenfassung darin, überlebte
+     * ausgerechnet der sensible Teil die Löschung, um die es geht.
+     *
+     * Gegenprobe gelaufen: Ohne die AuditLogger::log()-Aufrufe in
+     * VerwaltungController::store()/delete() findet die Abfrage keine
+     * Einträge, und der Test schlägt an den assertCount(1)-Zeilen fehl.
+     */
+    public function testAnlegenUndLoeschenStehenImProtokoll(): void {
+        $admin = $this->authenticatedClient();
+        $this->enablePlugin($admin);
+
+        $unique = uniqid();
+        $horseName = "GTestProtokoll-{$unique}";
+        $horseId = $this->createHorse($admin, $horseName, ['status' => 'active']);
+
+        // 1. Anlegen über den Pferdeabschnitt. Die Ergebnis-Zusammenfassung ist
+        // bewusst wiedererkennbar - unten wird belegt, daß sie NICHT im
+        // Protokoll steht.
+        $form = $admin->get('/admin/horses/edit?id=' . $horseId);
+        $testArt = "Röntgenbefund-{$unique}";
+        $befund = "Vertraulicher Befundtext {$unique}";
+        $admin->post(self::ALTE_SEITE . '/store', [
+            'csrf_token' => $form->formField('csrf_token') ?? '',
+            'horse_id' => (string) $horseId,
+            'test_type' => $testArt,
+            'result_summary' => $befund,
+            'issued_by' => "Tierklinik {$unique}",
+        ]);
+
+        $angelegt = $this->protokollEintraege('Gesundheitstest-Eintrag angelegt', "Pferd #{$horseId} ");
+        $this->assertCount(1, $angelegt, 'Ein angelegter Gesundheitstest-Eintrag muss genau einen Protokolleintrag erzeugen.');
+        $angelegtDetails = (string) $angelegt[0]['details'];
+        $this->assertStringContainsString($horseName, $angelegtDetails, 'Der Eintrag muss das betroffene Pferd benennen.');
+        $this->assertStringContainsString($testArt, $angelegtDetails, 'Ohne die Untersuchungsart ist nicht erkennbar, worum es ging.');
+        $this->assertStringContainsString('öffentlich: nein', $angelegtDetails, 'Die Freigabe entscheidet über die öffentliche Sichtbarkeit und gehört in den Nachweis.');
+        $this->assertStringNotContainsString($befund, $angelegtDetails, 'Die Ergebnis-Zusammenfassung gehört nicht ins dauerhafte Protokoll.');
+
+        // 2. Löschen eines Eintrags MIT Dokument - der Fall aus dem Issue.
+        $entryId = $this->insertEntryWithDocument($horseId, false, "protokoll_{$unique}");
+        $dateiName = "gtest_functional_protokoll_{$unique}.pdf";
+        $ablage = \FRAMEWORK_VENDOR_DIR . '/storage/plugin_gesundheitstests';
+        $this->assertFileExists($ablage . '/' . $dateiName, 'Voraussetzung: Das Dokument muss vor dem Löschen in der Ablage liegen.');
+
+        $formVorLoeschen = $admin->get('/admin/horses/edit?id=' . $horseId);
+        $admin->post(self::ALTE_SEITE . '/delete', [
+            'csrf_token' => $formVorLoeschen->formField('csrf_token') ?? '',
+            'id' => (string) $entryId,
+        ]);
+
+        $this->assertFileDoesNotExist(
+            $ablage . '/' . $dateiName,
+            'Voraussetzung des Protokollfalls: Das Dokument muss beim Löschen wirklich verschwinden.'
+        );
+
+        $geloescht = $this->protokollEintraege('Gesundheitstest-Eintrag gelöscht', "Eintrag #{$entryId},");
+        $this->assertCount(
+            1,
+            $geloescht,
+            'Das Löschen eines Gesundheitsdokuments muss protokolliert werden - genau das fehlte (#134).'
+        );
+
+        $details = (string) $geloescht[0]['details'];
+        $this->assertStringContainsString($horseName, $details, 'Ohne Angabe, zu welchem Pferd das Dokument gehörte, hilft der Eintrag niemandem.');
+        $this->assertStringContainsString($dateiName, $details, 'Der Eintrag muss die entfernte Datei benennen.');
+        $this->assertStringContainsString('entfernt', $details, 'Der Eintrag muss festhalten, daß das Dokument entfernt wurde.');
+        $this->assertStringNotContainsString(
+            "befund-protokoll_{$unique}.pdf",
+            $details,
+            'Der frei wählbare Originaldateiname kann personenbezogen sein und gehört nicht ins dauerhafte Protokoll.'
+        );
+    }
+
+    /**
+     * Zählt Einträge einer Untersuchungsart direkt in der Datenbank - der
+     * unabhängige Nachweis dafür, dass ein verworfener POST wirklich nichts
+     * angelegt hat (eine leere Seite belegt das nicht).
+     */
+    private function countEntries(string $testType): int {
+        $stmt = \App\Database::getInstance()->prepare(
+            'SELECT COUNT(*) FROM `plugin_gesundheitstests` WHERE test_type = :art'
+        );
+        $stmt->execute(['art' => $testType]);
+        return (int) $stmt->fetchColumn();
+    }
+
+    /**
+     * Protokolleinträge dieses Addons zu einer Aktion und einem Bezug.
+     * Kategorie ist fest der Addon-Slug (#134) - die Auswahlliste der
+     * Protokollansicht entsteht im Kern aus SELECT DISTINCT category.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function protokollEintraege(string $aktion, string $detailFragment): array {
+        $stmt = \App\Database::getInstance()->prepare(
+            'SELECT username, details FROM audit_logs
+             WHERE category = ? AND action = ? AND details LIKE ?
+               AND created_at >= (NOW() - INTERVAL 10 MINUTE)'
+        );
+        $stmt->execute([self::SLUG, $aktion, '%' . $detailFragment . '%']);
+
+        return $stmt->fetchAll(\PDO::FETCH_ASSOC);
     }
 }

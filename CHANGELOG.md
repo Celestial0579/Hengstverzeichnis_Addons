@@ -6,6 +6,118 @@ sich an [Keep a Changelog](https://keepachangelog.com/de/1.1.0/); die
 Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 (siehe [docs/releasing.md](docs/releasing.md)).
 
+## [0.8.0-beta.2] – 2026-08-20
+
+Der Addon-Nachzug zur Kontaktliste (Framework#336) — **21 Issues**, davon
+sieben neue Addons. Der Bestand wächst von 19 auf 26.
+
+**Alle Addons brauchen diesen Release.** Ein Kern der Linie 0.8 macht jedes
+Addon mit `core_supported_max: "0.7"` fail-closed unsichtbar; das ist die
+Kompatibilitätsmechanik und kein Fehler.
+
+### Umgestellt auf die Kontaktliste
+
+- **`kontaktanfrage`** (#136) — der schwerste Fall der Runde. Das Addon führte
+  `target_type = 'person'|'station'` als eigenen Diskriminator, und seine
+  beiden Tabellen speichern `(target_type, target_id)` **ohne Fremdschlüssel**.
+  Person 5 und Station 5 gab es beide; nach der Zusammenführung hätte jede
+  gespeicherte Zeile auf einen falschen Kontakt gezeigt. Beim **Opt-out** wäre
+  das eine Datenschutz-Regression im Wortsinn gewesen: Wer Kontaktanfragen
+  abbestellt hat, wäre wieder erreichbar, und jemand anderes stumm geschaltet.
+
+  Die Umrechnung über `contact_id_map` läuft **genau einmal**, transaktional
+  und mit Marker in derselben Transaktion — ein Abbruch nimmt beides zurück,
+  es gibt keinen Zwischenstand „umgerechnet, aber Marker fehlt". Anfragen ohne
+  Abbildung behalten `contact_id = 0` und erscheinen als „Datensatz entfernt"
+  statt still zu verschwinden.
+
+- **`zucht-suche`** (#122) — die zwei festen Reiter fallen weg. An ihre Stelle
+  tritt ein Rollenfilter, denn seit der Zusammenführung ist ein Hof derselbe
+  Datensatz, der gleichzeitig züchtet, Pferde besitzt und Deckstation ist. Ein
+  Reiter müsste sich für eine Aussage entscheiden und die anderen unsichtbar
+  machen. „Deckstation" bekommt **kein** neues Kennzeichen — das schriebe die
+  abgeschaffte Gattung wieder in die Daten.
+
+- **`katalog-export`** (#137), **`deckanfrage`** (#138),
+  **`statistik-dashboard`** (#139).
+
+### Doppelungen aufgelöst
+
+- **Sieben eigene Pferdesuchen** (#125) ersatzlos gestrichen — der Kern bringt
+  seit Framework#341 eine mit. Nachgemessen und dabei den Issue-Text
+  korrigiert: Es maskierten **fünf** der sieben Kopien die SQL-Platzhalter
+  `%` und `_`, nicht eine.
+
+- **Der Inzuchtkoeffizient stand zweimal im Repo** (#123), nach
+  Kommentarentfernung zeichengleich. Jetzt eine Klasse unter einem Namen, von
+  beiden Addons zeichengleich mitgeliefert. Ein Symlink schied aus: Der
+  Addon-Installer verwirft ein Paket, sobald es einen Symlink enthält
+  (Pfad-Traversal-Schutz). Ein Test verbietet die Formel **ausserhalb** dieser
+  einen Datei — er hätte den Befund am Tag seiner Entstehung gemeldet.
+
+- **`besucherstatistik` ist in `statistik-dashboard` aufgegangen** (#127).
+
+### Pflege wandert in die Pferdeseite
+
+**#115**, **#117**, **#119**, **#120**, **#124** — Verwaltungsseiten und
+Dashboard-Kacheln entfallen, die Pflege läuft über `horse.edit_sections`.
+Fail-closed: ohne das jeweilige Recht erscheint der Abschnitt gar nicht.
+
+### Neue Addons
+
+- **`plausibilitaetspruefung`** (#114) — findet Widersprüche und verhindert
+  ihre Veröffentlichung über `horse.publish_blockers`. Blockierend ist
+  ausschliesslich, was **nicht wahr sein kann** (Elternteil jünger als das
+  Fohlen, Vater gleich Mutter, Tod vor Geburt, Zeitraum nach dem Tod). Alles
+  andere meldet nur: „Gestorbenes Pferd mit offenem Halterzeitraum" trifft im
+  Bestand 35 Datensätze und wäre als Blocker eine Zumutung — es nähme 35
+  gepflegte Seiten vom Netz, um eine Konvention durchzusetzen, über die
+  niemand entschieden hat.
+
+- **`captcha-turnstile`**, **`captcha-hcaptcha`**, **`captcha-altcha`**
+  (#133) — drei Anbieter für die `captcha.*`-Hooks. Ohne Schlüssel meldet
+  sich ein Anbieter gar nicht erst an.
+
+- **`pferd-des-tages`** (#135) — hängt in `home.sections_top`. „Des Tages"
+  heisst: **ein** Pferd je Kalendertag für alle Besucher, aus dem Datum
+  abgeleitet statt je Aufruf gewürfelt.
+
+- **`beispiel-erweiterungspunkte`** (#128) — belegt jeden Erweiterungspunkt
+  des Kerns mit einem sichtbaren Ergebnis. Die Hooks wurden ausgezählt, nicht
+  geschätzt: Der Kern löst 22 eigene aus, dazu 8 Aliasse.
+
+- **`mitgliedsstatus`** (#132) — Mitglied/Nichtmitglied je Kontakt mit fester
+  Werteliste statt Freitext, plus die CiviCRM-Verlinkung aus #130. Die
+  Übernahme der Bestandswerte läuft markergeschützt: Der Kern entfernt
+  `contacts.membership_status` in v0.9.0, und ohne diesen Schritt fielen die
+  Werte zwischen die beiden Releases.
+
+### Weiter
+
+- **`datenmigration`: Auswahl, was exportiert wird** (#121). Bis dahin nahm
+  jeder Export zwangsläufig `users` mit — Passwort-Hashes, 2FA-Geheimnisse,
+  Backup-Codes — und `api_keys` dazu. Wer nur seine Pferde zu einer anderen
+  Instanz tragen wollte, verschickte die Anmeldedaten seines Vereins gleich
+  mit. Vorgabe ist jetzt: **Zugangsmaterial ab, Daten an.**
+
+- **Fünf fehlende Protokollierungen nachgezogen** (#134), darunter das Löschen
+  eines Gesundheitsdokuments — der heikelste Bestand im Verzeichnis, und es
+  verschwand spurlos.
+
+### Behoben
+
+- **Der Sicherheitsscan meldete sieben Fehlalarme.** Backticks in
+  einfach-quotierten Strings sind SQL-Bezeichner, kein Shell-Aufruf. Behoben
+  ist der **Detektor**, nicht per Allowlist: Der Tokenizer trennt die beiden
+  Fälle sauber, ein echter Shell-Backtick ist ein eigenständiges Token.
+  Gegenprobe gefahren — `` `ls $dir` `` wird weiterhin gemeldet. Beide
+  Allowlists bleiben leer.
+
+- **`ReleaseConsistencyTest` nagelte die Ziel-Linie auf `v0.7.0` fest** und
+  wurde beim Sprung auf 0.8 rot, obwohl der Repo-Stand in Ordnung war. Der
+  Kommentar daneben warnte vor genau diesem Fehler — bezog sich aber nur auf
+  die Addon-*Anzahl*. Die Linie wird jetzt aus den Manifesten abgeleitet.
+
 ## [0.7.2] – 2026-08-20
 
 Ein Sicherheitsrelease. Vier Addons lieferten Pferdefotos an der geschützten

@@ -38,18 +38,35 @@ Berechtigung `inzuchtkoeffizient.calculate`, die einer Gruppe unter
   Route ist berechtigungsgeschützt. Derselbe Verpaarungsfall kann deshalb auf
   der öffentlichen Detailseite und im Rechner unterschiedliche Werte liefern,
   sobald unveröffentlichte Vorfahren im Spiel sind.
-- **Pferde-Auswahl:** Die Elterntiere werden über Suchfelder
-  (`<input list>` + `<datalist>`) gewählt, die ihre Vorschläge serverseitig
-  von `GET /plugin/inzuchtkoeffizient/suche?q=…&rolle=sire|dam` holen
-  (höchstens 50 Treffer, gleiche Berechtigung wie der Rechner). Das ersetzt
-  das frühere `<select>` über den kompletten Pferdebestand (#74). Der
-  `rolle`-Parameter filtert nach Geschlecht (Hengst-Feld ohne Stuten/Wallache,
-  Stuten-Feld ohne Hengste/Wallache; Pferde ohne Geschlechtsangabe bleiben in
-  beiden wählbar), die getroffene Auswahl wird serverseitig erneut geprüft.
-  Jeder Vorschlag endet auf `[#<id>]`; daraus füllt die Seite die eigentlichen
-  Parameter `sire_id`/`dam_id`, Ergebnis-URLs bleiben also unverändert teilbar.
+- **Pferde-Auswahl:** Die Elterntiere werden über das gemeinsame Suchfeld des
+  Kerns gewählt (`hv-pferdesuche` + `/js/horse-search.js`, gespeist aus
+  `GET /admin/horses/search?q=…&rolle=sire|dam`, Framework#341). Die
+  addoneigene Route `/plugin/inzuchtkoeffizient/suche` ist mit #125 entfallen -
+  sie war eine von sieben Kopien derselben Pferdesuche.
+  Das gewählte Pferd steht im `<option>` des Auswahlfelds `sire_id`/`dam_id`;
+  die frühere `[#<id>]`-Krücke im Anzeigetext entfällt, Ergebnis-URLs bleiben
+  unverändert teilbar.
+  Der `rolle`-Parameter soll die Vorschläge nach Geschlecht filtern
+  (Hengst-Feld ohne Stuten/Wallache, Stuten-Feld ohne Hengste/Wallache; Pferde
+  ohne Geschlechtsangabe bleiben in beiden wählbar). **Solange der
+  Kern-Endpunkt unter `rolle` die Zuordnungsrolle aus `horse_persons`
+  versteht, sind die Vorschläge ungefiltert** - die rollenwidrige Auswahl
+  wird aber weiterhin serverseitig verworfen (#54), die Prüfung hängt also
+  nicht an den Vorschlägen.
+  **Achtung:** Der Kern-Endpunkt verlangt `horses.view`; wer den Rechner
+  nutzen darf, braucht für die Suche zusätzlich dieses Leserecht.
 
 ## Berechnungsmethode
+
+Der Rechenkern steht seit Addons#123 nicht mehr in `Plugin.php`, sondern in
+`WrightCoi.php` (Klasse `Hengstverzeichnis\Addons\Shared\WrightCoi`) - dieselbe
+Datei liefert das Addon `anpaarungs-empfehlung` zeichengleich mit, damit beide
+einzeln installierbar bleiben und trotzdem durch **denselben** Code rechnen.
+Vorher waren es zwei getrennte Klassen, die schon einmal auseinandergelaufen
+sind. Die Begründung im Einzelnen steht im Kopfkommentar von `WrightCoi.php`;
+die Zeichengleichheit der Kopien prüft
+`tests/Unit/CoiGemeinsameFassungTest.php`. Der Altname `CoiCalculator` bleibt
+als Alias auf dieselbe Klasse bestehen.
 
 Verwendet die im Zuchtwesen gängige Pfad-Koeffizienten-Formel
 

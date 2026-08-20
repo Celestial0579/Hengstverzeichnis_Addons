@@ -66,6 +66,36 @@ Der Alt-Wert `q_status=deceased` mappt wie auf der Katalogseite auf
 `q_deceased=1` - kopierte Filter-URLs aus der Zeit vor dem Split bleiben
 damit funktional.
 
+## Welche Kontaktfelder im Export stehen - und warum nur diese
+
+Seit Framework #336 liegen Personen und Deckstationen gemeinsam in `contacts`.
+Diese Tabelle trägt neben dem Namen auch `email`, `phone`, `mobile`, die
+Adressfelder, `contact_person` und das interne Freitextfeld `contact_info`.
+
+Der Export liest daraus **ausschließlich `name`** - als Stationsname und als
+Züchter-/Besitzername. Die CSV enthält damit ab v0.8 exakt dieselben
+Kontaktangaben wie vorher, obwohl die zugrunde liegende Tabelle mehr Spalten
+hat. Das ist Absicht: Eine exportierte Datei wird per E-Mail weitergereicht
+und auf Fremdrechnern abgelegt, wo keine Löschfrist sie mehr erreicht.
+
+Wer die Feldliste erweitern will, wendet dieselbe Regel an wie die
+öffentliche Seite (`docs/kontaktliste-umstellung.md` im Framework-Repo,
+Abschnitt „Datenschutz-Grenze"): `contact_info` nie, die zustellbaren Felder
+nur bei `contact_public = 1`, und **kein `SELECT *` auf `contacts`**.
+
+Die Auswahlliste „Deckstation" im Formular zeigt nur Kontakte, die
+tatsächlich als Station verknüpft sind (über `horses.breeding_station_id`
+oder `horse_persons.station_contact_id`) - nicht jeden Kontakt des
+Verzeichnisses.
+
+## Protokoll
+
+Jeder Download schreibt einen Eintrag der Kategorie `katalog-export` ins
+Protokoll (`/admin/audit-log`): Aktion „Katalog als CSV exportiert", dazu die
+Zeilenzahl und die **Namen** der gesetzten Filterfelder. Die eingegebenen
+Filterwerte stehen bewusst nicht darin - `q_breeder` nimmt einen
+Personennamen entgegen, und das Protokoll wird dauerhaft aufbewahrt.
+
 ## Berechtigungen
 
 | Modul | Aktion | Beschreibung |

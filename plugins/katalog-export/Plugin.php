@@ -24,6 +24,7 @@ use App\Controllers\BaseController;
 use App\Database;
 use PDO;
 use App\Plugin\HookManager;
+use App\Plugin\PluginAudit;
 use App\Plugin\PluginPage;
 
 class Plugin {
@@ -86,7 +87,40 @@ class ExportController extends BaseController {
         $db = Database::getInstance();
         $colors = $db->query("SELECT DISTINCT color FROM horses WHERE color IS NOT NULL AND color != '' AND deleted_at IS NULL ORDER BY color ASC")->fetchAll(PDO::FETCH_COLUMN);
         $breeds = $db->query("SELECT DISTINCT breed FROM horses WHERE breed IS NOT NULL AND breed != '' AND deleted_at IS NULL ORDER BY breed ASC")->fetchAll(PDO::FETCH_COLUMN);
-        $stations = $db->query("SELECT DISTINCT name FROM breeding_stations WHERE deleted_at IS NULL ORDER BY name ASC")->fetchAll(PDO::FETCH_COLUMN);
+        // Auswahlliste "Deckstation" (#137). Bis v0.7 stand hier
+        // `FROM breeding_stations` - eine eigene Tabelle, die AUSSCHLIESSLICH
+        // Deckstationen enthielt. Seit Framework#336 liegen Personen und
+        // Deckstationen gemeinsam in `contacts`; ein blosses Ersetzen des
+        // Tabellennamens haette deshalb JEDEN Kontakt des Verzeichnisses als
+        // "Deckstation" zur Auswahl gestellt - bei mehreren tausend Personen
+        // ein unbrauchbares Aufklappmenue, das ausserdem etwas behauptet, was
+        // nicht stimmt.
+        //
+        // Deckstation ist seit #336 keine Datensatzart mehr, sondern eine
+        // ROLLE: Ein Kontakt ist Deckstation, wenn er in einem der beiden
+        // Steckplaetze steht, die auf eine Station zeigen -
+        // horses.breeding_station_id oder horse_persons.station_contact_id.
+        // Genau das ist auch die Menge, die der Filter unten ueberhaupt
+        // treffen kann (bs.name); alles andere waere eine Auswahl, die
+        // garantiert null Treffer liefert.
+        //
+        // Freitext-Stationen (horses.breeding_station ohne Datensatz) bleiben
+        // wie bisher aussen vor - sie standen auch vorher nicht im Menue, der
+        // Filter findet sie aber weiterhin ueber die Freitextspalte.
+        $stations = $db->query(
+            "SELECT DISTINCT c.name
+             FROM contacts c
+             WHERE c.deleted_at IS NULL
+               AND (
+                   EXISTS (SELECT 1 FROM horses h WHERE h.breeding_station_id = c.id AND h.deleted_at IS NULL)
+                   OR EXISTS (
+                       SELECT 1 FROM horse_persons hp
+                       JOIN horses hph ON hph.id = hp.horse_id AND hph.deleted_at IS NULL
+                       WHERE hp.station_contact_id = c.id
+                   )
+               )
+             ORDER BY c.name ASC"
+        )->fetchAll(PDO::FETCH_COLUMN);
 
         // Die Seite rendert als Fragment im Framework-Layout
         // (App\Plugin\PluginPage, Addons#66) - Header, Navigation,
@@ -200,11 +234,14 @@ class ExportController extends BaseController {
         $qSire = trim($_GET['q_sire'] ?? '');
         $qDam = trim($_GET['q_dam'] ?? '');
 
-        // Personen-Treffer über EXISTS statt über multiplizierende JOINs -
+        // Kontakt-Treffer über EXISTS statt über multiplizierende JOINs -
         // dieselbe Bauart wie PublicController::catalog() im Kern (#125).
         // Ohne is_published-Einschränkung: Der Export ist bewusst eine
-        // Backoffice-Funktion und enthält auch unveröffentlichte Personen
+        // Backoffice-Funktion und enthält auch unveröffentlichte Kontakte
         // (siehe README).
+        // Seit Framework#336 heisst die Tabelle `contacts` und die Spalte
+        // `horse_persons.contact_id`; die ROLLE kommt aus `horse_persons.role`
+        // und nicht mehr aus der Wahl der Tabelle (#137).
         // Seit Framework #246 gilt dort die Regel: Wo ueln/foreign_ueln
         // durchsucht wird, wird auch die Kindtabelle horse_registrations
         // (weitere Lebensnummern) einbezogen - foreign_ueln bleibt als
@@ -219,7 +256,7 @@ class ExportController extends BaseController {
                 WHERE hreg.horse_id = h.id AND hreg.registration_number LIKE ?
             ) OR EXISTS (
                 SELECT 1 FROM horse_persons hps
-                JOIN persons ps ON ps.id = hps.person_id AND ps.deleted_at IS NULL
+                JOIN contacts ps ON ps.id = hps.contact_id AND ps.deleted_at IS NULL
                 WHERE hps.horse_id = h.id AND ps.name LIKE ?
             ))";
             array_push($params, $like, $like, $like, $like, $like, $like, $like, $like, $like);
@@ -267,7 +304,7 @@ class ExportController extends BaseController {
         if ($qBreeder !== '') {
             $where[] = "EXISTS (
                 SELECT 1 FROM horse_persons hpb
-                JOIN persons pb ON pb.id = hpb.person_id AND pb.deleted_at IS NULL
+                JOIN contacts pb ON pb.id = hpb.contact_id AND pb.deleted_at IS NULL
                 WHERE hpb.horse_id = h.id AND hpb.role = 'breeder' AND pb.name LIKE ?
             )";
             $params[] = '%' . $qBreeder . '%';
@@ -275,7 +312,7 @@ class ExportController extends BaseController {
         if ($qOwner !== '') {
             $where[] = "EXISTS (
                 SELECT 1 FROM horse_persons hpo
-                JOIN persons po ON po.id = hpo.person_id AND po.deleted_at IS NULL
+                JOIN contacts po ON po.id = hpo.contact_id AND po.deleted_at IS NULL
                 WHERE hpo.horse_id = h.id AND hpo.role = 'owner' AND po.name LIKE ?
             )";
             $params[] = '%' . $qOwner . '%';
@@ -307,7 +344,35 @@ class ExportController extends BaseController {
         // breeder_name/owner_name unterschieden (Addons#70). Alle
         // verbleibenden JOINs sind 1:1, daher ist kein DISTINCT nötig.
         // Abweichend vom Kern ohne is_published-Einschränkung: Backoffice-
-        // Export, unveröffentlichte Personen sind hier gewollt (siehe README).
+        // Export, unveröffentlichte Kontakte sind hier gewollt (siehe README).
+        //
+        // FELDLISTE DER KONTAKTE - bitte beim Ändern lesen (#137).
+        // Aus `contacts` wird ausschliesslich `name` gelesen: als Stationsname
+        // (bs.name) und als Züchter-/Besitzername (p.name). Das ist bewusst so
+        // und keine Nachlässigkeit.
+        //
+        // Bis v0.7 zog dieser Export seine Stationsangabe aus
+        // `breeding_stations` - einer Tabelle ohne personenbezogene Felder im
+        // engeren Sinn - und seine Namen aus `persons`. Seit Framework#336 ist
+        // beides EINE Tabelle, und die trägt zusätzlich email, phone, mobile,
+        // street, house_number, postal_code, address, contact_person und das
+        // interne Freitextfeld contact_info. Ein `SELECT *` oder eine bequem
+        // erweiterte Spaltenliste würde diese Felder ab v0.8 in eine CSV-Datei
+        // schreiben, die vorher nur Namen enthielt - und die per E-Mail
+        // weitergereicht, in eine Tabellenkalkulation geladen und auf
+        // Fremdrechnern abgelegt wird, wo keine Löschfrist sie mehr erreicht.
+        //
+        // Wer hier Kontaktspalten ergänzen will, wendet dieselbe Regel an wie
+        // die öffentliche Seite (docs/kontaktliste-umstellung.md,
+        // "Datenschutz-Grenze"):
+        //   immer:                 id, name, city, state, country,
+        //                          membership_status, website, is_breeder
+        //   nur bei contact_public=1: email, phone, mobile, street,
+        //                          house_number, postal_code, address,
+        //                          contact_person
+        //   nie:                   contact_info
+        // Kein `SELECT *` auf `contacts`, auch nicht in diesem
+        // rechtegeschützten Pfad.
         $sql = "
             SELECT
                 h.id, h.name, h.ueln, h.foreign_ueln, h.birth_year, h.birth_date, h.color, h.sex, h.breed, h.height_cm, h.status, h.is_deceased, h.death_year,
@@ -317,7 +382,7 @@ class ExportController extends BaseController {
                 hpx.breeder_name,
                 hpx.owner_name
             FROM horses h
-            LEFT JOIN breeding_stations bs ON h.breeding_station_id = bs.id AND bs.deleted_at IS NULL
+            LEFT JOIN contacts bs ON h.breeding_station_id = bs.id AND bs.deleted_at IS NULL
             LEFT JOIN horses sire ON h.sire_id = sire.id AND sire.deleted_at IS NULL
             LEFT JOIN horses dam ON h.dam_id = dam.id AND dam.deleted_at IS NULL
             LEFT JOIN (
@@ -325,7 +390,7 @@ class ExportController extends BaseController {
                        GROUP_CONCAT(DISTINCT CASE WHEN hp.role = 'breeder' THEN p.name END SEPARATOR ', ') AS breeder_name,
                        GROUP_CONCAT(DISTINCT CASE WHEN hp.role = 'owner' THEN p.name END SEPARATOR ', ') AS owner_name
                 FROM horse_persons hp
-                JOIN persons p ON p.id = hp.person_id AND p.deleted_at IS NULL
+                JOIN contacts p ON p.id = hp.contact_id AND p.deleted_at IS NULL
                 GROUP BY hp.horse_id
             ) hpx ON hpx.horse_id = h.id
             WHERE {$whereSql}
@@ -335,6 +400,41 @@ class ExportController extends BaseController {
         $stmt = Database::getInstance()->prepare($sql);
         $stmt->execute($params);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Protokoll (#352): Ein Export ist eine der Aktionen, die
+        // docs/plugin-development.md ausdrücklich nennt ("importieren,
+        // exportieren, versenden"). Er ändert zwar nichts im Verzeichnis,
+        // trägt aber den halben Bestand samt Züchter- und Besitzernamen aus
+        // dem System heraus - genau das, wovon hinterher jemand wissen will,
+        // wann es geschah und wer es tat.
+        //
+        // Protokolliert werden nur die NAMEN der gesetzten Filterfelder und
+        // die Zeilenzahl, nicht die eingegebenen Werte: `q_breeder=Müller` ist
+        // ein Personenname, und das Protokoll wird dauerhaft aufbewahrt und
+        // von keiner Löschfrist erfasst.
+        $aktiveFilter = array_keys(array_filter([
+            'search' => $search !== '',
+            'q_name' => $qName !== '',
+            'q_ueln' => $qUeln !== '',
+            'birth_year_from' => $birthYearFrom !== null,
+            'birth_year_to' => $birthYearTo !== null,
+            'q_color' => $qColor !== '',
+            'q_sex' => $qSex !== '',
+            'q_breed' => $qBreed !== '',
+            'q_status' => $qStatus !== '',
+            'q_deceased' => $qDeceased !== '',
+            'q_breeder' => $qBreeder !== '',
+            'q_owner' => $qOwner !== '',
+            'q_station' => $qStation !== '',
+            'q_sire' => $qSire !== '',
+            'q_dam' => $qDam !== '',
+        ]));
+        PluginAudit::log(
+            'katalog-export',
+            'Katalog als CSV exportiert',
+            count($rows) . ' Datensätze',
+            $aktiveFilter === [] ? 'ohne Filter' : 'gesetzte Filter: ' . implode(', ', $aktiveFilter)
+        );
 
         header('Content-Type: text/csv; charset=utf-8');
         // "verzeichnis-" statt "hengstkatalog-" (#57): exportiert werden ALLE

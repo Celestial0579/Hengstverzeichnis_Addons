@@ -1,20 +1,27 @@
 {
     "slug": "kontaktanfrage",
     "name": "Kontaktanfrage",
-    "version": "1.0.0",
-    "core_compatibility": ">=0.7.0",
-    "core_supported_max": "0.7",
-    "description": "Kontaktformular auf Personen- und Deckstationsseiten mit E-Mail, Name und fester Gründe-Auswahl - ohne dass die Adresse des Empfängers öffentlich wird. Anfragen gehen an eine Team-Adresse, werden gespeichert und lassen sich im Backend weiterleiten; je Datensatz abschaltbar (Opt-out).",
+    "version": "1.1.0",
+    "core_compatibility": ">=0.8.0-beta.1",
+    "core_supported_max": "0.8",
+    "description": "Kontaktformular auf den Kontaktseiten mit E-Mail, Name und fester Gründe-Auswahl - ohne dass die Adresse des Empfängers öffentlich wird. Anfragen gehen an eine Team-Adresse, werden gespeichert und lassen sich im Backend weiterleiten; je Kontakt abschaltbar (Opt-out).",
     "author": "Hengstverzeichnis_Addons",
     "hooks": [
-        "person.detail_sections",
-        "station.detail_sections",
-        "person.edit_sections",
-        "station.edit_sections",
+        "contact.detail_sections",
+        "contact.edit_sections",
         "admin.dashboard_tiles"
     ],
     "permissions": [
         "kontaktanfrage.manage"
     ],
+    "owns": {
+        "tables": [
+            "plugin_kontaktanfrage_requests",
+            "plugin_kontaktanfrage_optout",
+            "plugin_kontaktanfrage_config"
+        ],
+        "directories": [],
+        "settings": []
+    },
     "entry": "Plugin.php"
 }

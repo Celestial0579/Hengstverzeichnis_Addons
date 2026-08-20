@@ -101,16 +101,15 @@ class Plugin {
      * @return array<int, array{method:string, path:string, callback:array}>
      */
     public function routes(): array {
+        // Die addoneigene Pferdesuche (/suche) ist mit Addons#125 entfallen.
+        // Sieben Addons brachten dieselbe Route und denselben JS-Block mit;
+        // der Kern liefert beides seit Framework#341 unter
+        // /admin/horses/search bzw. /js/horse-search.js.
         return [
             [
                 'method' => 'GET',
                 'path' => '/rechner',
                 'callback' => [RechnerController::class, 'show'],
-            ],
-            [
-                'method' => 'GET',
-                'path' => '/suche',
-                'callback' => [RechnerController::class, 'suche'],
             ],
         ];
     }
@@ -312,12 +311,13 @@ class RechnerController extends BaseController {
      * lud die Seite den GESAMTEN Pferdebestand und renderte ihn - inklusive
      * einem FjordColor::keyFromText() je Zeile - in ein zugeklapptes
      * <details>, das kaum ein Besucher öffnet. Alles jenseits der Grenze ist
-     * über das Suchfeld (-> /suche) erreichbar.
+     * über die Register-Übernahme im Formular erreichbar (Addons#125).
      */
     private const REGISTER_LIMIT = 200;
 
-    /** Maximale Trefferzahl der /suche-Route (#74). */
-    private const SUCHE_LIMIT = 50;
+    // Die maximale Trefferzahl der Pferdesuche steht seit Addons#125 im Kern
+    // (HorseSearchController::MAX_TREFFER) - die addoneigene Konstante ist
+    // mit der Route entfallen, die sie deckelte.
 
     public function __construct() {
         parent::__construct();
@@ -328,6 +328,17 @@ class RechnerController extends BaseController {
     public function show(): void {
         $sireColor = self::readColorParam('sire_color');
         $damColor = self::readColorParam('dam_color');
+
+        // Übernahme aus dem Register (Addons#125): Bis v0.7 stand hier ein
+        // reines Nachschlage-Feld - es zeigte die Farbe eines Pferdes im
+        // Vorschlagstext an, und man musste sie danach von Hand im Auswahlfeld
+        // wiederfinden. Es hing an einer addoneigenen /suche-Route, der siebten
+        // Kopie derselben Pferdesuche. Jetzt sucht das gemeinsame Feld des
+        // Kerns (nur Pferde MIT eingetragener Farbe), und der Rechner
+        // übernimmt die Farbe selbst - der Zwischenschritt entfällt.
+        $hinweise = [];
+        [$sireColor, $sireHorse] = self::colorFromHorse('sire_horse', $sireColor, 'Vater', $hinweise);
+        [$damColor, $damHorse] = self::colorFromHorse('dam_horse', $damColor, 'Mutter', $hinweise);
 
         // Gedeckelt statt Komplettbestand (#74); Pferde ohne eingetragene
         // Farbe trügen zur Farb-Nachschlage-Tabelle ohnehin nichts bei. Eine
@@ -364,9 +375,17 @@ class RechnerController extends BaseController {
             . '<span class="farbvererbung-muted">Fjord-spezifische Annahme (#50): Das Dun-(Falb-)Gen wird als fest '
             . 'vorhanden vorausgesetzt - für Pferde anderer Rassen ist das Ergebnis nicht aussagekräftig.</span></p>';
 
+        if ($hinweise !== []) {
+            $content .= '<p style="color:var(--text-muted);background:var(--surface-muted);padding:0.6rem 0.8rem;'
+                . 'border-radius:var(--border-radius, 4px);">'
+                . htmlspecialchars(implode(' ', $hinweise), ENT_QUOTES, 'UTF-8') . '</p>';
+        }
+
         $content .= '<form method="GET">';
         $content .= self::colorSelect('sire_color', 'Farbe des Vaters (Hengst)', $sireColor);
+        $content .= self::horsePickHtml('sire_horse', 'oder Farbe aus dem Register übernehmen (Vater)', $sireHorse);
         $content .= self::colorSelect('dam_color', 'Farbe der Mutter (Stute)', $damColor);
+        $content .= self::horsePickHtml('dam_horse', 'oder Farbe aus dem Register übernehmen (Mutter)', $damHorse);
         $content .= '<p><button type="submit" class="btn">Berechnen</button></p>';
         $content .= '</form>';
 
@@ -390,18 +409,6 @@ class RechnerController extends BaseController {
 
         $content .= '<details style="margin-top:1.5rem;"><summary>Farben im Register (zum Nachschlagen)</summary>';
 
-        // Suchfeld mit <datalist> (#74): schlägt Pferde samt Farbe und
-        // Falb-Einordnung direkt im Vorschlagstext nach - so bleiben auch
-        // Pferde jenseits der Tabellen-Obergrenze nachschlagbar, ohne den
-        // Gesamtbestand ins HTML zu rendern. Rein lesend, kein Hidden-Feld
-        // nötig: Die Antwort STEHT im Vorschlagstext.
-        $content .= '<div class="form-group" style="margin-top:0.5rem;">';
-        $content .= '<label for="farbvererbung_suche">Pferd nachschlagen</label>';
-        $content .= '<input type="text" id="farbvererbung_suche" class="form-control" list="farbvererbung_suche_liste"'
-            . ' placeholder="Name eintippen - Vorschläge zeigen Farbe und Falb-Einordnung …" autocomplete="off">';
-        $content .= '<datalist id="farbvererbung_suche_liste"></datalist>';
-        $content .= '</div>';
-
         $content .= '<table style="margin-top:0.5rem;">';
         foreach ($horses as $h) {
             $key = FjordColor::keyFromText($h['color'] ?? '');
@@ -415,7 +422,7 @@ class RechnerController extends BaseController {
         if ($registerTruncated) {
             $content .= '<p class="farbvererbung-muted">Aus Platzgründen nur die ersten '
                 . self::REGISTER_LIMIT . ' Pferde (alphabetisch) mit eingetragener Farbe - '
-                . 'weitere über das Suchfeld oben oder die vollständige Liste unter '
+                . 'weitere über die Register-Übernahme im Formular oben oder die vollständige Liste unter '
                 . '<a href="/admin/horses">Pferde verwalten</a>.</p>';
         }
         $content .= '</details>';
@@ -423,75 +430,101 @@ class RechnerController extends BaseController {
         $content .= '<p style="margin-top:2rem;"><a href="/admin" class="btn btn-secondary">Zurück zum Dashboard</a></p>';
         $content .= '</div>';
 
-        // Befüllt die datalist über die /suche-Route (#74); Bauart wie im
-        // inzuchtkoeffizient-Addon (entprelltes fetch, still scheiternd -
-        // die Vorschläge sind Komfort, die Tabelle bleibt auch ohne JS da).
-        $content .= '<script>
-            (function () {
-                var feld = document.getElementById("farbvererbung_suche");
-                var liste = document.getElementById("farbvererbung_suche_liste");
-                var timer = null;
-                feld.addEventListener("input", function () {
-                    if (timer) { clearTimeout(timer); }
-                    timer = setTimeout(function () {
-                        fetch("/plugin/farbvererbung/suche?q=" + encodeURIComponent(feld.value.trim()))
-                            .then(function (antwort) { return antwort.ok ? antwort.json() : []; })
-                            .then(function (zeilen) {
-                                liste.textContent = "";
-                                zeilen.forEach(function (zeile) {
-                                    var option = document.createElement("option");
-                                    option.value = zeile.label;
-                                    liste.appendChild(option);
-                                });
-                            })
-                            .catch(function () { /* Vorschläge sind Komfort - still scheitern lassen */ });
-                    }, 200);
-                });
-            })();
-        </script>';
+        // Progressive Enhancement: Das Skript des Kerns (Framework#341)
+        // verdrahtet jedes Feld mit der Klasse `hv-pferdesuche` und füllt das
+        // über `data-ziel` benannte <select>. Ohne JavaScript bleibt die
+        // Übernahme leer - der Rechner selbst arbeitet dann über die beiden
+        // Farb-Auswahlfelder weiter, die Übernahme ist reiner Komfort.
+        $content .= '<script src="/js/horse-search.js"></script>';
 
         PluginPage::render('Fjord-Farbvererbungsrechner', $content);
     }
 
     /**
-     * JSON-Suchroute für das Nachschlage-Feld (#74): liefert höchstens
-     * SUCHE_LIMIT Treffer als "Name (Jahr) - Farbe -> Falb-Einordnung" statt
-     * des früheren Gesamtbestands in der Tabelle. Sichtbarkeit wie die Seite
-     * selbst (bewusst auch unveröffentlichte Pferde, denn die Route läuft
-     * durch denselben berechtigungsprüfenden Konstruktor - siehe README).
+     * Übernimmt die Farbe eines im Register gewählten Pferdes (Addons#125).
+     *
+     * Warum überhaupt serverseitig: Das gemeinsame Suchfeld des Kerns liefert
+     * bewusst nur `id` und `label` - ein Suchendpunkt ist eine bequeme Stelle,
+     * um an Daten zu kommen, und was er nicht ausliefert, kann nicht abfließen
+     * (Framework#341). Die Farbe wird deshalb hier nachgeschlagen, für genau
+     * das eine gewählte Pferd.
+     *
+     * Eine AUSDRÜCKLICH gewählte Farbe schlägt die Übernahme. Sonst könnte ein
+     * Pferd, das man nur zum Nachschlagen ausgewählt hat, die eigene Eingabe
+     * still überschreiben - und der Rechner zeigte ein Ergebnis zu Farben, die
+     * niemand eingestellt hat.
+     *
+     * @param string $param GET-Feld mit der Pferde-ID (sire_horse/dam_horse)
+     * @param string|null $explicit ausdrücklich gewählter Farbschlüssel oder null
+     * @param string $rolle "Vater"/"Mutter" - nur für die Meldungen
+     * @param array<int, string> $hinweise wird um Meldungen für den Benutzer ergänzt
+     * @return array{0: string|null, 1: array<string, mixed>|null} Farbschlüssel und gewähltes Pferd
      */
-    public function suche(): void {
-        header('Content-Type: application/json; charset=utf-8');
-
-        $q = trim((string) ($_GET['q'] ?? ''));
-
-        $where = "deleted_at IS NULL AND color IS NOT NULL AND color != ''";
-        $params = [];
-        if ($q !== '') {
-            // Teilstring-Suche, gleiche Bauart wie inzuchtkoeffizient/Kern-Katalog.
-            $where .= ' AND name LIKE ?';
-            $params[] = '%' . $q . '%';
+    private static function colorFromHorse(string $param, ?string $explicit, string $rolle, array &$hinweise): array {
+        $id = isset($_GET[$param]) && $_GET[$param] !== '' ? (int) $_GET[$param] : 0;
+        if ($id <= 0) {
+            return [$explicit, null];
         }
 
         $stmt = Database::getInstance()->prepare(
-            "SELECT id, name, birth_year, color FROM horses WHERE {$where} ORDER BY name ASC LIMIT " . self::SUCHE_LIMIT
+            'SELECT id, name, birth_year, color FROM horses WHERE id = ? AND deleted_at IS NULL'
         );
-        $stmt->execute($params);
-
-        $result = [];
-        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-            $key = FjordColor::keyFromText($row['color'] ?? '');
-            $result[] = [
-                'id' => (int) $row['id'],
-                'label' => $row['name']
-                    . (!empty($row['birth_year']) ? ' (' . (int) $row['birth_year'] . ')' : '')
-                    . ' — ' . (string) $row['color']
-                    . ' → ' . ($key !== null ? FjordColor::label($key) : 'keine Falb-Zuordnung'),
-            ];
+        $stmt->execute([$id]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($row === false) {
+            $hinweise[] = 'Das als ' . $rolle . ' gewählte Pferd gibt es nicht (mehr).';
+            return [$explicit, null];
         }
 
-        echo json_encode($result);
-        exit;
+        $name = (string) $row['name'];
+        $key = FjordColor::keyFromText($row['color'] ?? '');
+        if ($key === null) {
+            $hinweise[] = 'Die für „' . $name . '" eingetragene Farbe „' . (string) ($row['color'] ?? '')
+                . '" lässt sich keiner der fünf Falbfarben zuordnen - bitte die Farbe des ' . $rolle . 's von Hand wählen.';
+            return [$explicit, $row];
+        }
+
+        if ($explicit !== null && $explicit !== $key) {
+            $hinweise[] = 'Für den ' . $rolle . ' ist eine Farbe ausdrücklich gewählt - die Farbe von „'
+                . $name . '" (' . FjordColor::label($key) . ') wurde deshalb nicht übernommen.';
+            return [$explicit, $row];
+        }
+
+        return [$key, $row];
+    }
+
+    /**
+     * Das gemeinsame Suchfeld des Kerns (Addons#125) für die Register-
+     * Übernahme: Textfeld mit der Klasse `hv-pferdesuche`, das
+     * /js/horse-search.js verdrahtet, plus das <select>, das es füllt und das
+     * den Feldnamen trägt.
+     *
+     * `data-nur-mit-farbe="1"` schränkt auf Pferde mit eingetragener Farbe
+     * ein - ein Pferd ohne Farbe kann hier nichts beitragen, und der Filter
+     * gehört auf die Seite, die die Zeilen ohnehin schon liest.
+     *
+     * @param array<string, mixed>|null $horse bereits gewähltes Pferd (oder null)
+     */
+    private static function horsePickHtml(string $field, string $label, ?array $horse): string {
+        $anzeige = '';
+        if ($horse !== null) {
+            $anzeige = (string) $horse['name']
+                . (!empty($horse['birth_year']) ? ' (' . (int) $horse['birth_year'] . ')' : '');
+        }
+
+        return '<div class="form-group">'
+            . '<label for="' . $field . '_suche">' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</label>'
+            . '<input type="text" id="' . $field . '_suche" class="form-control hv-pferdesuche"'
+            . ' data-ziel="' . $field . '" data-nur-mit-farbe="1" autocomplete="off"'
+            . ' placeholder="Name eintippen und Vorschlag übernehmen …"'
+            . ' value="' . htmlspecialchars($anzeige, ENT_QUOTES, 'UTF-8') . '">'
+            . '<select name="' . $field . '" id="' . $field . '" class="form-control" style="margin-top:0.4rem;">'
+            . ($horse !== null
+                ? '<option value="' . (int) $horse['id'] . '" selected>'
+                    . htmlspecialchars($anzeige, ENT_QUOTES, 'UTF-8') . '</option>'
+                : '<option value="">– keine Übernahme –</option>')
+            . '</select>'
+            . '</div>';
     }
 
     private static function readColorParam(string $name): ?string {

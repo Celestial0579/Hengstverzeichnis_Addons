@@ -1,13 +1,18 @@
 {
     "slug": "deckanfrage",
     "name": "Deckanfrage-Formular",
-    "version": "1.1.3",
-    "core_compatibility": ">=0.4.0",
-    "core_supported_max": "0.7",
+    "version": "1.2.0",
+    "core_compatibility": ">=0.8.0-beta.1",
+    "core_supported_max": "0.8",
     "description": "Ergänzt ein 'Deckanfrage stellen'-Formular auf der Pferde-Detailseite, das direkt an die E-Mail-Adresse der Deckstation gesendet wird - angezeigt nur, wenn die verknüpfte Station veröffentlicht und ihre Adresse damit öffentlich sichtbar ist.",
     "author": "Hengstverzeichnis_Addons",
     "hooks": [
         "horse.detail_sections"
     ],
+    "owns": {
+        "tables": [
+            "plugin_deckanfrage_requests"
+        ]
+    },
     "entry": "Plugin.php"
 }

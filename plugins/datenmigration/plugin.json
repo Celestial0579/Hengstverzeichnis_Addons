@@ -1,13 +1,24 @@
 {
     "slug": "datenmigration",
     "name": "Datenmigration (Instanz-Umzug)",
-    "version": "1.0.2",
-    "core_compatibility": ">=0.4.0",
-    "core_supported_max": "0.7",
-    "description": "Vollständiger Umzug einer Instanz auf eine andere: Export von Datenbank, Uploads und Manifest als ein Archiv, geprüfter Import auf der Zielinstanz (Versionsabgleich, Vorschau, Sicherungs-Dump vor dem Anwenden).",
+    "version": "1.1.0",
+    "core_compatibility": ">=0.8.0-beta.1",
+    "core_supported_max": "0.8",
+    "description": "Umzug einer Instanz auf eine andere: Export von Datenbank, Uploads und Manifest als ein Archiv - mit Auswahl, was mitgeht (Benutzerkonten und Zugangsdaten bleiben per Vorgabe zurück) -, geprüfter Import auf der Zielinstanz (Versionsabgleich, Vorschau, Sicherungs-Dump vor dem Anwenden, Teilarchive werden zusammengeführt statt ersetzt).",
     "author": "Hengstverzeichnis_Addons",
     "hooks": [
         "admin.dashboard_tiles"
     ],
+    "permissions": [
+        "datenmigration.export",
+        "datenmigration.import"
+    ],
+    "owns": {
+        "tables": [],
+        "directories": [
+            "var/datenmigration"
+        ],
+        "settings": []
+    },
     "entry": "Plugin.php"
 }

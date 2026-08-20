@@ -13,7 +13,9 @@ namespace Tests\Functional;
  * den Farbrechner mit einem eindeutigen Kreuzungsfall (Rotfalbe × Rotfalbe →
  * 100 % Rotfalbe, da ee × ee immer ee ergibt) sowie die Durchsetzung der selbst
  * registrierten Berechtigung farbvererbung.calculate; seit #74 außerdem das
- * gedeckelte Nachschlage-Element "Farben im Register" samt /suche-Route.
+ * gedeckelte Nachschlage-Element "Farben im Register" und seit #125 die
+ * Farbübernahme aus dem Register über die GEMEINSAME Pferdesuche des Kerns
+ * (die addoneigene /suche-Route ist entfallen).
  *
  * Die Rechen-MATRIX (Agouti-/Cream-Locus, Heterozygotie-Annahme, Summe = 1)
  * prüft tests/Unit/FarbvererbungGenetikTest.php ohne HTTP (#76) - hier bleibt
@@ -22,6 +24,7 @@ namespace Tests\Functional;
 class FarbvererbungPluginTest extends FunctionalTestCase {
 
     use HorseListHelper;
+    use PferdesucheHelper;
 
     private const SLUG = 'farbvererbung';
 
@@ -110,34 +113,55 @@ class FarbvererbungPluginTest extends FunctionalTestCase {
 
         // 2b. Nachschlage-Element "Farben im Register" (#74): statt des
         // früheren Komplettbestands eine gedeckelte Tabelle (nur Pferde MIT
-        // eingetragener Farbe) plus Suchfeld mit <datalist> an der /suche-Route.
+        // eingetragener Farbe).
         $noColorId = $this->createHorse($admin, "Farblos-{$unique}", ['status' => 'active']);
         $registerPage = $admin->get('/plugin/farbvererbung/rechner');
         $this->assertSame(200, $registerPage->statusCode);
-        $this->assertStringContainsString('list="farbvererbung_suche_liste"', $registerPage->body, 'Suchfeld des Nachschlage-Elements fehlt.');
-        $this->assertStringContainsString('<datalist id="farbvererbung_suche_liste">', $registerPage->body, 'datalist des Nachschlage-Elements fehlt.');
         $this->assertStringContainsString("Farbe-{$unique}", $registerPage->body, 'Pferd mit eingetragener Farbe gehört in die Nachschlage-Tabelle.');
         $this->assertStringNotContainsString("Farblos-{$unique}", $registerPage->body,
             'Ein Pferd OHNE eingetragene Farbe trägt zur Farb-Nachschlage-Tabelle nichts bei (#74).');
 
-        // 2c. /suche-Route (#74): JSON, Name gefiltert, Vorschlagstext nennt
-        // Farbe und Falb-Einordnung direkt.
-        $sucheHits = json_decode($admin->get('/plugin/farbvererbung/suche?q=' . urlencode("Farbe-{$unique}"))->body, true);
-        $this->assertIsArray($sucheHits);
-        $this->assertCount(1, $sucheHits, 'Suche nach dem eindeutigen Namen muss genau einen Treffer liefern.');
-        $this->assertSame($horseId, $sucheHits[0]['id']);
-        $this->assertStringContainsString("Farbe-{$unique}", $sucheHits[0]['label']);
-        $this->assertStringContainsString('Rotfalbe (Rødblakk)', $sucheHits[0]['label'],
-            'Der Vorschlagstext muss die Falb-Einordnung der eingetragenen Farbe nennen - er IST die Antwort des Nachschlagens.');
+        // 2c. Register-Übernahme (#125): Je Elternteil steht das gemeinsame
+        // Suchfeld des Kerns bereit, eingeschränkt auf Pferde MIT Farbe. Die
+        // addoneigene /suche-Route ist entfallen - sie war eine von sieben
+        // Kopien derselben Pferdesuche.
+        $this->assertGemeinsamePferdesuche($registerPage->body, 'sire_horse', ['data-nur-mit-farbe' => '1']);
+        $this->assertGemeinsamePferdesuche($registerPage->body, 'dam_horse', ['data-nur-mit-farbe' => '1']);
+        $this->assertEigeneSuchrouteEntfallen($admin, '/plugin/farbvererbung/suche');
 
-        $this->assertSame([], json_decode($admin->get('/plugin/farbvererbung/suche?q=' . urlencode("Farblos-{$unique}"))->body, true),
-            'Pferde ohne eingetragene Farbe haben in den Farb-Vorschlägen nichts zu suchen.');
+        // 2d. Und die Übernahme rechnet auch: Das frühere Feld ZEIGTE die
+        // Farbe nur an, man musste sie danach von Hand im Auswahlfeld
+        // wiederfinden. Jetzt setzt das gewählte Pferd sie selbst.
+        $uebernahme = $admin->get("/plugin/farbvererbung/rechner?sire_horse={$horseId}&dam_horse={$horseId}");
+        $this->assertSame(200, $uebernahme->statusCode);
+        $this->assertStringContainsString('100,00 %', $uebernahme->body,
+            'Rotfalbe x Rotfalbe ergibt 100 % Rotfalbe - die Farbe muss also aus dem gewählten Pferd stammen.');
+        $this->assertMatchesRegularExpression(
+            '/<option value="rodblakk" selected>/',
+            $uebernahme->body,
+            'Die übernommene Farbe muss im Auswahlfeld sichtbar sein, nicht nur im Ergebnis.'
+        );
+        $this->assertMatchesRegularExpression(
+            '/<option value="' . $horseId . '" selected>[^<]*Farbe-' . preg_quote($unique, '/') . '/',
+            $uebernahme->body,
+            'Das gewählte Pferd muss als vorgetragene Option stehenbleiben.'
+        );
 
-        // Die generische Grundfarbe aus 1b bleibt auch hier ohne Falb-Zuordnung
-        // (gleiche keyFromText()-Regel wie auf der Detailseite, #50).
-        $plainHits = json_decode($admin->get('/plugin/farbvererbung/suche?q=' . urlencode("Braunes-{$unique}"))->body, true);
-        $this->assertCount(1, $plainHits);
-        $this->assertStringContainsString('keine Falb-Zuordnung', $plainHits[0]['label']);
+        // 2e. Eine ausdrücklich gewählte Farbe schlägt die Übernahme - sonst
+        // überschriebe ein nur zum Nachschlagen gewähltes Pferd still die
+        // eigene Eingabe.
+        $vorrang = $admin->get("/plugin/farbvererbung/rechner?sire_color=gulblakk&sire_horse={$horseId}&dam_color=gulblakk");
+        $this->assertStringContainsString('nicht übernommen', $vorrang->body,
+            'Der Vorrang der ausdrücklichen Farbe muss benannt werden, nicht stillschweigend gelten.');
+        $this->assertMatchesRegularExpression('/<option value="gulblakk" selected>/', $vorrang->body);
+
+        // 2f. Die generische Grundfarbe aus 1b lässt sich keiner Falbfarbe
+        // zuordnen (gleiche keyFromText()-Regel wie auf der Detailseite, #50) -
+        // die Übernahme sagt das und ändert nichts.
+        $unzuordenbar = $admin->get("/plugin/farbvererbung/rechner?sire_horse={$plainBrownId}");
+        $this->assertStringContainsString('keiner der fünf Falbfarben zuordnen', $unzuordenbar->body);
+        $this->assertStringNotContainsString('Voraussichtliche Fohlenfarbe', $unzuordenbar->body,
+            'Ohne zuordenbare Farbe darf kein Ergebnis erscheinen.');
 
         // 3. Berechtigungsdurchsetzung: Editor ohne farbvererbung.calculate -> 403 ...
         $editorGroupId = $this->findBuiltinGroupId($admin, 'Editor');
@@ -154,12 +178,10 @@ class FarbvererbungPluginTest extends FunctionalTestCase {
             $deniedResponse->statusCode,
             'Ohne farbvererbung.calculate sollte die Plugin-Route 403 liefern.'
         );
-        $deniedSuche = $editor->get('/plugin/farbvererbung/suche?q=Farbe');
-        $this->assertSame(
-            403,
-            $deniedSuche->statusCode,
-            'Die /suche-Route (#74) unterliegt derselben Berechtigung wie der Rechner.'
-        );
+        // Die Vorschläge holt seit #125 der Kern-Endpunkt (er verlangt
+        // `horses.view`, siehe README) - dieses Addon stellt keine eigene
+        // Suchroute mehr daneben.
+        $this->assertEigeneSuchrouteEntfallen($editor, '/plugin/farbvererbung/suche');
 
         // ... und ist nach Zuweisung der Berechtigung erreichbar.
         $this->setGroupPermissions($admin, $editorGroupId, self::EDITOR_DEFAULT_PERMISSIONS + [

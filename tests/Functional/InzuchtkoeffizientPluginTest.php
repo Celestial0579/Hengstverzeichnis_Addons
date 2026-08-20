@@ -17,12 +17,14 @@ namespace Tests\Functional;
  * Deckt sowohl den automatischen Abschnitt auf der Detailseite als auch den
  * Verpaarungsrechner samt Berechtigungsdurchsetzung ab; seit #72 zusätzlich
  * einen Fall mit gemeinsamem Ahnen in der SECHSTEN Generation der Vaterlinie
- * (Detailseite und Rechner müssen denselben Wert liefern) und seit #74 die
- * /suche-Route hinter den <datalist>-Auswahlfeldern.
+ * (Detailseite und Rechner müssen denselben Wert liefern) und seit #125 den
+ * Einbau der GEMEINSAMEN Pferdesuche des Kerns anstelle der addoneigenen
+ * /suche-Route.
  */
 class InzuchtkoeffizientPluginTest extends FunctionalTestCase {
 
     use HorseListHelper;
+    use PferdesucheHelper;
 
     private const SLUG = 'inzuchtkoeffizient';
 
@@ -79,37 +81,25 @@ class InzuchtkoeffizientPluginTest extends FunctionalTestCase {
         $this->assertStringContainsString('0,00 %', $unrelatedDetail->body);
 
         // 3. Verpaarungsrechner: Admin hat serverseitig immer alle Berechtigungen.
-        // Seit #74 wählt das Formular die Elterntiere über <input list> +
-        // <datalist> mit serverseitiger /suche-Route statt über ein <select>
-        // mit dem kompletten Pferdebestand.
+        // Seit #125 wählt das Formular die Elterntiere über das GEMEINSAME
+        // Suchfeld des Kerns (hv-pferdesuche + /js/horse-search.js), das den
+        // Endpunkt /admin/horses/search anspricht - die addoneigene
+        // /suche-Route war eine von sieben Kopien derselben Suche.
         $sexMare = $this->createHorse($admin, "IkStute-{$unique}", ['status' => 'active', 'sex' => 'mare']);
         $sexStallion = $this->createHorse($admin, "IkHengst-{$unique}", ['status' => 'active', 'sex' => 'stallion']);
 
         $formPage = $admin->get('/plugin/inzuchtkoeffizient/rechner');
         $this->assertSame(200, $formPage->statusCode);
-        foreach (['sire_id', 'dam_id'] as $field) {
-            $this->assertStringContainsString("list=\"{$field}_liste\"", $formPage->body, "Suchfeld für {$field} fehlt.");
-            $this->assertStringContainsString("<datalist id=\"{$field}_liste\">", $formPage->body, "datalist für {$field} fehlt.");
-            $this->assertStringContainsString("type=\"hidden\" name=\"{$field}\"", $formPage->body, "Hidden-Feld {$field} fehlt.");
-        }
-        $this->assertStringNotContainsString('<select name="sire_id"', $formPage->body, 'Das Komplettbestands-Select ist seit #74 ersetzt.');
+        // Der rolle-Parameter (#54) muss durchgereicht werden: Das Hengst-Feld
+        // soll keine Stuten/Wallache vorschlagen und umgekehrt.
+        $this->assertGemeinsamePferdesuche($formPage->body, 'sire_id', ['data-rolle' => 'sire']);
+        $this->assertGemeinsamePferdesuche($formPage->body, 'dam_id', ['data-rolle' => 'dam']);
+        // Die ID reist im <option> des Auswahlfelds - die frühere
+        // "[#id]"-Krücke im ANZEIGETEXT ist damit weg.
+        $this->assertStringNotContainsString("[#{$sexStallion}]", $formPage->body);
 
-        // 3a. /suche-Route (#74): JSON, LIMIT-gedeckelt, Geschlechtsfilter (#54)
-        // wie zuvor die Dropdowns - NULL-Geschlecht bleibt in beiden Rollen.
-        $sireHits = json_decode($admin->get('/plugin/inzuchtkoeffizient/suche?q=' . urlencode("IkHengst-{$unique}") . '&rolle=sire')->body, true);
-        $this->assertIsArray($sireHits);
-        $this->assertCount(1, $sireHits, 'Suche nach dem eindeutigen Hengst-Namen muss genau einen Treffer liefern.');
-        $this->assertSame($sexStallion, $sireHits[0]['id']);
-        $this->assertStringContainsString("IkHengst-{$unique}", $sireHits[0]['label']);
-        $this->assertStringContainsString("[#{$sexStallion}]", $sireHits[0]['label'], 'Der Eintragstext muss die ID als "[#id]"-Suffix tragen (Zuordnung im Formular).');
-
-        $this->assertSame([], json_decode($admin->get('/plugin/inzuchtkoeffizient/suche?q=' . urlencode("IkStute-{$unique}") . '&rolle=sire')->body, true),
-            'Stute darf nicht als "Hengst (Vater)" vorgeschlagen werden.');
-        $this->assertSame([], json_decode($admin->get('/plugin/inzuchtkoeffizient/suche?q=' . urlencode("IkHengst-{$unique}") . '&rolle=dam')->body, true),
-            'Hengst darf nicht als "Stute (Mutter)" vorgeschlagen werden.');
-        $damHits = json_decode($admin->get('/plugin/inzuchtkoeffizient/suche?q=' . urlencode("IkStute-{$unique}") . '&rolle=dam')->body, true);
-        $this->assertCount(1, $damHits);
-        $this->assertSame($sexMare, $damHits[0]['id']);
+        // 3a. Die addoneigene Suchroute ist entfallen (#125).
+        $this->assertEigeneSuchrouteEntfallen($admin, '/plugin/inzuchtkoeffizient/suche');
 
         // 3b. Serverprüfung (#54) unabhängig von den Vorschlägen: eine
         // rollen-widrige ID im Request wird weiterhin verworfen.
@@ -120,9 +110,16 @@ class InzuchtkoeffizientPluginTest extends FunctionalTestCase {
         $calcResponse = $admin->get("/plugin/inzuchtkoeffizient/rechner?sire_id={$cId}&dam_id={$dId}");
         $this->assertSame(200, $calcResponse->statusCode);
         $this->assertStringContainsString('25,00 %', $calcResponse->body);
-        // Vorbelegung der Suchfelder aus den übergebenen IDs (samt ID-Suffix).
+        // Vorbelegung aus den übergebenen IDs: Das Auswahlfeld trägt das
+        // gewählte Pferd als einzige Option vor - sonst ginge es verloren,
+        // sobald man nur die Generationstiefe ändert und erneut absendet
+        // (#125).
         $this->assertStringContainsString("C-{$unique}", $calcResponse->body);
-        $this->assertStringContainsString("[#{$cId}]", $calcResponse->body);
+        $this->assertMatchesRegularExpression(
+            '/<option value="' . $cId . '" selected>[^<]*C-' . preg_quote($unique, '/') . '/',
+            $calcResponse->body,
+            'Das gewählte Pferd muss als vorgetragene Option im Auswahlfeld stehen.'
+        );
 
         // 3c. Regression zu #72: gemeinsamer Ahne "Rex" in der SECHSTEN
         // Generation der Vaterlinie (H -> V1 -> ... -> V4 -> Rex, n1 = 5) und
@@ -167,13 +164,6 @@ class InzuchtkoeffizientPluginTest extends FunctionalTestCase {
             $deniedResponse->statusCode,
             'Ohne inzuchtkoeffizient.calculate sollte die Plugin-Route 403 liefern.'
         );
-        $deniedSuche = $editor->get('/plugin/inzuchtkoeffizient/suche?q=Ik&rolle=sire');
-        $this->assertSame(
-            403,
-            $deniedSuche->statusCode,
-            'Die /suche-Route (#74) unterliegt derselben Berechtigung wie der Rechner.'
-        );
-
         // ... und ist nach Zuweisung der Berechtigung erreichbar.
         $this->setGroupPermissions($admin, $editorGroupId, self::EDITOR_DEFAULT_PERMISSIONS + [
             'inzuchtkoeffizient' => ['calculate'],
@@ -183,8 +173,11 @@ class InzuchtkoeffizientPluginTest extends FunctionalTestCase {
         $this->assertSame(200, $allowedResponse->statusCode);
         $this->assertStringContainsString('25,00 %', $allowedResponse->body);
 
-        $allowedSuche = json_decode($editor->get('/plugin/inzuchtkoeffizient/suche?q=' . urlencode("IkHengst-{$unique}") . '&rolle=sire')->body, true);
-        $this->assertIsArray($allowedSuche);
-        $this->assertCount(1, $allowedSuche);
+        // Die Vorschläge holt seit #125 der Kern-Endpunkt, der `horses.view`
+        // verlangt - nicht mehr diese Route. Wer den Rechner nutzen darf,
+        // braucht dafür also zusätzlich das Leserecht auf Pferde; das steht so
+        // im README. Geprüft wird hier nur, dass das Addon keine eigene
+        // Suchroute mehr danebenstellt.
+        $this->assertEigeneSuchrouteEntfallen($editor, '/plugin/inzuchtkoeffizient/suche');
     }
 }

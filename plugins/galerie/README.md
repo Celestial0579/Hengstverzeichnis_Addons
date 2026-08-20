@@ -47,19 +47,32 @@ der gewünschten Gruppe unter `/admin/groups` die Berechtigung
    Pferde-Detailseite, sobald mindestens ein Medium erfasst ist (Klick auf
    ein Foto öffnet die Lightbox, Escape oder Klick schließt sie).
 
+## Protokollierung
+
+Hinzufügen und Löschen eines Mediums stehen im Audit-Log des Kerns
+(Kategorie `galerie`, sichtbar unter **Admin → Protokoll**). Beim Löschen
+vermerkt der Eintrag auch die entfernte Bilddatei - vorher verschwand ein
+Galeriebild samt Datei spurlos
+([#134](https://github.com/Celestial0579/Hengstverzeichnis_Addons/issues/134)).
+Die Bildunterschrift bleibt draußen: freier Text, der Personen benennen kann.
+
 ## Technik
 
-- Berechtigung: Modul `galerie`, Aktion `manage` (Verwaltungsseite,
-  Pferdesuche und alle schreibenden Routen).
-- Routen: `/plugin/galerie/verwaltung` (GET), `/plugin/galerie/suche?q=…`
-  (GET, JSON für die Pferde-Datalist, max. 50 Treffer), `/verwaltung/store`
-  und `/verwaltung/delete` (POST).
-- Die Pferde-Auswahl der Verwaltung ist ein Suchfeld mit serverseitig
-  nachgeladener Vorschlagsliste (`<input list>` + `<datalist>`) statt eines
-  Voll-`<select>` über den gesamten Bestand; ohne JavaScript wird der
-  getippte Name beim Speichern serverseitig aufgelöst (eindeutiger Name,
-  „Name (Jahrgang)" oder das `[#id]`-Suffix der Vorschläge). Die Medienliste
-  ist mit 50 Einträgen je Seite paginiert (`?seite=…`).
+- Berechtigung: Modul `galerie`, Aktion `manage` (Verwaltungsseite und alle
+  schreibenden Routen).
+- Routen: `/plugin/galerie/verwaltung` (GET), `/verwaltung/store` und
+  `/verwaltung/delete` (POST).
+- Die Pferde-Auswahl der Verwaltung ist das gemeinsame Suchfeld des Kerns
+  (`hv-pferdesuche` + `/js/horse-search.js`, gespeist aus
+  `GET /admin/horses/search?q=…`, Framework#341); die addoneigene Route
+  `/plugin/galerie/suche` ist mit #125 entfallen - sie war eine von sieben
+  Kopien derselben Pferdesuche. Ohne JavaScript bleibt das Auswahlfeld leer,
+  und der getippte Name wird beim Speichern serverseitig aufgelöst
+  (eindeutiger Name, „Name (Jahrgang)" oder ein ausdrücklich angegebenes
+  `[#id]`-Suffix). Die Medienliste ist mit 50 Einträgen je Seite paginiert
+  (`?seite=…`). **Achtung:** Der Kern-Endpunkt verlangt `horses.view`; wer
+  `galerie.manage` hat, braucht für die Suche zusätzlich dieses Leserecht -
+  sonst bleibt der No-JS-Weg über den getippten Namen.
 - Schema-Anlage: über den `install()`-Hook des PluginManagers (einmal bei
   Aktivierung bzw. nach einem Addon-Update); auf älteren Kernen ohne diesen
   Hook greift ein marker-geführter Fallback (`.schema-1` im

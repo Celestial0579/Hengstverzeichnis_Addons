@@ -168,16 +168,21 @@ class BildauslieferungTest extends FunctionalTestCase {
 
         // 2. verkaufsboerse: Inserat anlegen, dann die oeffentliche Boerse.
         //
+        // Das Inserat entsteht seit Addons#119 im Abschnitt des
+        // Pferdeformulars; die addoneigene Verwaltungsseite ist entfallen. Die
+        // POST-Route ist dieselbe geblieben, nur der Weg zum Formular ist ein
+        // anderer.
+        //
         // `contact_email` ist Pflicht (VARCHAR NOT NULL). Fehlt es, entsteht
         // gar kein Inserat - die Boersenseite ist dann leer, und die
         // Abwesenheitspruefung unten waere gruen, ohne irgendetwas geprueft zu
         // haben. Genau dieser Fall ist beim Bau dieses Tests aufgetreten und
         // erst durch die Gegenprobe aufgefallen; deshalb steht darunter eine
         // ausdrueckliche Wirksamkeitspruefung.
-        $verwaltung = $admin->get('/plugin/verkaufsboerse/verwaltung');
-        $this->assertSame(200, $verwaltung->statusCode);
+        $pferdeformular = $admin->get('/admin/horses/edit?id=' . $horseId);
+        $this->assertSame(200, $pferdeformular->statusCode);
         $admin->post('/plugin/verkaufsboerse/verwaltung/store', [
-            'csrf_token' => $verwaltung->formField('csrf_token') ?? '',
+            'csrf_token' => $pferdeformular->formField('csrf_token') ?? '',
             'horse_id' => (string) $horseId,
             'price' => '1234',
             'description' => "Inserat {$unique}",

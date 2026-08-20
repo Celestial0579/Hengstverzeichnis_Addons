@@ -1,0 +1,28 @@
+{
+    "slug": "captcha-hcaptcha",
+    "name": "Spam-Schutz: hCaptcha",
+    "version": "1.0.0",
+    "core_compatibility": ">=0.8.0-beta.1",
+    "core_supported_max": "0.8",
+    "description": "Bindet hCaptcha als wählbaren Spam-Schutz für die öffentlichen Formulare an (captcha.*-Hooks). ACHTUNG: Drittanbieter - IP-Adresse und Browser-Angaben der Besucher gehen an Intuition Machines, Inc. (USA). Gehört in die Datenschutzerklärung; für das DSGVO-Portal ausdrücklich nicht empfohlen, siehe README.",
+    "author": "Hengstverzeichnis_Addons",
+    "hooks": [
+        "captcha.providers",
+        "captcha.render",
+        "captcha.verify",
+        "admin.dashboard_tiles"
+    ],
+    "permissions": [
+        "captcha-hcaptcha.manage"
+    ],
+    "owns": {
+        "tables": [],
+        "directories": [],
+        "settings": [
+            "plugin_captcha_hcaptcha_site_key",
+            "plugin_captcha_hcaptcha_secret",
+            "plugin_captcha_hcaptcha_letzter_fehler"
+        ]
+    },
+    "entry": "Plugin.php"
+}

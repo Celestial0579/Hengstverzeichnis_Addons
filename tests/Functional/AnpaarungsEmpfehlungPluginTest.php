@@ -17,9 +17,9 @@ namespace Tests\Functional;
  * alphabetisch früher steht. Die Reihenfolge wird bewusst nur innerhalb der
  * Ergebnistabelle (<tbody>) geprüft, nicht über die gesamte Seite.
  *
- * Deckt zusätzlich ab: die Durchsetzung der Berechtigung anpaarung.recommend
- * (Empfehlungs- UND Suchroute), die serverseitige Basispferd-Suche (#69,
- * /suche als JSON-Datalist-Quelle statt Voll-<select>), den No-JS-Fallback
+ * Deckt zusätzlich ab: die Durchsetzung der Berechtigung anpaarung.recommend,
+ * den Einbau der GEMEINSAMEN Pferdesuche des Kerns (#125, die addoneigene
+ * /suche-Route ist entfallen), den No-JS-Fallback
  * über base_q, die Tiefensemantik "Generationen je Elternteil = 6" (#72)
  * sowie den Kandidaten-Deckel vor der Berechnung (#69, limit x 5, max. 200)
  * samt Hinweistext.
@@ -27,6 +27,7 @@ namespace Tests\Functional;
 class AnpaarungsEmpfehlungPluginTest extends FunctionalTestCase {
 
     use HorseListHelper;
+    use PferdesucheHelper;
 
     private const SLUG = 'anpaarungs-empfehlung';
 
@@ -60,12 +61,14 @@ class AnpaarungsEmpfehlungPluginTest extends FunctionalTestCase {
         $response = $admin->get("/plugin/anpaarungs-empfehlung/empfehlung?base_id={$baseId}");
         $this->assertSame(200, $response->statusCode);
 
-        // Basispferd-Auswahl (#69): Suchfeld mit Datalist statt Voll-<select>
-        // über den gesamten Bestand; die gewählte ID reist im Hidden-Feld.
-        $this->assertStringContainsString('list="base_q_liste"', $response->body, 'Das Basispferd-Feld sollte eine Datalist referenzieren.');
-        $this->assertStringContainsString('<datalist id="base_q_liste">', $response->body);
-        $this->assertStringContainsString('name="base_id" id="base_id" value="' . $baseId . '"', $response->body, 'Die aufgelöste Basis-ID sollte im Hidden-Feld vorbelegt sein.');
-        $this->assertStringNotContainsString('<select name="base_id"', $response->body, 'Der frühere Voll-<select> über alle Pferde darf nicht mehr gerendert werden.');
+        // Basispferd-Auswahl (#125): das gemeinsame Suchfeld des Kerns; die
+        // aufgelöste ID steht als vorgetragene Option im Auswahlfeld.
+        $this->assertGemeinsamePferdesuche($response->body, 'base_id');
+        $this->assertMatchesRegularExpression(
+            '/<option value="' . $baseId . '" selected>[^<]*Base-' . preg_quote($unique, '/') . '/',
+            $response->body,
+            'Die aufgelöste Basis-ID sollte im Auswahlfeld vorbelegt sein.'
+        );
 
         // Tiefensemantik (#72): Standard sind 6 Generationen JE ELTERNTEIL -
         // identisch zum Verpaarungsrechner des Inzuchtkoeffizient-Addons.
@@ -118,19 +121,28 @@ class AnpaarungsEmpfehlungPluginTest extends FunctionalTestCase {
         $this->assertStringContainsString('Wallach erfasst', $geldingResponse->body);
         $this->assertStringNotContainsString('<tbody>', $geldingResponse->body, 'Für einen Wallach darf kein Ranking berechnet werden.');
 
-        // Serverseitige Basispferd-Suche (#69): JSON mit id + label, wie sie
-        // das Datalist-Script der Seite konsumiert.
-        $sucheResponse = $admin->get('/plugin/anpaarungs-empfehlung/suche?q=' . urlencode("AAsib-{$unique}"));
-        $this->assertSame(200, $sucheResponse->statusCode);
-        $suggestions = json_decode($sucheResponse->body, true);
-        $this->assertIsArray($suggestions, "Suchroute sollte JSON liefern. Body: {$sucheResponse->body}");
-        $this->assertCount(1, $suggestions, 'Der eindeutige Testname sollte genau einen Treffer liefern.');
-        $this->assertSame($sibId, (int) $suggestions[0]['id']);
-        $this->assertStringContainsString("AAsib-{$unique}", (string) $suggestions[0]['label']);
+        // Basispferd-Auswahl (#125): das GEMEINSAME Suchfeld des Kerns statt
+        // einer eigenen Kopie. Das Textfeld behält seinen Namen `base_q` -
+        // daran hängt der No-JS-Fallback direkt darunter.
+        $formPage = $admin->get('/plugin/anpaarungs-empfehlung/empfehlung');
+        $this->assertSame(200, $formPage->statusCode);
+        $this->assertGemeinsamePferdesuche($formPage->body, 'base_id');
+        $this->assertMatchesRegularExpression(
+            '/<input[^>]*name="base_q"[^>]*class="[^"]*hv-pferdesuche/',
+            $formPage->body,
+            'Das Textfeld muss weiterhin `base_q` heißen - daran hängt der No-JS-Fallback.'
+        );
+        $this->assertEigeneSuchrouteEntfallen($admin, '/plugin/anpaarungs-empfehlung/suche');
 
-        // Leere Suche liefert eine leere Liste statt des Gesamtbestands.
-        $emptySuche = $admin->get('/plugin/anpaarungs-empfehlung/suche?q=');
-        $this->assertSame('[]', trim($emptySuche->body), 'Ohne Suchbegriff darf die Suchroute nichts ausliefern.');
+        // Das gewählte Basispferd bleibt als vorgetragene Option stehen -
+        // sonst ginge es verloren, sobald man nur Tiefe oder Anzahl ändert
+        // und erneut absendet.
+        $vorbelegt = $admin->get("/plugin/anpaarungs-empfehlung/empfehlung?base_id={$sibId}");
+        $this->assertMatchesRegularExpression(
+            '/<option value="' . $sibId . '" selected>[^<]*AAsib-' . preg_quote($unique, '/') . '/',
+            $vorbelegt->body,
+            'Das gewählte Basispferd muss im Auswahlfeld vorgetragen sein.'
+        );
 
         // No-JS-Fallback: Ohne base_id löst die Seite den getippten Text
         // (base_q) serverseitig auf, sofern er eindeutig ist.
@@ -179,14 +191,11 @@ class AnpaarungsEmpfehlungPluginTest extends FunctionalTestCase {
             'Ohne anpaarung.recommend sollte die Plugin-Route 403 liefern.'
         );
 
-        // ... die Suchroute gibt ohne die Berechtigung ebenfalls nichts preis
-        // (sie liefert Namen auch unveröffentlichter Pferde).
-        $deniedSuche = $editor->get('/plugin/anpaarungs-empfehlung/suche?q=a');
-        $this->assertSame(
-            403,
-            $deniedSuche->statusCode,
-            'Auch die Suchroute verlangt anpaarung.recommend.'
-        );
+        // Die Vorschläge holt seit #125 der Kern-Endpunkt (er verlangt
+        // `horses.view`, siehe README) - dieses Addon stellt keine eigene
+        // Suchroute mehr daneben, an der die Rechteprüfung ein zweites Mal
+        // richtig sein müsste.
+        $this->assertEigeneSuchrouteEntfallen($editor, '/plugin/anpaarungs-empfehlung/suche');
 
         // ... und ist nach Zuweisung der Berechtigung erreichbar.
         $this->setGroupPermissions($admin, $editorGroupId, self::EDITOR_DEFAULT_PERMISSIONS + [

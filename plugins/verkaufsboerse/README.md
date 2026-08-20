@@ -22,18 +22,29 @@ funktionierender Mailversand konfiguriert sein.
 
 ## Funktionsweise
 
-- **Admin** (`/plugin/verkaufsboerse/verwaltung`): Inserat je Pferd anlegen
-  (Preis - ein leeres Preisfeld wird automatisch zu "auf Anfrage" -,
-  Beschreibung, Kontakt-E-Mail, optionales Ablaufdatum) oder entfernen. Ein
-  Pferd hat höchstens ein aktives Inserat - erneutes Speichern aktualisiert
-  es. Zur Auswahl stehen alle nicht gelöschten Pferde, auch
-  unveröffentlichte. Die Pferde-Auswahl ist ein Suchfeld mit serverseitig
-  nachgeladener Vorschlagsliste (`<input list>` + `<datalist>`,
-  `/plugin/verkaufsboerse/suche?q=…`, max. 50 Treffer) statt eines
-  Voll-`<select>` über den gesamten Bestand; ohne JavaScript wird der
-  getippte Name beim Speichern serverseitig aufgelöst (eindeutiger Name,
-  „Name (Jahrgang)" oder das `[#id]`-Suffix der Vorschläge). Die
-  Inseratsliste ist mit 50 Einträgen je Seite paginiert (`?seite=…`).
+- **Admin: im Datensatz des Pferdes** (`/admin/horses/edit?id=…`, Kern-Hook
+  `horse.edit_sections`): Der Abschnitt „🏷️ Verkaufsanzeige" trägt alle Felder
+  des Inserats - Preis (ein leeres Preisfeld wird automatisch zu „auf
+  Anfrage"), Beschreibung, Kontakt-E-Mail, optionales Ablaufdatum - sowie das
+  Entfernen einer bestehenden Anzeige. Ein Pferd hat höchstens ein Inserat;
+  erneutes Speichern aktualisiert es. Der Abschnitt weist außerdem aus, ob das
+  Inserat öffentlich sichtbar ist oder warum nicht (Pferd im Papierkorb,
+  unveröffentlicht, Anzeige abgelaufen).
+
+  Seit [#119](https://github.com/Celestial0579/Hengstverzeichnis_Addons/issues/119)
+  ist das der einzige Pflegeweg: Die addoneigene Verwaltungsseite
+  (`/plugin/verkaufsboerse/verwaltung`), ihre Dashboard-Kachel und ihre
+  Pferdesuche (`/suche`,
+  [#125](https://github.com/Celestial0579/Hengstverzeichnis_Addons/issues/125))
+  sind entfallen - sie ließen dasselbe Pferd über eine zweite Suche erneut
+  heraussuchen, obwohl man in dessen Datensatz bereits stand. Der Abschnitt
+  erscheint nur mit `verkaufsboerse.manage`; die Berechtigung ist damit ein
+  Zusatzschalter zu `horses.edit`. Die Ziele der Formulare sind unverändert
+  `POST /plugin/verkaufsboerse/verwaltung/store` und `…/delete`; der Rückweg
+  führt auf `/admin/horses/edit?id=…`.
+
+  Die bestandsweite Frage „welche Anzeigen laufen gerade" beantwortet die
+  öffentliche Börse (siehe unten).
 - **Öffentliche Übersicht** (`/plugin/verkaufsboerse/liste`): listet aktive
   Inserate **veröffentlichter** Pferde (und nur, wenn die Gast-Gruppe
   `horses.view` hat), verlinkt jeweils auf die normale Pferde-Detailseite,

@@ -1,17 +1,15 @@
 {
     "slug": "zucht-suche",
     "name": "Zucht-Suche",
-    "version": "1.0.0",
-    "core_compatibility": ">=0.7.0",
-    "core_supported_max": "0.7",
-    "description": "Öffentliche Einstiegsseite 'Zucht': Züchter (persons.is_breeder) und Deckstationen nach Name, Ort, Bundesland/Kanton, Land und Mitgliedsstatus suchen, mit Zahl der zugeordneten veröffentlichten Pferde und Verlinkung auf /person bzw. /station.",
+    "version": "1.1.0",
+    "core_compatibility": ">=0.8.0-beta.1",
+    "core_supported_max": "0.8",
+    "description": "Öffentliche Einstiegsseite 'Zucht': Kontakte nach Rolle (Züchter über contacts.is_breeder, Deckstation/Besitzer/Halter über die Zuordnungen veröffentlichter Pferde), Name, Ort, Bundesland/Kanton, Land und Mitgliedsstatus suchen, mit den Pferdezahlen je Kontakt und Verlinkung auf /kontakt.",
     "author": "Hengstverzeichnis_Addons",
     "hooks": [
         "layout.nav_items",
-        "admin.dashboard_tiles",
         "horse.detail_sections",
-        "person.detail_sections",
-        "station.detail_sections"
+        "contact.detail_sections"
     ],
     "entry": "Plugin.php"
 }

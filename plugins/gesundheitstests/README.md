@@ -40,27 +40,56 @@ automatischer Veröffentlichung:
   begrenzt (max. 10 MB) und unter einem zufälligen Dateinamen gespeichert -
   gleiches Muster wie `HorseController::handleImageUpload()` im Kern.
 
+## Protokollierung
+
+Anlegen und Löschen eines Eintrags stehen im Audit-Log des Kerns
+(Kategorie `gesundheitstests`, sichtbar unter **Admin → Protokoll**) - das
+Löschen eines Gesundheitsdokuments ist der Fall, für den es dieses Protokoll
+gibt ([#134](https://github.com/Celestial0579/Hengstverzeichnis_Addons/issues/134)).
+
+Der Eintrag nennt **was, wer, wann, welcher Datensatz und welches Pferd**,
+bei einem Dokument zusätzlich dessen Ablagenamen und daß es entfernt wurde.
+Er nennt bewusst **nicht** die Ergebnis-Zusammenfassung, den Aussteller und
+den ursprünglichen Dateinamen des Uploads: Das Protokoll wird dauerhaft
+aufbewahrt, während die Gesundheitsdaten selbst löschbar bleiben sollen -
+was dort landete, überlebte genau die Löschung, um die es geht.
+
 ## Nutzung
 
-1. Unter **Dashboard → Gesundheitstests** (`/plugin/gesundheitstests/verwaltung`)
-   Einträge je Pferd erfassen, optional mit Dokument.
+1. Im Datensatz des Pferdes (`/admin/horses/edit?id=…`, Kern-Hook
+   `horse.edit_sections`): Der Abschnitt „🩺 Gesundheitstests" listet die
+   Einträge dieses Pferdes samt Freigabe-Status, Dokument-Verweis und
+   Löschen-Knopf und trägt alle Felder der Erfassung - Test-/Untersuchungsart,
+   Ausstellungsdatum, Aussteller, Ergebnis-Zusammenfassung, Dokument-Upload und
+   das Freigabe-Häkchen.
 2. Als öffentlich markierte Einträge erscheinen automatisch als Abschnitt
    "🩺 DNA-/Gesundheitstests" auf der öffentlichen Pferde-Detailseite.
 
+Seit [#120](https://github.com/Celestial0579/Hengstverzeichnis_Addons/issues/120)
+ist der Abschnitt der einzige Pflegeweg: Die addoneigene Verwaltungsseite
+(`/plugin/gesundheitstests/verwaltung`), ihre Dashboard-Kachel und ihre
+Pferdesuche (`/suche`,
+[#125](https://github.com/Celestial0579/Hengstverzeichnis_Addons/issues/125))
+sind entfallen - sie ließen dasselbe Pferd über eine zweite Suche erneut
+heraussuchen, obwohl man in dessen Datensatz bereits stand. Der Abschnitt
+erscheint nur mit `gesundheitstests.manage`; die Berechtigung ist damit ein
+Zusatzschalter zu `horses.edit`. Wer Tierarzt-/Zuchtverbandsdaten pflegen
+soll, ohne Stammdaten ändern zu dürfen, ist damit nicht mehr abbildbar - das
+war die bewusste Abwägung in #120.
+
 ## Technik
 
-- Berechtigung: Modul `gesundheitstests`, Aktion `manage` (Verwaltungsseite,
-  Pferdesuche und alle schreibenden Routen).
-- Routen: `/plugin/gesundheitstests/verwaltung` (GET),
-  `/plugin/gesundheitstests/suche?q=…` (GET, JSON für die Pferde-Datalist,
-  max. 50 Treffer), `/verwaltung/store` und `/verwaltung/delete` (POST) sowie
-  `/plugin/gesundheitstests/download?id=…` (GET, siehe oben).
-- Die Pferde-Auswahl der Verwaltung ist ein Suchfeld mit serverseitig
-  nachgeladener Vorschlagsliste (`<input list>` + `<datalist>`) statt eines
-  Voll-`<select>` über den gesamten Bestand; ohne JavaScript wird der
-  getippte Name beim Speichern serverseitig aufgelöst (eindeutiger Name,
-  „Name (Jahrgang)" oder das `[#id]`-Suffix der Vorschläge). Die
-  Eintragsliste ist mit 50 Einträgen je Seite paginiert (`?seite=…`).
+- Berechtigung: Modul `gesundheitstests`, Aktion `manage` (Abschnitt im
+  Pferdeformular und alle schreibenden Routen).
+- Routen: `/plugin/gesundheitstests/verwaltung/store` und
+  `/verwaltung/delete` (POST, Ziele der Formulare im Pferdeabschnitt; der
+  Rückweg führt auf `/admin/horses/edit?id=…`) sowie
+  `/plugin/gesundheitstests/download?id=…` (GET, siehe oben). GET-Routen für
+  eine eigene Verwaltungsseite und eine eigene Pferdesuche gibt es seit #120
+  bzw. #125 nicht mehr.
+- Das Formular des Abschnitts trägt `enctype="multipart/form-data"`: Es steht
+  außerhalb des Kern-Formulars und muß die Kodierung selbst mitbringen - sonst
+  käme der Upload als leeres `$_FILES` an, ohne Fehlermeldung.
 - Schema-Anlage: über den `install()`-Hook des PluginManagers (einmal bei
   Aktivierung bzw. nach einem Addon-Update); auf älteren Kernen ohne diesen
   Hook greift ein marker-geführter Fallback (`.schema-1` im
