@@ -6,6 +6,59 @@ sich an [Keep a Changelog](https://keepachangelog.com/de/1.1.0/); die
 Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 (siehe [docs/releasing.md](docs/releasing.md)).
 
+## [0.8.0] – 2026-08-21
+
+Die stabile Fassung der 0.8er-Linie. Inhaltlich ist sie `0.8.0-beta.2` plus
+zwei Befunde eines Code-Scans, der vor der Freigabe lief.
+
+### galerie
+
+- **Die Bildauslieferung reihte sich selbst auf** (#142). `BildController::serve()`
+  hatte die Sicherheitsregeln des Kerns wortgetreu übernommen, aber keine
+  seiner Entlastungen. Vor allem fehlte `session_write_close()`: PHPs
+  Standard-Sitzungsspeicher hält die Sitzungsdatei bis zum Ende des Requests
+  exklusiv gesperrt, und `config/config.php` startet für **jeden** Besucher
+  eine Sitzung. Eine Verwaltungsseite mit 50 Vorschaubildern löst 50 Anfragen
+  aus — die liefen damit hintereinander statt parallel, bei 60 ms je Anfrage
+  rund 3 s blockiertes Nachladen. Der Kern gibt die Sperre aus genau diesem
+  Grund frei.
+
+  Dazu jetzt `ETag` und `Last-Modified` samt 304-Behandlung. Das hilft
+  besonders bei unveröffentlichten Pferden: Dort gilt `no-store`, der Browser
+  darf also nichts ablegen — mit einer bedingten Anfrage spart er trotzdem die
+  Übertragung.
+
+  **Nicht enthalten:** der Bootstrap-Kurzschluss und echte Vorschaubilder. Für
+  das erste fehlt im Kern der Erweiterungspunkt (`/media/horse-image` ist in
+  `public/index.php` fest verdrahtet, eine Addon-Route kann das nicht), das
+  zweite ist eine eigene Bildverarbeitungsstrecke samt Migration des
+  Bestands. Beides steht als eigenes Issue.
+
+### plausibilitaetspruefung
+
+- **Die Trennlinie zwischen Lesen und Abhaken hielt keine Zusicherung**
+  (#143). Das Addon führt zwei Rechte: `bericht` öffnet die Liste, `abhaken`
+  hebt eine Veröffentlichungssperre auf. Getestet war nur ein Benutzer, der
+  beide nicht hat — dass ein reiner Leser keine Blocker abräumen darf, stand
+  nirgends fest. Fiele die zweite Prüfung bei einem Umbau weg (sie sieht neben
+  dem `requirePermission` des Konstruktors wie eine Dopplung aus), dürfte
+  jeder Leser Pferde mit widersprüchlicher Abstammung öffentlich schalten. Der
+  Knopf ist in der Ansicht zwar ausgeblendet, aber ein direkter POST kommt
+  ohne Knopf aus.
+
+### Tests
+
+- **Die Lückenliste des Hook-Abdeckungstests ist leer** (`DOKU_LUECKEN` in
+  `BeispielErweiterungspunkteAbdeckungTest`). Die vier Hooks aus Framework
+  #335, #346 und #356 stehen inzwischen in der Hook-Tabelle des Kerns; der
+  Test verlangt in genau diesem Fall, dass der Eintrag verschwindet.
+
+  Bemerkenswert daran ist, **wie** es aufgefallen ist: Gegen den in
+  `composer.lock` festgenagelten Kern war der Test grün, gegen den aktuellen
+  rot. Dieselbe Klasse wie in Framework #151 — eine über einen Zweig-Zeiger
+  eingebundene Abhängigkeit wird nicht mitgehoben, und die Suite prüft dann
+  dauerhaft gegen einen alten Stand.
+
 ## [0.8.0-beta.2] – 2026-08-20
 
 Der Addon-Nachzug zur Kontaktliste (Framework#336) — **21 Issues**, davon

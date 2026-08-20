@@ -959,15 +959,33 @@ class BildController extends BaseController {
             $this->renderNotFound('Bild nicht gefunden.');
         }
 
+        // Sitzungssperre freigeben, sobald sie nicht mehr gebraucht wird
+        // (#142). Ab hier wird nur noch gelesen - checkAuth() ist durch, die
+        // Rechteprüfung auch.
+        //
+        // Ohne das reihen sich die Bildanfragen HINTEREINANDER auf: PHPs
+        // Standard-Sitzungsspeicher hält die Sitzungsdatei bis zum Ende des
+        // Requests exklusiv gesperrt, und config/config.php startet für jeden
+        // Besucher eine Sitzung. Eine Verwaltungsseite mit 50 Vorschaubildern
+        // löst 50 Anfragen aus, die dann seriell statt parallel laufen - bei
+        // 60 ms je Anfrage rund 3 s, in denen der Browser blockiert nachlädt.
+        // Der Kern gibt sie aus genau diesem Grund frei
+        // (App\Controllers\MediaController); hier fehlte es.
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_write_close();
+        }
+
         $pfad = $this->dateiPfad((string) $medium['file_path']);
         if ($pfad === null) {
             $this->renderNotFound('Bild nicht gefunden.');
         }
 
         $endung = strtolower(pathinfo($pfad, PATHINFO_EXTENSION));
+        $mtime = (int) (@filemtime($pfad) ?: 0);
+        $groesse = (int) (@filesize($pfad) ?: 0);
+        $etag = '"' . md5($pfad . '|' . $mtime . '|' . $groesse) . '"';
 
         header('Content-Type: ' . self::TYPES[$endung]);
-        header('Content-Length: ' . (string) filesize($pfad));
         header('X-Content-Type-Options: nosniff');
         // Wie im Kern: hält fremde Seiten davon ab, die Bilder einzubetten.
         header('Cross-Origin-Resource-Policy: same-origin');
@@ -978,6 +996,28 @@ class BildController extends BaseController {
             header('Cache-Control: private, no-store');
         } else {
             header('Cache-Control: public, max-age=31536000, immutable');
+        }
+        header('ETag: ' . $etag);
+        header('Last-Modified: ' . gmdate('D, d M Y H:i:s', $mtime) . ' GMT');
+
+        // Bedingte Anfragen (#142). Sie sparen die Übertragung auch dort, wo
+        // `no-store` gilt: Der Browser darf die Datei zwar nicht ablegen, er
+        // fragt aber trotzdem mit If-None-Match nach - und bekommt dann 304
+        // statt des vollen Bildes. Für unveröffentlichte Pferde ist das der
+        // einzige Weg, das Neuladen einer Verwaltungsseite billig zu machen.
+        $ifNoneMatch = trim((string) ($_SERVER['HTTP_IF_NONE_MATCH'] ?? ''));
+        $ifModifiedSince = strtotime((string) ($_SERVER['HTTP_IF_MODIFIED_SINCE'] ?? '')) ?: 0;
+        if ($ifNoneMatch === $etag || ($ifModifiedSince > 0 && $mtime > 0 && $ifModifiedSince >= $mtime)) {
+            http_response_code(304);
+            exit;
+        }
+
+        header('Content-Length: ' . (string) $groesse);
+
+        // Ausgabepuffer leeren, sonst hält PHP die gesamte Datei im Speicher,
+        // bevor das erste Byte den Server verlässt.
+        while (ob_get_level() > 0) {
+            ob_end_clean();
         }
         readfile($pfad);
         exit;
