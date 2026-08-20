@@ -27,6 +27,7 @@ namespace Plugin\Merkliste;
 
 use App\Controllers\BaseController;
 use App\Database;
+use App\Helper\MediaUrl;
 use App\Plugin\HookManager;
 use App\Plugin\PluginPage;
 use PDO;
@@ -317,7 +318,12 @@ class MerklisteController extends BaseController {
                 'id' => (int) $row['id'],
                 'name' => (string) $row['name'],
                 'birth_year' => $row['birth_year'] !== null ? (int) $row['birth_year'] : null,
-                'image_url' => $row['image_url'] !== null ? (string) $row['image_url'] : null,
+                // Schon im JSON die geschützte Adresse, nicht der rohe
+                // Spaltenwert: Das JS setzt den Wert unbesehen als img.src.
+                // Stünde hier der Speicherort (/uploads/horses/<datei>), wäre
+                // der Dateiname über die öffentliche API bekannt - und die
+                // Datei bliebe nach einer Depublikation abrufbar.
+                'image_url' => MediaUrl::horseImage($row),
                 'url' => '/horse?id=' . (int) $row['id'],
             ];
         }
