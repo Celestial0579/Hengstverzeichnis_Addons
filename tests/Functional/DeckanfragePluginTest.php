@@ -281,8 +281,13 @@ class DeckanfragePluginTest extends FunctionalTestCase {
             $eintraege[0]['user_id'],
             'Ein Eintrag zu einer anonymen Anfrage darf keine Benutzer-ID tragen.'
         );
+        // Auch hier der Name aus der Umgebung: Als Literal war die Zusicherung
+        // in jeder Umgebung gruen, in der der Admin anders heisst - also
+        // wirkungslos genau dort, wo sie haette greifen muessen.
+        $angemeldeterAdmin = (string) (getenv('ADMIN_USERNAME') ?: '');
+        $this->assertNotSame('', $angemeldeterAdmin, 'ADMIN_USERNAME muss gesetzt sein - siehe tests/bootstrap.php.');
         $this->assertNotSame(
-            'e2eadmin',
+            $angemeldeterAdmin,
             (string) $eintraege[0]['username'],
             'Der Eintrag darf nicht dem gerade angemeldeten Admin-Konto zugeschrieben werden.'
         );

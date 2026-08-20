@@ -560,8 +560,18 @@ class KatalogExportPluginTest extends FunctionalTestCase {
             $details,
             'Der eingegebene Filterwert gehoert nicht ins dauerhafte Protokoll - q_breeder nimmt einen Personennamen entgegen.'
         );
+        // Der Name kommt aus der UMGEBUNG, nicht aus einem Literal.
+        //
+        // Hier stand 'e2eadmin' fest verdrahtet. Lokal hiess der Testadmin
+        // zufaellig genauso, in der CI aber 'e2eaddonadmin' (ADMIN_USERNAME in
+        // .github/workflows/tests.yml) - der Test war lokal gruen und in der
+        // CI rot, und der Fehler sah aus wie ein Protokollierungsfehler des
+        // Addons. Der Name der Instanz gehoert der Instanz; wer ihn im Test
+        // wiederholt, prueft seine eigene Annahme statt des Verhaltens.
+        $erwarteterAdmin = (string) (getenv('ADMIN_USERNAME') ?: '');
+        $this->assertNotSame('', $erwarteterAdmin, 'ADMIN_USERNAME muss gesetzt sein - siehe tests/bootstrap.php.');
         $this->assertSame(
-            'e2eadmin',
+            $erwarteterAdmin,
             (string) $eintrag['username'],
             'Der Eintrag muss dem angemeldeten Konto zugeordnet sein - genau das ist der Zweck.'
         );
