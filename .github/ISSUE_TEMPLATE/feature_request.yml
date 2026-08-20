@@ -1,0 +1,43 @@
+name: 💡 Addon-Idee / Verbesserung
+description: Ein neues Addon vorschlagen oder ein bestehendes verbessern
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Welches Problem steckt dahinter?
+      description: Welchen Fall aus der Zuchtarbeit deckt das heute nicht ab?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Vorschlag
+    validations:
+      required: false
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Wo gehört das hin?
+      description: Bei Unsicherheit einfach „unklar" wählen — das klären wir im Issue.
+      options:
+        - Neues Addon
+        - Bestehendes Addon erweitern
+        - Eher in den Framework-Kern
+        - Unklar
+    validations:
+      required: true
+  - type: input
+    id: addon
+    attributes:
+      label: Betroffenes Addon (falls vorhanden)
+      description: Slug aus plugin.json.
+    validations:
+      required: false
+  - type: textarea
+    id: core_needs
+    attributes:
+      label: Braucht es dafür etwas im Kern?
+      description: Hook, Route, Feld — falls bekannt. Ein Addon kann nur, was der Kern anbietet.
+    validations:
+      required: false

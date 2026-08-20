@@ -22,6 +22,7 @@ namespace Plugin\QrCode;
 
 use App\Controllers\BaseController;
 use App\Database;
+use App\Helper\MediaUrl;
 use App\Plugin\HookManager;
 
 class Plugin {
@@ -114,7 +115,16 @@ class AushangController extends BaseController {
 
         $name = htmlspecialchars((string) $horse['name'], ENT_QUOTES, 'UTF-8');
         $year = !empty($horse['birth_year']) ? htmlspecialchars((string) $horse['birth_year'], ENT_QUOTES, 'UTF-8') : '';
-        $imageUrl = !empty($horse['image_url']) ? htmlspecialchars((string) $horse['image_url'], ENT_QUOTES, 'UTF-8') : null;
+        // Über die geschützte Route des Kerns, nicht über den rohen
+        // Spaltenwert: Der Spaltenwert ist der Speicherort
+        // (/uploads/horses/<datei>), nicht die Adresse. Gibt ein Addon ihn aus,
+        // wird der Dateiname öffentlich bekannt - und die Datei bleibt danach
+        // abrufbar, auch wenn das Pferd depubliziert wurde. Die Route prüft je
+        // Anfrage Sitzung, horses.view und is_published.
+        $protectedImageUrl = MediaUrl::horseImage($horse);
+        $imageUrl = $protectedImageUrl !== null
+            ? htmlspecialchars($protectedImageUrl, ENT_QUOTES, 'UTF-8')
+            : null;
         $detailPathJson = json_encode('/horse?id=' . (int) $horse['id'], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
 
         // theming-ausnahme: druckfertige Aushang-Ansicht bleibt bewusst ein

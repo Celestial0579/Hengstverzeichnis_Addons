@@ -1,7 +1,7 @@
 {
     "slug": "qr-code",
     "name": "QR-Code pro Pferdeprofil",
-    "version": "1.1.2",
+    "version": "1.1.3",
     "core_compatibility": ">=0.4.0",
     "core_supported_max": "0.7",
     "description": "Zeigt auf der öffentlichen Pferde-Detailseite einen QR-Code zur Profil-URL (clientseitig gerendert, keine neue Abhängigkeit) sowie eine druckfertige Aushang-Ansicht.",

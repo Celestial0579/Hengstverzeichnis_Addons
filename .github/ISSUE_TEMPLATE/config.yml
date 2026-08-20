@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 🔒 Sicherheitslücke melden
+    url: https://github.com/Celestial0579/Hengstverzeichnis_Addons/security/advisories/new
+    about: Bitte Sicherheitslücken NICHT über öffentliche Issues melden, sondern vertraulich über GitHub Security Advisories (siehe SECURITY.md).
+  - name: 🧩 Fehler im Framework-Kern
+    url: https://github.com/Celestial0579/Hengstverzeichnis_Framework/issues/new/choose
+    about: Betrifft der Fund den Kern statt eines Addons, gehört er ins Framework-Repository.
