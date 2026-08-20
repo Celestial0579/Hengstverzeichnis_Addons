@@ -6,6 +6,50 @@ sich an [Keep a Changelog](https://keepachangelog.com/de/1.1.0/); die
 Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 (siehe [docs/releasing.md](docs/releasing.md)).
 
+## [0.7.2] – 2026-08-20
+
+Ein Sicherheitsrelease. Vier Addons lieferten Pferdefotos an der geschützten
+Ausliefer-Route des Kerns vorbei aus; damit blieb ein Foto abrufbar, nachdem
+das Pferd depubliziert worden war. Keine funktionalen Änderungen daneben.
+
+### Sicherheit
+
+- **Fotos laufen ausnahmslos über die geschützte Route des Kerns**
+  (GHSA-xrrq-9j94-fr5g). `qr-code` (1.1.3), `verkaufsboerse` (1.1.4) und
+  `merkliste` (1.1.4) gaben den rohen Spaltenwert `horses.image_url` aus —
+  also den Speicherort `/uploads/horses/<datei>` statt der Adresse
+  `/media/horse-image?id=<pferd>`. Der Kern prüft auf dieser Route je Anfrage
+  Sitzung, `horses.view` und `is_published` (Framework #262, #314); genau
+  darauf beruht der Schutz, dass die Adresse nur die Pferde-ID trägt und der
+  Dateiname nie öffentlich wird. Sobald ein Addon ihn ausgab, war er dauerhaft
+  bekannt: Nach `is_published = 0` — etwa nach einem Widerspruch nach Art. 21
+  DSGVO — antwortete die Route mit 404, die Datei lieferte aber weiterhin
+  ihren Inhalt. Für die Betroffenenanfrage hieß das: Die Depublikation war für
+  Fotos wirkungslos. Bei `merkliste` steht die geschützte Adresse jetzt schon
+  im JSON, weil das Skript den Wert unbesehen als `img.src` setzt.
+
+- **`galerie` (1.3.0) legt seine Medien außerhalb des Webroots ab.** Für die
+  addoneigenen Bilder gab es bisher **überhaupt keine** Prüfung: Sie lagen
+  unter `public/uploads/plugin_galerie/`, es existierte keine Route, und der
+  Webserver lieferte sie direkt aus. Sie liegen jetzt unter
+  `storage/plugin_galerie/` (0750) und sind ausschließlich über
+  `/plugin/galerie/bild?id=<medium>` erreichbar — mit denselben Prüfungen wie
+  das Kernfoto, samt `X-Content-Type-Options: nosniff`,
+  `Cross-Origin-Resource-Policy: same-origin` und `private, no-store` für
+  unveröffentlichte Pferde. Das Muster stammt aus `gesundheitstests`, das
+  seine Dokumente schon immer so ablegt. **Bestandsdateien zieht `install()`
+  beim Update selbsttätig um**; der Schritt ist wiederholbar und stellt
+  `file_path` erst um, wenn die Datei nachweislich am Ziel liegt.
+
+- **Regressionstest** `tests/Functional/BildauslieferungTest.php`. Er hält die
+  **Abwesenheit** roher `/uploads/`-Pfade in öffentlichen Antworten fest, nicht
+  bloß die Anwesenheit der richtigen — ein Test auf „enthält
+  /media/horse-image" wäre grün geblieben, während daneben weiterhin der rohe
+  Pfad stand. Für JSON-Antworten normalisiert er maskierte Schrägstriche
+  (`\/uploads\/`), sonst wäre er ausgerechnet dort blind gewesen, wo der
+  Befund lag. Jede der vier Fundstellen wurde einzeln gegengeprobt: Der alte
+  Zustand wurde wiederhergestellt und der Test musste rot werden.
+
 ## [0.7.0] – 2026-08-18
 
 Diese Linie überspringt 0.6: Der Kern hat mit v0.6.0 und v0.7.0 zwei Releases

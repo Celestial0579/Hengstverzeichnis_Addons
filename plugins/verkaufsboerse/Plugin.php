@@ -21,6 +21,7 @@ namespace Plugin\Verkaufsboerse;
 
 use App\Controllers\BaseController;
 use App\Database;
+use App\Helper\MediaUrl;
 use App\Plugin\HookManager;
 use App\Plugin\PluginPage;
 use App\Router;
@@ -341,8 +342,15 @@ class ListeController extends BaseController {
                 : number_format((float) $listing['price'], 2, ',', '.') . ' €';
 
             $content .= '<div class="verkaufsboerse-listing">';
-            if (!empty($listing['image_url'])) {
-                $content .= '<img src="' . htmlspecialchars((string) $listing['image_url'], ENT_QUOTES, 'UTF-8') . '" alt="">';
+            // Über die geschützte Route des Kerns statt über den rohen
+            // Spaltenwert: Sonst wird der Dateiname öffentlich bekannt, und das
+            // Foto bleibt nach einer Depublikation weiter abrufbar.
+            $bildUrl = MediaUrl::horseImage([
+                'id' => $listing['horse_id'],
+                'image_url' => $listing['image_url'] ?? null,
+            ]);
+            if ($bildUrl !== null) {
+                $content .= '<img src="' . htmlspecialchars($bildUrl, ENT_QUOTES, 'UTF-8') . '" alt="">';
             }
             $content .= '<div>';
             $content .= '<h2><a href="/horse?id=' . (int) $listing['horse_id'] . '">' . htmlspecialchars((string) $listing['horse_name'], ENT_QUOTES, 'UTF-8') . '</a></h2>';
