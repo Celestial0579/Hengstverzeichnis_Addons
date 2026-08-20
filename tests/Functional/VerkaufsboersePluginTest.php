@@ -13,14 +13,25 @@ namespace Tests\Functional;
  * kontrolliert `false`, die reale Anfrage erwartet folglich das Ergebnis
  * "fehler", nicht "erfolg" (siehe dortiger Kommentar für die Begründung).
  *
- * Zusätzlich abgedeckt (#74): die Datalist-Pferdesuche samt No-JS-Fallback
- * sowie die Paginierung von Verwaltung und öffentlicher Börse.
+ * Seit #119 läuft die Anzeigenpflege ausschließlich über den Abschnitt im
+ * Bearbeitungsformular des Pferdes (Kern-Hook `horse.edit_sections`); die
+ * addoneigene Verwaltungsseite, ihre Dashboard-Kachel und ihre Pferdesuche
+ * (Addons#125) sind entfallen. Der Test hält deshalb beides fest: dass der
+ * Pferdeabschnitt den vollen Umfang trägt (anlegen, ändern, Sichtbarkeit
+ * ausweisen, entfernen) - und dass die alten Adressen wirklich weg sind.
+ *
+ * Die ÖFFENTLICHE Börse (`/liste`) bleibt und wird unverändert mitgeprüft:
+ * Sie ist der Zweck des Addons und kein Doppel der Pferdeseite.
  */
 class VerkaufsboersePluginTest extends FunctionalTestCase {
 
     use HorseListHelper;
+    use PferdesucheHelper;
 
     private const SLUG = 'verkaufsboerse';
+
+    /** Die entfallene Verwaltungsseite (#119) - hier nur noch als Negativprobe. */
+    private const ALTE_SEITE = '/plugin/verkaufsboerse/verwaltung';
 
     public function testFullPluginLifecycle(): void {
         $admin = $this->authenticatedClient();
@@ -36,125 +47,135 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
         ]);
         $this->assertSame('/admin/plugins?success=1', $toggleResponse->location());
 
-        // 1. Dashboard-Kachel muss erscheinen.
+        // 1. Weder Kachel noch eigene Seite (#119): Die Kachel führte auf eine
+        //    Seite, die dasselbe Pferd über eine zweite Suche erneut
+        //    heraussuchen ließ, obwohl die Pflege im Pferdedatensatz steht.
         $dashboard = $admin->get('/admin');
-        $this->assertStringContainsString('/plugin/verkaufsboerse/verwaltung', $dashboard->body);
+        $this->assertStringNotContainsString(
+            self::ALTE_SEITE . '"',
+            $dashboard->body,
+            'Das Dashboard darf keine Kachel auf die entfallene Verwaltungsseite mehr enthalten (#119).'
+        );
+
+        $this->assertSame(
+            404,
+            $admin->get(self::ALTE_SEITE)->statusCode,
+            'Die addoneigene Verwaltungsseite ist mit #119 entfallen.'
+        );
+        $this->assertEigeneSuchrouteEntfallen($admin, '/plugin/verkaufsboerse/suche');
 
         $unique = uniqid();
         $horseName = "VerkaufTestPferd-{$unique}";
         $horseId = $this->createHorse($admin, $horseName, ['status' => 'active']);
         $contactEmail = "verkauf-{$unique}@example.test";
 
-        // 2. Vor dem Anlegen eines Inserats: kein Badge auf der Detailseite,
-        // keine Einträge in der öffentlichen Übersicht.
+        // 2. Vor dem Anlegen eines Inserats: kein Badge auf der Detailseite.
         $visitor = $this->newClient();
         $detailBefore = $visitor->get("/horse?id={$horseId}");
         $this->assertStringNotContainsString('Zum Verkauf', $detailBefore->body);
 
-        // 3. Inserat über die Admin-Route anlegen.
-        $verwaltungPage = $admin->get('/plugin/verkaufsboerse/verwaltung');
-        $this->assertSame(200, $verwaltungPage->statusCode);
+        // 3. Der Abschnitt hängt im Bearbeitungsformular des Pferdes, mit der
+        //    horse_id aus dem Aufrufkontext statt einer zweiten Pferdesuche.
+        $form = $admin->get('/admin/horses/edit?id=' . $horseId);
+        $this->assertSame(200, $form->statusCode);
+        $this->assertStringContainsString('Verkaufsanzeige', $form->body);
+        $this->assertStringContainsString(self::ALTE_SEITE . '/store', $form->body);
+        $this->assertMatchesRegularExpression(
+            '/name="horse_id" value="' . $horseId . '"/',
+            $form->body,
+            'Die horse_id muss aus dem Kontext stammen, nicht erneut gesucht werden.'
+        );
+        // Und ausdrücklich nicht: die Pferdeauswahl der alten Seite.
+        $this->assertStringNotContainsString('list="horse_q_liste"', $form->body);
+        $this->assertStringNotContainsString('<datalist', $form->body);
 
-        // 3a. Pferde-Auswahl (#74): Suchfeld mit Datalist statt Voll-<select>
-        // über den gesamten Bestand; die gewählte ID reist im Hidden-Feld.
-        $this->assertStringContainsString('list="horse_q_liste"', $verwaltungPage->body, 'Das Pferd-Feld sollte eine Datalist referenzieren.');
-        $this->assertStringContainsString('<datalist id="horse_q_liste">', $verwaltungPage->body);
-        $this->assertStringContainsString('name="horse_id" id="horse_id" value=""', $verwaltungPage->body);
-        $this->assertStringNotContainsString('<select name="horse_id"', $verwaltungPage->body, 'Der frühere Voll-<select> über alle Pferde darf nicht mehr gerendert werden.');
+        // Vollständigkeit (#119): Jedes Feld, das store() auswertet, muss der
+        // Abschnitt anbieten - solange eines fehlt, wäre die alte Seite nicht
+        // überflüssig, sondern die Integration unfertig.
+        foreach (['price', 'description', 'contact_email', 'listed_until'] as $feld) {
+            $this->assertStringContainsString(
+                'name="' . $feld . '"',
+                $form->body,
+                "Der Abschnitt muss das Feld '{$feld}' anbieten (#119)."
+            );
+        }
 
-        // 3b. Suchroute (#74): JSON {id, label}, nur für Berechtigte, leere
-        // Suche liefert eine leere Liste statt des Gesamtbestands.
-        $sucheResponse = $admin->get('/plugin/verkaufsboerse/suche?q=' . urlencode($horseName));
-        $this->assertSame(200, $sucheResponse->statusCode);
-        $suggestions = json_decode($sucheResponse->body, true);
-        $this->assertIsArray($suggestions, "Suchroute sollte JSON liefern. Body: {$sucheResponse->body}");
-        $this->assertCount(1, $suggestions, 'Der eindeutige Testname sollte genau einen Treffer liefern.');
-        $this->assertSame($horseId, (int) $suggestions[0]['id']);
-        $this->assertStringContainsString($horseName, (string) $suggestions[0]['label']);
-
-        $emptySuche = $admin->get('/plugin/verkaufsboerse/suche?q=');
-        $this->assertSame('[]', trim($emptySuche->body), 'Ohne Suchbegriff darf die Suchroute nichts ausliefern.');
-
-        $storeResponse = $admin->post('/plugin/verkaufsboerse/verwaltung/store', [
-            'csrf_token' => $verwaltungPage->formField('csrf_token') ?? '',
+        // 4. Anlegen aus dem Pferdeabschnitt heraus - der Rückweg führt auf
+        //    das Pferd zurück, nicht auf eine bestandsweite Liste.
+        $csrf = $form->formField('csrf_token') ?? '';
+        $storeResponse = $admin->post(self::ALTE_SEITE . '/store', [
+            'csrf_token' => $csrf,
             'horse_id' => (string) $horseId,
             'price' => '1500.00',
             'description' => 'Verkauf wegen Bestandsreduzierung.',
             'contact_email' => $contactEmail,
         ]);
-        $this->assertSame('/plugin/verkaufsboerse/verwaltung', $storeResponse->location());
+        $this->assertSame('/admin/horses/edit?id=' . $horseId, $storeResponse->location());
 
-        // 4. Admin-Übersicht enthält das neue Inserat.
-        $verwaltungAfter = $admin->get('/plugin/verkaufsboerse/verwaltung');
-        $this->assertStringContainsString($horseName, $verwaltungAfter->body);
-        $this->assertStringContainsString($contactEmail, $verwaltungAfter->body);
-        $this->assertStringContainsString('1.500,00 €', $verwaltungAfter->body);
+        // 5. Der Abschnitt zeigt das Inserat mit vorbelegten Feldern und weist
+        //    aus, dass es öffentlich sichtbar ist (#51 zieht mit um).
+        $formNachStore = $admin->get('/admin/horses/edit?id=' . $horseId);
+        $this->assertStringContainsString($contactEmail, $formNachStore->body);
+        $this->assertStringContainsString('Verkauf wegen Bestandsreduzierung.', $formNachStore->body);
+        $this->assertStringContainsString('öffentlich sichtbar', $formNachStore->body);
+        $this->assertStringContainsString(self::ALTE_SEITE . '/delete', $formNachStore->body);
 
-        // 4b. No-JS-Fallback (#74): Ohne horse_id löst store() den getippten
-        // Text (horse_q) serverseitig zu einer Pferde-ID auf.
-        $noJsName = "NoJSVerkauf-{$unique}";
-        $noJsId = $this->createHorse($admin, $noJsName, ['status' => 'active']);
-        $noJsEmail = "nojs-{$unique}@example.test";
-        $storeNoJs = $admin->post('/plugin/verkaufsboerse/verwaltung/store', [
-            'csrf_token' => $verwaltungPage->formField('csrf_token') ?? '',
-            'horse_q' => $noJsName,
-            'price' => '2500.00',
-            'contact_email' => $noJsEmail,
-        ]);
-        $this->assertSame('/plugin/verkaufsboerse/verwaltung', $storeNoJs->location());
-        $this->assertStringContainsString(
-            $noJsEmail,
-            $admin->get('/plugin/verkaufsboerse/verwaltung')->body,
-            'Ein eindeutiger Name in horse_q sollte serverseitig aufgelöst werden.'
-        );
-
-        // ... ein unauflösbarer Text legt nichts an.
-        $unresolvedEmail = "verwaist-{$unique}@example.test";
-        $storeUnresolved = $admin->post('/plugin/verkaufsboerse/verwaltung/store', [
-            'csrf_token' => $verwaltungPage->formField('csrf_token') ?? '',
-            'horse_q' => "GibtEsNicht-{$unique}",
-            'contact_email' => $unresolvedEmail,
-        ]);
-        $this->assertSame('/plugin/verkaufsboerse/verwaltung', $storeUnresolved->location());
-        $this->assertStringNotContainsString(
-            $unresolvedEmail,
-            $admin->get('/plugin/verkaufsboerse/verwaltung')->body,
-            'Ein unauflösbarer Pferdename darf kein Inserat anlegen.'
-        );
-
-        // 5. Öffentliche Übersicht zeigt das Inserat.
+        // 6. Öffentliche Übersicht und Detailseite zeigen das Inserat.
         $listePage = $visitor->get('/plugin/verkaufsboerse/liste');
         $this->assertSame(200, $listePage->statusCode);
         $this->assertStringContainsString($horseName, $listePage->body);
         $this->assertStringContainsString('1.500,00 €', $listePage->body);
 
-        // 5a. Paginierung (#74): Unterhalb der Seitengröße erscheint keine
-        // Blätter-Leiste, und ein zu großer ?seite=-Wert wird auf die letzte
-        // vorhandene Seite geklemmt statt eine leere Liste zu zeigen.
-        $this->assertStringNotContainsString('Seite 1 von 1', $listePage->body, 'Bei nur einer Seite darf keine Blätter-Leiste erscheinen.');
+        $detailAfter = $visitor->get("/horse?id={$horseId}");
+        $this->assertStringContainsString('Zum Verkauf', $detailAfter->body);
+        $this->assertStringContainsString('1.500,00 €', $detailAfter->body);
+        $this->assertStringContainsString('Verkauf wegen Bestandsreduzierung.', $detailAfter->body);
+        $this->assertStringContainsString('name="webseite"', $detailAfter->body);
+
+        // 6b. Upsert (horse_id ist UNIQUE): Erneutes Speichern aktualisiert das
+        //     Inserat, es entsteht kein zweites. Damit trägt derselbe Abschnitt
+        //     anlegen UND ändern - die alte Seite konnte nichts anderes.
+        $updateResponse = $admin->post(self::ALTE_SEITE . '/store', [
+            'csrf_token' => $csrf,
+            'horse_id' => (string) $horseId,
+            'price' => '1800.00',
+            'description' => 'Preis angepasst.',
+            'contact_email' => $contactEmail,
+        ]);
+        $this->assertSame('/admin/horses/edit?id=' . $horseId, $updateResponse->location());
+        $this->assertSame(
+            1,
+            $this->countListings($horseId),
+            'Erneutes Speichern muss das Inserat aktualisieren, nicht ein zweites anlegen.'
+        );
+        $listeNachUpdate = $visitor->get('/plugin/verkaufsboerse/liste');
+        $this->assertStringContainsString('1.800,00 €', $listeNachUpdate->body);
+        $this->assertStringNotContainsString('1.500,00 €', $listeNachUpdate->body);
+
+        // 6c. Paginierung der öffentlichen Börse (#74): Unterhalb der
+        //     Seitengröße erscheint keine Blätter-Leiste, und ein zu großer
+        //     ?seite=-Wert wird auf die letzte vorhandene Seite geklemmt.
+        $this->assertStringNotContainsString('Seite 1 von 1', $listeNachUpdate->body, 'Bei nur einer Seite darf keine Blätter-Leiste erscheinen.');
         $clampedListe = $visitor->get('/plugin/verkaufsboerse/liste?seite=999');
         $this->assertSame(200, $clampedListe->statusCode);
         $this->assertStringContainsString($horseName, $clampedListe->body, 'Ein zu großer ?seite=-Wert soll auf die letzte Seite geklemmt werden.');
-        $clampedVerwaltung = $admin->get('/plugin/verkaufsboerse/verwaltung?seite=999');
-        $this->assertSame(200, $clampedVerwaltung->statusCode);
-        $this->assertStringContainsString($horseName, $clampedVerwaltung->body, 'Auch die Verwaltung klemmt einen zu großen ?seite=-Wert.');
 
-        // 5b. Regression zu Issue #24: Ein Inserat für ein UNVERÖFFENTLICHTES
-        // Pferd darf in der öffentlichen Übersicht nicht erscheinen - /horse
-        // liefert für dieses Pferd 404, die Börse darf Name/Preis nicht doch
-        // preisgeben.
+        // 7. Regression zu Issue #24: Ein Inserat für ein UNVERÖFFENTLICHTES
+        //    Pferd darf in der öffentlichen Übersicht nicht erscheinen - und
+        //    der Abschnitt sagt, warum (#51).
         $unpublishedName = "UnveroeffentlichtVerkauf-{$unique}";
         $unpublishedId = $this->createHorse($admin, $unpublishedName, [
             'status' => 'active',
             'is_published' => '0',
         ]);
-        $unpublishedStore = $admin->post('/plugin/verkaufsboerse/verwaltung/store', [
-            'csrf_token' => $verwaltungPage->formField('csrf_token') ?? '',
+        $unpublishedForm = $admin->get('/admin/horses/edit?id=' . $unpublishedId);
+        $unpublishedStore = $admin->post(self::ALTE_SEITE . '/store', [
+            'csrf_token' => $unpublishedForm->formField('csrf_token') ?? '',
             'horse_id' => (string) $unpublishedId,
             'price' => '18500.00',
             'contact_email' => $contactEmail,
         ]);
-        $this->assertSame('/plugin/verkaufsboerse/verwaltung', $unpublishedStore->location());
+        $this->assertSame('/admin/horses/edit?id=' . $unpublishedId, $unpublishedStore->location());
 
         $listeWithUnpublished = $visitor->get('/plugin/verkaufsboerse/liste');
         $this->assertStringNotContainsString(
@@ -162,15 +183,36 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
             $listeWithUnpublished->body,
             'Unveröffentlichte Pferde dürfen nicht in der öffentlichen Verkaufsbörse erscheinen.'
         );
+        $this->assertStringContainsString(
+            'Pferd unveröffentlicht - Inserat öffentlich unsichtbar',
+            $admin->get('/admin/horses/edit?id=' . $unpublishedId)->body,
+            'Der Abschnitt muss ausweisen, warum das Inserat öffentlich fehlt (#51).'
+        );
 
-        // 6. Detailseite zeigt jetzt automatisch das Badge inkl. Preis und Formular.
-        $detailAfter = $visitor->get("/horse?id={$horseId}");
-        $this->assertStringContainsString('Zum Verkauf', $detailAfter->body);
-        $this->assertStringContainsString('1.500,00 €', $detailAfter->body);
-        $this->assertStringContainsString('Verkauf wegen Bestandsreduzierung.', $detailAfter->body);
-        $this->assertStringContainsString('name="webseite"', $detailAfter->body);
+        // 7b. Ein abgelaufenes Inserat ist ebenfalls unsichtbar - und der
+        //     Abschnitt zeigt es weiterhin, damit es verlängert werden kann.
+        $abgelaufenName = "AbgelaufenVerkauf-{$unique}";
+        $abgelaufenId = $this->createHorse($admin, $abgelaufenName, ['status' => 'active']);
+        $abgelaufenForm = $admin->get('/admin/horses/edit?id=' . $abgelaufenId);
+        $admin->post(self::ALTE_SEITE . '/store', [
+            'csrf_token' => $abgelaufenForm->formField('csrf_token') ?? '',
+            'horse_id' => (string) $abgelaufenId,
+            'price' => '999.00',
+            'contact_email' => $contactEmail,
+            'listed_until' => '2000-01-01',
+        ]);
+        $this->assertStringNotContainsString(
+            $abgelaufenName,
+            $visitor->get('/plugin/verkaufsboerse/liste')->body,
+            'Ein abgelaufenes Inserat gehört nicht in die öffentliche Börse.'
+        );
+        $this->assertStringContainsString(
+            'abgelaufen - öffentlich unsichtbar',
+            $admin->get('/admin/horses/edit?id=' . $abgelaufenId)->body,
+            'Ein abgelaufenes Inserat muss im Abschnitt sichtbar und damit verlängerbar bleiben.'
+        );
 
-        // 7. Honeypot ausgefüllt: wird stillschweigend als "erfolg" behandelt.
+        // 8. Honeypot ausgefüllt: wird stillschweigend als "erfolg" behandelt.
         $csrfToken = $detailAfter->formField('csrf_token') ?? '';
         $honeypotResponse = $visitor->post('/plugin/verkaufsboerse/kontakt', [
             'csrf_token' => $csrfToken,
@@ -182,7 +224,7 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
         ]);
         $this->assertSame("/horse?id={$horseId}&verkaufsanfrage=erfolg", $honeypotResponse->location());
 
-        // 8. Echte Anfrage: Versand schlägt mangels SMTP-Konfiguration kontrolliert fehl.
+        // 9. Echte Anfrage: Versand schlägt mangels SMTP-Konfiguration kontrolliert fehl.
         $realResponse = $visitor->post('/plugin/verkaufsboerse/kontakt', [
             'csrf_token' => $csrfToken,
             'horse_id' => (string) $horseId,
@@ -192,7 +234,7 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
         ]);
         $this->assertSame("/horse?id={$horseId}&verkaufsanfrage=fehler", $realResponse->location());
 
-        // 9. CSRF-Schutz.
+        // 10. CSRF-Schutz.
         $csrfRejected = $visitor->post('/plugin/verkaufsboerse/kontakt', [
             'csrf_token' => 'invalid-token',
             'horse_id' => (string) $horseId,
@@ -202,7 +244,9 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
         ]);
         $this->assertSame(403, $csrfRejected->statusCode);
 
-        // 10. Berechtigungsdurchsetzung: Editor ohne verkaufsboerse.manage wird abgewiesen ...
+        // 11. Fail-closed: Ohne verkaufsboerse.manage erscheint der Abschnitt
+        //     im Bearbeitungsformular gar nicht - kein Formular, das beim
+        //     Absenden 403 liefert -, und die POST-Route weist ab.
         $editorGroupId = $this->findBuiltinGroupId($admin, 'Editor');
         $editor = $this->createAndLoginEditor(
             $admin,
@@ -211,47 +255,44 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
             [$editorGroupId]
         );
 
-        $deniedResponse = $editor->get('/plugin/verkaufsboerse/verwaltung');
+        $editorFormOhneRecht = $editor->get('/admin/horses/edit?id=' . $horseId);
+        $this->assertSame(200, $editorFormOhneRecht->statusCode);
+        $this->assertStringNotContainsString(
+            self::ALTE_SEITE . '/store',
+            $editorFormOhneRecht->body,
+            'Ohne verkaufsboerse.manage darf der Abschnitt nicht erscheinen.'
+        );
+        $this->assertStringNotContainsString('Verkaufsanzeige', $editorFormOhneRecht->body);
+
+        $deniedResponse = $editor->post(self::ALTE_SEITE . '/store', [
+            'csrf_token' => $editorFormOhneRecht->formField('csrf_token') ?? '',
+            'horse_id' => (string) $horseId,
+            'contact_email' => "unerlaubt-{$unique}@example.test",
+        ]);
         $this->assertSame(403, $deniedResponse->statusCode);
 
         $this->setGroupPermissions($admin, $editorGroupId, self::EDITOR_DEFAULT_PERMISSIONS + [
             'verkaufsboerse' => ['manage'],
         ]);
 
-        $allowedResponse = $editor->get('/plugin/verkaufsboerse/verwaltung');
-        $this->assertSame(200, $allowedResponse->statusCode);
+        $editorFormMitRecht = $editor->get('/admin/horses/edit?id=' . $horseId);
+        $this->assertSame(200, $editorFormMitRecht->statusCode);
+        $this->assertStringContainsString(self::ALTE_SEITE . '/store', $editorFormMitRecht->body);
 
-        // 11. Löschen entfernt das Inserat wieder aus Übersicht und Detailseite.
-        preg_match('/name="id" value="(\d+)"/', $verwaltungAfter->body, $idMatch);
-        $this->assertNotEmpty($idMatch, 'Konnte ID des erfassten Inserats nicht ermitteln.');
-
-        $deleteResponse = $admin->post('/plugin/verkaufsboerse/verwaltung/delete', [
-            'csrf_token' => $verwaltungAfter->formField('csrf_token') ?? '',
-            'id' => $idMatch[1],
-        ]);
-        $this->assertSame('/plugin/verkaufsboerse/verwaltung', $deleteResponse->location());
-
-        $detailAfterDelete = $visitor->get("/horse?id={$horseId}");
-        $this->assertStringNotContainsString('Zum Verkauf', $detailAfterDelete->body);
-
-        // 12. Sichtbarkeits-Status in der Verwaltung (#51): Die Verwaltung
-        // listet bewusst ALLE Inserate, weist aber aus, warum eines öffentlich
-        // fehlt - vorher zeigten Verwaltung und Börse still Verschiedenes.
-        // 12a. Das Inserat des unveröffentlichten Pferds (aus 5b) ist markiert.
-        $verwaltungStatus = $admin->get('/plugin/verkaufsboerse/verwaltung');
-        $this->assertStringContainsString('Pferd unveröffentlicht - öffentlich unsichtbar', $verwaltungStatus->body);
-
-        // 12b. Pferd mit aktivem Inserat in den Papierkorb verschieben: aus der
-        // öffentlichen Börse verschwindet es, die Verwaltung markiert es.
+        // 12. Papierkorb-Hooks (#51 / Framework #164): Das Plugin reagiert auf
+        //     horse.trashed/horse.restored mit einem Audit-Log-Eintrag - die
+        //     Diskrepanz "Inserat gespeichert, Börse zeigt es nicht" ist damit
+        //     dokumentiert, nicht nur sichtbar.
         $trashedName = "PapierkorbVerkauf-{$unique}";
         $trashedId = $this->createHorse($admin, $trashedName, ['status' => 'active']);
-        $trashedStore = $admin->post('/plugin/verkaufsboerse/verwaltung/store', [
-            'csrf_token' => $verwaltungStatus->formField('csrf_token') ?? '',
+        $trashedForm = $admin->get('/admin/horses/edit?id=' . $trashedId);
+        $trashedStore = $admin->post(self::ALTE_SEITE . '/store', [
+            'csrf_token' => $trashedForm->formField('csrf_token') ?? '',
             'horse_id' => (string) $trashedId,
             'price' => '15000.00',
             'contact_email' => $contactEmail,
         ]);
-        $this->assertSame('/plugin/verkaufsboerse/verwaltung', $trashedStore->location());
+        $this->assertSame('/admin/horses/edit?id=' . $trashedId, $trashedStore->location());
 
         $adminHorses = $admin->get('/admin/horses');
         $trashResponse = $admin->post('/admin/horses/delete', [
@@ -263,20 +304,19 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
         $listeAfterTrash = $visitor->get('/plugin/verkaufsboerse/liste');
         $this->assertStringNotContainsString($trashedName, $listeAfterTrash->body, 'Papierkorb-Pferd darf nicht in der öffentlichen Börse erscheinen.');
 
-        $verwaltungAfterTrash = $admin->get('/plugin/verkaufsboerse/verwaltung');
-        $this->assertStringContainsString($trashedName, $verwaltungAfterTrash->body, 'Die Verwaltung soll das Inserat weiter listen.');
-        $this->assertStringContainsString('im Papierkorb - öffentlich unsichtbar', $verwaltungAfterTrash->body);
+        // Der Hook feuert auch für ein Pferd im Papierkorb (der rohe Datensatz
+        // ist nicht deleted_at-gefiltert) - der Abschnitt weist den Zustand aus.
+        $this->assertStringContainsString(
+            'Pferd im Papierkorb - Inserat öffentlich unsichtbar',
+            $admin->get('/admin/horses/edit?id=' . $trashedId)->body
+        );
 
-        // 12c. Papierkorb-Hook (#51 / Framework #164): Das Plugin reagiert auf
-        // horse.trashed mit einem Audit-Log-Eintrag - die Diskrepanz zwischen
-        // Verwaltung und Börse ist damit dokumentiert, nicht nur sichtbar.
         $auditStmt = \App\Database::getInstance()->prepare(
             "SELECT COUNT(*) FROM audit_logs WHERE action = 'Verkaufsbörse: Inserat durch Papierkorb öffentlich unsichtbar' AND details LIKE ?"
         );
         $auditStmt->execute(['%' . $trashedName . '%']);
         $this->assertGreaterThan(0, (int) $auditStmt->fetchColumn(), 'horse.trashed muss einen Audit-Log-Eintrag des Börsen-Plugins auslösen.');
 
-        // 12d. Wiederherstellen löst das Gegenstück aus.
         $trashPage = $admin->get('/admin/trash');
         $restoreResponse = $admin->post('/admin/trash/restore', [
             'csrf_token' => $trashPage->formField('csrf_token') ?? '',
@@ -292,5 +332,43 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
 
         $listeAfterRestore = $visitor->get('/plugin/verkaufsboerse/liste');
         $this->assertStringContainsString($trashedName, $listeAfterRestore->body, 'Nach der Wiederherstellung ist das Inserat wieder öffentlich.');
+
+        // 13. Entfernen aus dem Abschnitt heraus: Rückweg auf das Pferd, und
+        //     das Badge verschwindet von der Detailseite.
+        $formVorLoeschen = $admin->get('/admin/horses/edit?id=' . $horseId);
+        $this->assertMatchesRegularExpression(
+            '/action="' . preg_quote(self::ALTE_SEITE . '/delete', '/') . '".*?name="id" value="(\d+)"/s',
+            $formVorLoeschen->body,
+            'Der Abschnitt muss ein Entfernen-Formular mit der Inserats-ID tragen.'
+        );
+        preg_match(
+            '/action="' . preg_quote(self::ALTE_SEITE . '/delete', '/') . '".*?name="id" value="(\d+)"/s',
+            $formVorLoeschen->body,
+            $idMatch
+        );
+
+        $deleteResponse = $admin->post(self::ALTE_SEITE . '/delete', [
+            'csrf_token' => $formVorLoeschen->formField('csrf_token') ?? '',
+            'id' => $idMatch[1],
+        ]);
+        $this->assertSame('/admin/horses/edit?id=' . $horseId, $deleteResponse->location());
+
+        $detailAfterDelete = $visitor->get("/horse?id={$horseId}");
+        $this->assertStringNotContainsString('Zum Verkauf', $detailAfterDelete->body);
+        $this->assertSame(0, $this->countListings($horseId));
+    }
+
+    /**
+     * Zählt die Inserate eines Pferdes direkt in der Datenbank - der
+     * unabhängige Nachweis für den Upsert (#119): Eine gerenderte Seite zeigt
+     * nur EIN Inserat, weil `horse_id` UNIQUE ist; ob daneben ein zweites
+     * entstand, sagt allein die Tabelle.
+     */
+    private function countListings(int $horseId): int {
+        $stmt = \App\Database::getInstance()->prepare(
+            'SELECT COUNT(*) FROM `plugin_verkaufsboerse_listings` WHERE horse_id = :id'
+        );
+        $stmt->execute(['id' => $horseId]);
+        return (int) $stmt->fetchColumn();
     }
 }

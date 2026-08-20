@@ -7,11 +7,13 @@
 // eines gemeinsamen Fohlens sortiert - die genetisch vielfältigste
 // (niedrigster COI) Verpaarung zuerst.
 //
-// Baut auf demselben Pfad-Koeffizienten-Verfahren auf wie das
-// Inzuchtkoeffizient-Addon, bringt die Rechenlogik aber bewusst selbst mit
-// (eigenständige Klasse CoiEstimator), damit dieses Addon unabhängig davon
-// funktioniert, ob das andere aktiviert ist - Plugins sind voneinander isoliert
-// (siehe docs/plugin-development.md).
+// Die COI-Rechnung ist seit Addons#123 KEINE eigene Fassung mehr: Sie steht im
+// gemeinsamen Rechenkern WrightCoi.php, den dieses Addon zeichengleich
+// mitliefert - dieselbe Klasse, die auch das Inzuchtkoeffizient-Addon benutzt.
+// Mitgeliefert wird sie, damit dieses Addon unabhängig davon funktioniert, ob
+// das andere installiert ist (Plugins sind voneinander isoliert, siehe
+// docs/plugin-development.md); die Begründung im Einzelnen steht in
+// WrightCoi.php.
 //
 // Performance (#69): Die Ahnen-Kanten des gesamten Registers werden EINMAL
 // geschlossen geladen (AncestorTreeBuilder) und alle Stammbäume rein in PHP
@@ -29,7 +31,28 @@ namespace Plugin\AnpaarungsEmpfehlung;
 use App\Controllers\BaseController;
 use App\Database;
 use App\I18n\Translator;
+use Hengstverzeichnis\Addons\Shared\WrightCoi;
 use PDO;
+
+// Gemeinsamer COI-Rechenkern (#123). Der Wächter ist nötig, weil dieselbe
+// Datei auch von anderen Addons mitgeliefert wird: Plugins liegen in keinem
+// Autoloader, jedes bindet seine eigene Kopie per require_once ein - zwei
+// verschiedene Dateipfade, dieselbe Klasse, also ohne Wächter ein
+// "Cannot redeclare class". Wer zuerst lädt, gewinnt, und das ist gewollt:
+// Danach rechnen alle beteiligten Addons garantiert mit DERSELBEN Fassung.
+if (!class_exists(WrightCoi::class, false)) {
+    require_once __DIR__ . '/WrightCoi.php';
+}
+
+// Altname aus der Zeit der Doppelung (#123): Vor der Zusammenlegung war
+// CoiEstimator eine eigene Klasse mit eigener Rechnung - und lief zeitweise
+// sogar auseinander (ihm fehlte Wrights Pfadregel). Der Alias hält bestehende
+// Verweise (tests/Unit/AnpaarungsEmpfehlungCoiTest.php) am Leben, OHNE eine
+// zweite Fassung zu sein: class_alias() erzeugt keinen eigenen Code, sondern
+// einen zweiten Namen für exakt dieselbe Klasse.
+if (!class_exists(__NAMESPACE__ . '\\CoiEstimator', false)) {
+    class_alias(WrightCoi::class, __NAMESPACE__ . '\\CoiEstimator');
+}
 
 class Plugin {
 
@@ -53,91 +76,17 @@ class Plugin {
      * @return array<int, array{method:string, path:string, callback:array}>
      */
     public function routes(): array {
+        // Die addoneigene Basispferd-Suche (/suche) ist mit Addons#125
+        // entfallen. Sieben Addons brachten dieselbe Route und denselben
+        // JS-Block mit; der Kern liefert beides seit Framework#341 unter
+        // /admin/horses/search bzw. /js/horse-search.js.
         return [
             [
                 'method' => 'GET',
                 'path' => '/empfehlung',
                 'callback' => [EmpfehlungController::class, 'show'],
             ],
-            [
-                // Serverseitige Basispferd-Suche für die Datalist im Formular
-                // (Muster Framework-Katalog #74): liefert JSON, max. 50 Treffer.
-                'method' => 'GET',
-                'path' => '/suche',
-                'callback' => [EmpfehlungController::class, 'suche'],
-            ],
         ];
-    }
-}
-
-/**
- * Reine COI-Schätzlogik (Pfad-Koeffizienten-Verfahren), unabhängig von
- * HTTP/Controller. Verwendet die im Zuchtwesen übliche Näherung
- * F = Σ (0,5)^(n1+n2+1) über alle gemeinsamen Vorfahren beider Elterntiere,
- * wobei n1/n2 die Generationsschritte vom jeweiligen Elternteil zum
- * gemeinsamen Vorfahren sind - MIT Wrights Pfadregel, identisch zum
- * CoiCalculator des Inzuchtkoeffizient-Addons: Pfade enden am jeweils
- * ersten gemeinsamen Vorfahren, dessen eigene Ahnen zählen nicht zusätzlich
- * (jeder Pfad zu ihnen enthielte den bereits gezählten Vorfahren erneut).
- * Eine frühere Fassung ließ die Regel weg und lieferte dadurch systematisch
- * HÖHERE Werte als der Verpaarungsrechner, sobald ein gemeinsamer Vorfahre
- * selbst bekannte Ahnen im Baum hatte - die Absolutwerte beider Addons waren
- * nicht vergleichbar. Der exakte Wright-Term (1+F_A) für die Ingezüchtetheit
- * des gemeinsamen Vorfahren selbst wird - wie dort - bewusst nicht rekursiv
- * nachberechnet.
- */
-class CoiEstimator {
-
-    public static function fromParentTrees(?array $sireTree, ?array $damTree): float {
-        // Erster Durchlauf ohne Abbruch: Menge der IDs, die in beiden
-        // Teilbäumen vorkommen (gemeinsame Vorfahren).
-        $sireAll = [];
-        self::collectAncestors($sireTree, 0, $sireAll);
-        $damAll = [];
-        self::collectAncestors($damTree, 0, $damAll);
-        $common = array_intersect_key($sireAll, $damAll);
-
-        // Zweiter Durchlauf: Pfade enden am jeweils ersten gemeinsamen
-        // Vorfahren (Wrights Pfadregel, s. Klassenkommentar).
-        $sireOccurrences = [];
-        self::collectAncestors($sireTree, 0, $sireOccurrences, $common);
-
-        $damOccurrences = [];
-        self::collectAncestors($damTree, 0, $damOccurrences, $common);
-
-        $sum = 0.0;
-        foreach ($sireOccurrences as $ancestorId => $linksFromSire) {
-            if (!isset($damOccurrences[$ancestorId])) {
-                continue;
-            }
-            foreach ($linksFromSire as $n1) {
-                foreach ($damOccurrences[$ancestorId] as $n2) {
-                    $sum += (0.5 ** ($n1 + $n2 + 1));
-                }
-            }
-        }
-
-        return $sum;
-    }
-
-    /**
-     * @param array<int, list<int>> &$map Vorfahren-ID => Liste der Schrittzahlen
-     * @param array<int, mixed> $stopAt IDs gemeinsamer Vorfahren, an denen die
-     *   Rekursion endet (Wrights Pfadregel); leer im ersten Durchlauf
-     */
-    private static function collectAncestors(?array $node, int $links, array &$map, array $stopAt = []): void {
-        if ($node === null || empty($node['id']) || !empty($node['is_placeholder'])) {
-            return;
-        }
-
-        $map[$node['id']][] = $links;
-
-        if (isset($stopAt[$node['id']])) {
-            return;
-        }
-
-        self::collectAncestors($node['sire'] ?? null, $links + 1, $map, $stopAt);
-        self::collectAncestors($node['dam'] ?? null, $links + 1, $map, $stopAt);
     }
 }
 
@@ -406,8 +355,9 @@ class EmpfehlungController extends BaseController {
     /** Obergrenze der VOR der Berechnung betrachteten Kandidaten (#69). */
     public const CANDIDATE_CAP_MAX = 200;
 
-    /** Treffer-Obergrenze der Basispferd-Suchroute (Muster Framework #74). */
-    private const SEARCH_LIMIT = 50;
+    // Die Treffer-Obergrenze der Basispferd-Suche steht seit Addons#125 im
+    // Kern (HorseSearchController::MAX_TREFFER) - die addoneigene Konstante
+    // ist mit der Route entfallen, die sie deckelte.
 
     // Ab diesem Fohlen-COI wird eine Verpaarung optisch als erhöht markiert
     // (6,25 % entspricht etwa einer Halbgeschwister- bzw. Onkel/Nichte-Paarung).
@@ -434,9 +384,10 @@ class EmpfehlungController extends BaseController {
         $depth = isset($_GET['depth']) ? max(1, min(self::MAX_DEPTH, (int) $_GET['depth'])) : self::DEFAULT_DEPTH;
         $limit = isset($_GET['limit']) ? max(1, min(self::MAX_LIMIT, (int) $_GET['limit'])) : self::DEFAULT_LIMIT;
 
-        // Basispferd auflösen: bevorzugt die per Datalist-JS gesetzte ID,
-        // ersatzweise (ohne JavaScript) der getippte Text (base_q) über eine
-        // serverseitige Eindeutigkeits-Auflösung.
+        // Basispferd auflösen: bevorzugt die ID aus dem Auswahlfeld, das das
+        // gemeinsame Suchfeld des Kerns füllt (Addons#125), ersatzweise (ohne
+        // JavaScript) der getippte Text (base_q) über eine serverseitige
+        // Eindeutigkeits-Auflösung.
         $baseId = isset($_GET['base_id']) && $_GET['base_id'] !== '' ? (int) $_GET['base_id'] : null;
         $baseQuery = trim((string) ($_GET['base_q'] ?? ''));
         if ($baseId === null && $baseQuery !== '') {
@@ -514,7 +465,7 @@ class EmpfehlungController extends BaseController {
 
             foreach ($candidates as $h) {
                 $candidateId = (int) $h['id'];
-                $coi = CoiEstimator::fromParentTrees($baseTree, $graph->build($candidateId, $depth));
+                $coi = WrightCoi::fromParentTrees($baseTree, $graph->build($candidateId, $depth));
                 $ranking[] = [
                     'id' => $candidateId,
                     'name' => (string) $h['name'],
@@ -555,16 +506,30 @@ class EmpfehlungController extends BaseController {
         } elseif ($baseQuery !== '') {
             $baseLabel = $baseQuery;
         }
-        // Suchfeld mit serverseitig nachgeladener Vorschlagsliste statt eines
-        // Voll-<select> über den gesamten Bestand (#69, Muster Framework #74).
-        // Die gewählte ID landet per JS im Hidden-Feld base_id; ohne
-        // JavaScript löst show() den getippten Text über resolveBaseId() auf.
+        // Pferde-Auswahl über das gemeinsame Suchfeld des Kerns (Addons#125):
+        // `hv-pferdesuche` verdrahtet /js/horse-search.js mit dem Endpunkt
+        // /admin/horses/search und füllt das über `data-ziel` benannte
+        // <select>. Der frühere addoneigene JS-Block samt /suche-Route ist
+        // damit weg - samt seines unbehandelten Wettlaufs: Tippt jemand
+        // zügig, konnte die Antwort auf "Ro" NACH der auf "Roga" eintreffen
+        // und die Vorschlagsliste wieder verschlechtern.
+        //
+        // Das Textfeld behält seinen Namen `base_q`: Ohne JavaScript bleibt
+        // die Auswahlliste leer, und dann löst show() den getippten Text über
+        // resolveBaseId() auf. Das <select> trägt die bereits gewählte ID als
+        // einzige Option vor - sonst ginge das Basispferd verloren, sobald
+        // man nur Tiefe oder Anzahl ändert und erneut absendet.
         $content .= '<div class="form-group"><label for="base_q">Basispferd</label>'
-            . '<input type="text" name="base_q" id="base_q" class="form-control" list="base_q_liste" autocomplete="off"'
+            . '<input type="text" name="base_q" id="base_q" class="form-control hv-pferdesuche"'
+            . ' data-ziel="base_id" autocomplete="off"'
             . ' placeholder="Namen eintippen und Vorschlag auswählen …"'
             . ' value="' . htmlspecialchars($baseLabel, ENT_QUOTES, 'UTF-8') . '">'
-            . '<datalist id="base_q_liste"></datalist>'
-            . '<input type="hidden" name="base_id" id="base_id" value="' . ($baseRow !== null ? (int) $baseRow['id'] : '') . '">'
+            . '<select name="base_id" id="base_id" class="form-control" style="margin-top:0.4rem;">'
+            . ($baseRow !== null
+                ? '<option value="' . (int) $baseRow['id'] . '" selected>'
+                    . htmlspecialchars(self::horseLabel($baseRow), ENT_QUOTES, 'UTF-8') . '</option>'
+                : '<option value="">– bitte oben suchen –</option>')
+            . '</select>'
             . '</div>';
 
         $content .= '<div class="inline">';
@@ -577,50 +542,10 @@ class EmpfehlungController extends BaseController {
         $content .= '<p><button type="submit" class="btn">Empfehlungen berechnen</button></p>';
         $content .= '</form>';
 
-        $content .= '<script>
-(function () {
-    var input = document.getElementById("base_q");
-    var hidden = document.getElementById("base_id");
-    var list = document.getElementById("base_q_liste");
-    if (!input || !hidden || !list || typeof window.fetch !== "function") { return; }
-
-    var byLabel = {};
-    var timer = null;
-
-    function sync() {
-        hidden.value = Object.prototype.hasOwnProperty.call(byLabel, input.value)
-            ? String(byLabel[input.value])
-            : "";
-    }
-
-    function loadSuggestions() {
-        var q = input.value.trim();
-        if (q === "") { return; }
-        fetch("/plugin/anpaarungs-empfehlung/suche?q=" + encodeURIComponent(q))
-            .then(function (res) { return res.json(); })
-            .then(function (items) {
-                if (!Array.isArray(items)) { return; }
-                byLabel = {};
-                list.textContent = "";
-                items.forEach(function (item) {
-                    byLabel[item.label] = item.id;
-                    var option = document.createElement("option");
-                    option.value = item.label;
-                    list.appendChild(option);
-                });
-                sync();
-            })
-            .catch(function () { /* Suche nicht erreichbar - der No-JS-Fallback greift beim Absenden */ });
-    }
-
-    input.addEventListener("input", function () {
-        sync();
-        if (timer) { clearTimeout(timer); }
-        timer = setTimeout(loadSuggestions, 200);
-    });
-    input.addEventListener("change", sync);
-})();
-</script>';
+        // Progressive Enhancement: Das Skript des Kerns (Framework#341)
+        // verdrahtet jedes Feld mit der Klasse `hv-pferdesuche`. Ohne
+        // fetch()/JS greift der No-JS-Fallback in show().
+        $content .= '<script src="/js/horse-search.js"></script>';
 
         if ($baseUnresolved) {
             $content .= '<p class="muted">Zu „' . htmlspecialchars($baseQuery, ENT_QUOTES, 'UTF-8')
@@ -687,58 +612,15 @@ class EmpfehlungController extends BaseController {
     }
 
     /**
-     * Serverseitige Basispferd-Suche für die Datalist (#69, Muster Framework
-     * #74): JSON-Liste {id, label} über eine Teilstring-Suche im Namen,
-     * höchstens SEARCH_LIMIT Treffer. Läuft über denselben Konstruktor-Schutz
-     * (anpaarung.recommend) wie die Empfehlungsseite - die Namen auch
-     * unveröffentlichter Pferde bleiben damit auf den berechtigten Kreis
-     * beschränkt (siehe README: Kandidaten sind bewusst auch unveröffentlichte).
-     */
-    public function suche(): void {
-        header('Content-Type: application/json; charset=utf-8');
-
-        $q = trim((string) ($_GET['q'] ?? ''));
-        if ($q === '') {
-            echo json_encode([]);
-            exit;
-        }
-
-        $stmt = Database::getInstance()->prepare(
-            "SELECT id, name, birth_year FROM horses "
-            . "WHERE deleted_at IS NULL AND name LIKE ? "
-            . "ORDER BY name ASC, id ASC LIMIT " . self::SEARCH_LIMIT
-        );
-        $stmt->execute(['%' . addcslashes($q, '\\%_') . '%']);
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-        // Label-Duplikate (gleicher Name und Jahrgang) eindeutig machen: Die
-        // Datalist mappt Label -> ID, und der No-JS-Fallback löst das
-        // "[#id]"-Suffix in resolveBaseId() wieder auf.
-        $labelCounts = [];
-        foreach ($rows as $row) {
-            $label = self::horseLabel($row);
-            $labelCounts[$label] = ($labelCounts[$label] ?? 0) + 1;
-        }
-
-        $result = [];
-        foreach ($rows as $row) {
-            $label = self::horseLabel($row);
-            if ($labelCounts[$label] > 1) {
-                $label .= ' [#' . (int) $row['id'] . ']';
-            }
-            $result[] = ['id' => (int) $row['id'], 'label' => $label];
-        }
-
-        echo json_encode($result);
-        exit;
-    }
-
-    /**
      * No-JS-Fallback: löst den getippten Text des Suchfelds serverseitig zu
      * einer Pferde-ID auf - nur bei eindeutigem Treffer, sonst null.
      */
     private function resolveBaseId(PDO $db, string $q): ?int {
-        // 1) Eindeutigkeits-Suffix aus der Vorschlagsliste: "… [#123]"
+        // 1) Eindeutigkeits-Suffix "… [#123]". Die Vorschlagsliste des Kerns
+        //    erzeugt es seit Addons#125 nicht mehr (sie hängt UELN und
+        //    Jahrgang an); als ausdrückliche Eingabe bleibt es der einzige
+        //    Weg, ohne JavaScript ein bestimmtes von zwei namensgleichen
+        //    Pferden zu benennen - deshalb wird es weiterhin akzeptiert.
         if (preg_match('/\[#(\d+)\]\s*$/', $q, $m)) {
             $stmt = $db->prepare("SELECT id FROM horses WHERE id = ? AND deleted_at IS NULL");
             $stmt->execute([(int) $m[1]]);

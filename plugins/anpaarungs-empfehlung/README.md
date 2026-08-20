@@ -18,13 +18,18 @@ können deshalb von der öffentlichen Detailseite abweichen, die nur
 veröffentlichte Vorfahren einbezieht. Die Route ist nur per direkter URL
 erreichbar, das Addon registriert keine Dashboard-Kachel und keinen Hook.
 
-Das Basispferd wird über ein Suchfeld mit serverseitig nachgeladener
-Vorschlagsliste gewählt (`<input list>` + `<datalist>`, Route
-`/plugin/anpaarungs-empfehlung/suche?q=…`, JSON, max. 50 Treffer; Muster des
-Framework-Katalogs) statt über ein `<select>` über den Gesamtbestand. Ohne
-JavaScript löst die Seite den getippten Text serverseitig auf, sofern er
-eindeutig ist. Die Suchroute steht - wie die Empfehlungsseite - nur mit der
-Berechtigung `anpaarung.recommend` offen.
+Das Basispferd wird über das gemeinsame Suchfeld des Kerns gewählt
+(`hv-pferdesuche` + `/js/horse-search.js`, gespeist aus
+`GET /admin/horses/search?q=…`, Framework#341); die gewählte ID steht im
+Auswahlfeld `base_id`. Die addoneigene Route
+`/plugin/anpaarungs-empfehlung/suche` ist mit #125 entfallen - sie war eine
+von sieben Kopien derselben Pferdesuche. Ohne JavaScript bleibt das
+Auswahlfeld leer, und die Seite löst den getippten Text (`base_q`)
+serverseitig auf, sofern er eindeutig ist.
+
+**Achtung:** Der Kern-Endpunkt verlangt `horses.view`; wer die Empfehlung
+nutzen darf (`anpaarung.recommend`), braucht für die Suche zusätzlich dieses
+Leserecht. Ohne es bleibt der No-JS-Weg über `base_q`.
 
 Generationen je Elternteil (1–8) und Anzahl der Vorschläge sind einstellbar.
 
@@ -48,8 +53,21 @@ Gruppen** zuweisbar; Admins haben sie systemseitig immer).
 Das Addon `inzuchtkoeffizient` beantwortet „wie hoch ist der COI dieser einen
 Verpaarung?" (zwei fest gewählte Tiere). Dieses Addon dreht die Frage um: „welcher
 Partner passt am besten zu diesem Tier?" und rankt dafür das gesamte Register.
-Die COI-Rechenlogik (Pfad-Koeffizienten-Verfahren) bringt es bewusst selbst mit,
-damit es unabhängig davon funktioniert, ob `inzuchtkoeffizient` aktiviert ist.
+
+Die COI-Rechnung selbst ist seit Addons#123 **keine eigene Fassung mehr**:
+Beide Addons benutzen dieselbe Klasse `Hengstverzeichnis\Addons\Shared\WrightCoi`
+aus `WrightCoi.php`. Weil Addons einzeln installierbar sein müssen (und der
+Addon-Installer des Kerns Symlinks in einem Paket ablehnt), liefert jedes Addon
+diese Datei zeichengleich mit; geladen wird sie genau einmal. Sind beide Addons
+aktiv, rechnen sie damit garantiert durch denselben Code - unabhängig davon,
+welche der mitgelieferten Kopien zuerst geladen wurde. Die Begründung im
+Einzelnen steht im Kopfkommentar von `WrightCoi.php`; die Zeichengleichheit der
+Kopien prüft `tests/Unit/CoiGemeinsameFassungTest.php`.
+
+Der Nachbau des Stammbaums (`AncestorTreeBuilder`) bleibt dagegen eigenständig:
+Er lädt den ganzen Bestand mit einer Abfrage, statt je Kandidat rekursiv
+Einzel-SELECTs abzusetzen (Addons#69), und ist gegen den Kern-`PedigreeBuilder`
+per Unit-Test festgenagelt.
 
 ## Annahmen
 
@@ -57,11 +75,11 @@ Näherung `F = Σ (0,5)^(n1+n2+1)` über alle gemeinsamen Vorfahren, ausgewertet
 über den verfügbaren Stammbaum (Standard 6, bis zu 8 Generationen **je
 Elternteil** - dieselbe Tiefensemantik wie der Verpaarungsrechner des
 `inzuchtkoeffizient`-Addons, siehe Addons#72) – **mit
-Wrights Pfadregel**, identisch zum Rechenkern des `inzuchtkoeffizient`-Addons:
-Pfade enden am jeweils ersten gemeinsamen Vorfahren, dessen eigene Ahnen
-zählen nicht zusätzlich. Beide Addons liefern damit für dieselbe Verpaarung
-denselben Wert; der Gleichlauf ist per Unit-Test festgenagelt
-(`tests/Unit/AnpaarungsEmpfehlungCoiTest.php`). Der exakte Wright-Term für
+Wrights Pfadregel**, gerechnet vom gemeinsamen Rechenkern `WrightCoi` (siehe
+oben): Pfade enden am jeweils ersten gemeinsamen Vorfahren, dessen eigene Ahnen
+zählen nicht zusätzlich. Beide Addons liefern für dieselbe Verpaarung denselben
+Wert - seit Addons#123 nicht mehr, weil zwei Fassungen zufällig übereinstimmen,
+sondern weil es nur noch eine gibt. Der exakte Wright-Term für
 die Eigen-Ingezüchtetheit gemeinsamer Vorfahren wird – wie dort – nicht
 rekursiv nachberechnet.
 

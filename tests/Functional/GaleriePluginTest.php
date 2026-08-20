@@ -11,13 +11,14 @@ namespace Tests\Functional;
  * Der Foto-Upload selbst wird hier nicht durchgespielt (der Test-HttpClient
  * sendet keine multipart-Anfragen) - abgedeckt sind der Video-Link-Pfad
  * inkl. Host-/Schema-Validierung, die öffentliche Galerie-Sektion, die
- * Berechtigungsdurchsetzung der Verwaltung sowie (#74) die
- * Datalist-Pferdesuche samt No-JS-Fallback und die Paginierung der
- * Medienliste.
+ * Berechtigungsdurchsetzung der Verwaltung sowie (seit #125) der Einbau der
+ * GEMEINSAMEN Pferdesuche des Kerns samt No-JS-Fallback und die Paginierung
+ * der Medienliste.
  */
 class GaleriePluginTest extends FunctionalTestCase {
 
     use HorseListHelper;
+    use PferdesucheHelper;
 
     private const SLUG = 'galerie';
 
@@ -116,25 +117,17 @@ class GaleriePluginTest extends FunctionalTestCase {
         $verwaltungPage = $admin->get('/plugin/galerie/verwaltung');
         $this->assertSame(200, $verwaltungPage->statusCode);
 
-        // Pferde-Auswahl (#74): Suchfeld mit Datalist statt Voll-<select>
-        // über den gesamten Bestand; die gewählte ID reist im Hidden-Feld.
-        $this->assertStringContainsString('list="horse_q_liste"', $verwaltungPage->body, 'Das Pferd-Feld sollte eine Datalist referenzieren.');
-        $this->assertStringContainsString('<datalist id="horse_q_liste">', $verwaltungPage->body);
-        $this->assertStringContainsString('name="horse_id" id="horse_id" value=""', $verwaltungPage->body);
-        $this->assertStringNotContainsString('<select name="horse_id"', $verwaltungPage->body, 'Der frühere Voll-<select> über alle Pferde darf nicht mehr gerendert werden.');
-
-        // Suchroute (#74): JSON {id, label}, nur für Berechtigte, leere
-        // Suche liefert eine leere Liste statt des Gesamtbestands.
-        $sucheResponse = $admin->get('/plugin/galerie/suche?q=' . urlencode("GalerieTestPferd-{$unique}"));
-        $this->assertSame(200, $sucheResponse->statusCode);
-        $suggestions = json_decode($sucheResponse->body, true);
-        $this->assertIsArray($suggestions, "Suchroute sollte JSON liefern. Body: {$sucheResponse->body}");
-        $this->assertCount(1, $suggestions, 'Der eindeutige Testname sollte genau einen Treffer liefern.');
-        $this->assertSame($horseId, (int) $suggestions[0]['id']);
-        $this->assertStringContainsString("GalerieTestPferd-{$unique}", (string) $suggestions[0]['label']);
-
-        $emptySuche = $admin->get('/plugin/galerie/suche?q=');
-        $this->assertSame('[]', trim($emptySuche->body), 'Ohne Suchbegriff darf die Suchroute nichts ausliefern.');
+        // Pferde-Auswahl (#125): das GEMEINSAME Suchfeld des Kerns statt einer
+        // achten Kopie derselben Suche. Das Textfeld behält seinen Namen
+        // `horse_q` - ohne JavaScript bleibt das Auswahlfeld leer, und dann
+        // löst store() den getippten Text serverseitig auf.
+        $this->assertGemeinsamePferdesuche($verwaltungPage->body, 'horse_id');
+        $this->assertMatchesRegularExpression(
+            '/<input[^>]*name="horse_q"[^>]*class="[^"]*hv-pferdesuche/',
+            $verwaltungPage->body,
+            'Das Textfeld muss weiterhin `horse_q` heißen - daran hängt der No-JS-Fallback.'
+        );
+        $this->assertEigeneSuchrouteEntfallen($admin, '/plugin/galerie/suche');
 
         $videoUrl = 'https://www.youtube.com/watch?v=test' . $unique;
         $storeVideo = $admin->post('/plugin/galerie/verwaltung/store', [
@@ -216,11 +209,11 @@ class GaleriePluginTest extends FunctionalTestCase {
         $deniedResponse = $editor->get('/plugin/galerie/verwaltung');
         $this->assertSame(403, $deniedResponse->statusCode);
 
-        // ... auch von der Suchroute (#74): Pferdenamen (inkl.
-        // unveröffentlichter Pferde) bleiben auf den berechtigten Kreis
-        // beschränkt.
-        $deniedSuche = $editor->get('/plugin/galerie/suche?q=' . urlencode("GalerieTestPferd-{$unique}"));
-        $this->assertSame(403, $deniedSuche->statusCode);
+        // Die Vorschläge holt seit #125 der Kern-Endpunkt (er verlangt
+        // `horses.view`, siehe README) - dieses Addon stellt keine eigene
+        // Suchroute mehr daneben, an der die Rechteprüfung ein zweites Mal
+        // richtig sein müsste.
+        $this->assertEigeneSuchrouteEntfallen($editor, '/plugin/galerie/suche');
 
         // ... und ist nach Zuweisung der Berechtigung erreichbar.
         $this->setGroupPermissions($admin, $editorGroupId, self::EDITOR_DEFAULT_PERMISSIONS + [
@@ -242,5 +235,110 @@ class GaleriePluginTest extends FunctionalTestCase {
 
         $detailAfterDelete = $visitor->get("/horse?id={$horseId}");
         $this->assertStringNotContainsString("Freispringen {$unique}", $detailAfterDelete->body);
+    }
+
+    /**
+     * #134: Anlegen und Löschen eines Galeriemediums müssen im Audit-Log
+     * stehen.
+     *
+     * Der Löschfall ist der eigentliche Anlass: Ein Galeriebild verschwand
+     * bisher samt hochgeladener Datei spurlos aus dem Verzeichnis - im
+     * Protokoll blieb davon nichts, obwohl es genau der Vorgang ist, den man
+     * später nachvollziehen will. Deshalb wird hier ein Medium mit einer
+     * ECHTEN Datei in der geschützten Ablage angelegt (der Test-HttpClient
+     * spricht kein multipart, siehe Klassenkommentar) und über die
+     * Lösch-Route entfernt: Nur so lässt sich prüfen, dass der Eintrag den
+     * Dateinamen nennt UND dass die Datei tatsächlich weg ist.
+     *
+     * Gegenprobe gelaufen: Ohne die AuditLogger::log()-Aufrufe in
+     * VerwaltungController::store()/delete() findet die Abfrage keine
+     * Einträge, und der Test schlägt an den assertCount(1)-Zeilen fehl.
+     */
+    public function testAnlegenUndLoeschenStehenImProtokoll(): void {
+        $admin = $this->authenticatedClient();
+        $admin->post('/admin/plugins/toggle', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'slug' => self::SLUG,
+            'enable' => '1',
+        ]);
+
+        $unique = uniqid();
+        $horseName = "GalerieProtokoll-{$unique}";
+        $horseId = $this->createHorse($admin, $horseName, ['status' => 'active']);
+
+        // 1. Anlegen über die Verwaltung (Video-Weg, weil der Upload über
+        // HTTP hier nicht spielbar ist).
+        $verwaltung = $admin->get('/plugin/galerie/verwaltung');
+        $videoUrl = 'https://vimeo.com/7654' . $unique;
+        $bildunterschrift = "Bildunterschrift mit Klarnamen {$unique}";
+        $admin->post('/plugin/galerie/verwaltung/store', [
+            'csrf_token' => $verwaltung->formField('csrf_token') ?? '',
+            'horse_id' => (string) $horseId,
+            'video_url' => $videoUrl,
+            'caption' => $bildunterschrift,
+        ]);
+
+        $angelegt = $this->protokollEintraege('Galerie: Medium hinzugefügt', "Pferd #{$horseId} ");
+        $this->assertCount(1, $angelegt, 'Ein hinzugefügtes Medium muss genau einen Protokolleintrag erzeugen.');
+        $this->assertStringContainsString($horseName, (string) $angelegt[0]['details'], 'Der Eintrag muss das Pferd benennen.');
+        $this->assertStringContainsString($videoUrl, (string) $angelegt[0]['details'], 'Bei einem Video gehört der Verweis in den Eintrag.');
+        $this->assertStringNotContainsString(
+            $bildunterschrift,
+            (string) $angelegt[0]['details'],
+            'Die Bildunterschrift ist freier Text und gehört nicht ins dauerhafte Protokoll.'
+        );
+
+        // 2. Löschen eines BILDES samt Datei - der Fall aus dem Issue.
+        $ablage = \FRAMEWORK_VENDOR_DIR . '/storage/plugin_galerie';
+        if (!is_dir($ablage)) {
+            mkdir($ablage, 0750, true);
+        }
+        $dateiName = "galerie_protokoll_{$unique}.png";
+        file_put_contents($ablage . '/' . $dateiName, "\x89PNG\r\n\x1a\n");
+
+        $db = \App\Database::getInstance();
+        $stmt = $db->prepare(
+            "INSERT INTO `plugin_galerie_media` (horse_id, type, file_path, caption, sort_order)
+             VALUES (?, 'image', ?, ?, 0)"
+        );
+        $stmt->execute([$horseId, $dateiName, "Foto {$unique}"]);
+        $mediumId = (int) $db->lastInsertId();
+
+        $verwaltungVorLoeschen = $admin->get('/plugin/galerie/verwaltung');
+        $admin->post('/plugin/galerie/verwaltung/delete', [
+            'csrf_token' => $verwaltungVorLoeschen->formField('csrf_token') ?? '',
+            'id' => (string) $mediumId,
+        ]);
+
+        $this->assertFileDoesNotExist(
+            $ablage . '/' . $dateiName,
+            'Voraussetzung des Protokollfalls: Die Datei muss beim Löschen wirklich verschwinden.'
+        );
+
+        $geloescht = $this->protokollEintraege('Galerie: Medium gelöscht', "Medium #{$mediumId},");
+        $this->assertCount(1, $geloescht, 'Das Löschen eines Galeriebildes muss protokolliert werden - genau das fehlte (#134).');
+
+        $details = (string) $geloescht[0]['details'];
+        $this->assertStringContainsString($horseName, $details, 'Ohne Angabe, zu welchem Pferd das Bild gehörte, hilft der Eintrag niemandem.');
+        $this->assertStringContainsString($dateiName, $details, 'Der Eintrag muss die entfernte Datei benennen.');
+        $this->assertStringContainsString('entfernt', $details, 'Der Eintrag muss festhalten, dass die Datei entfernt wurde.');
+    }
+
+    /**
+     * Protokolleinträge dieses Addons zu einer Aktion und einem Bezug.
+     * Kategorie ist fest der Addon-Slug (#134) - die Auswahlliste der
+     * Protokollansicht entsteht im Kern aus SELECT DISTINCT category.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function protokollEintraege(string $aktion, string $detailFragment): array {
+        $stmt = \App\Database::getInstance()->prepare(
+            'SELECT username, details FROM audit_logs
+             WHERE category = ? AND action = ? AND details LIKE ?
+               AND created_at >= (NOW() - INTERVAL 10 MINUTE)'
+        );
+        $stmt->execute([self::SLUG, $aktion, '%' . $detailFragment . '%']);
+
+        return $stmt->fetchAll(\PDO::FETCH_ASSOC);
     }
 }

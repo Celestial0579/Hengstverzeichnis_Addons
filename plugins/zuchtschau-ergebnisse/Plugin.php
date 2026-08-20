@@ -22,8 +22,8 @@ namespace Plugin\ZuchtschauErgebnisse;
 use App\Controllers\BaseController;
 use App\Database;
 use App\Plugin\HookManager;
-use App\Plugin\PluginPage;
 use App\Router;
+use App\Service\AuditLogger;
 use PDO;
 
 class Plugin {
@@ -39,6 +39,218 @@ class Plugin {
         // und Anfrage, bei sieben Addons also sieben Roundtrips, bevor die
         // erste Zeile der Seite steht.
         $hooks->addFilter('horse.detail_sections', [$this, 'addDetailSection']);
+        // Seit #124 der einzige Pflegeweg: der Abschnitt im
+        // Bearbeitungsformular des Pferdes. Die addoneigene Ergebnisseite ist
+        // entfallen - sie verlangte, dasselbe Pferd über eine zweite Auswahl
+        // erneut herauszusuchen, obwohl man in dessen Datensatz bereits steht.
+        $hooks->addFilter('horse.edit_sections', [$this, 'addEditSection']);
+    }
+
+    /**
+     * Filter (#124, Framework#255): hängt die Ergebnispflege SAMT
+     * Teilwertungen direkt in das Admin-Bearbeitungsformular des Hengstes -
+     * wie zuvor schon bei `titel-praemierungen` (#117), `verkaufsboerse`
+     * (#119) und `gesundheitstests` (#120).
+     *
+     * Der aufwendigste der fünf Fälle, weil hier ZWEI Ebenen aneinander
+     * hängen: Eine Teilwertung gehört zu einem Ergebnis, das erst gespeichert
+     * sein muß. Der Ablauf ist deshalb: Ergebnis anlegen (Formular unten) ->
+     * Rückweg auf dieselbe Seite -> Teilwertungen im Block dieses Ergebnisses
+     * erfassen. Damit der Benutzer dabei nicht die Stelle verliert, führen
+     * alle Rückwege der Teilwertungs-Routen einen Anker auf den Block des
+     * Ergebnisses mit (`#zs-ergebnis-<id>`, siehe
+     * ErgebnisseController::redirectBack()) - das ist das
+     * `zurueck=pferd`-Muster aus #88, um die `ergebnis_id` erweitert.
+     *
+     * Wie auf der entfallenen Seite trägt der Abschnitt anlegen und löschen,
+     * kein Ändern: Das ist der Umfang, den store() und storeTeilwertung()
+     * kennen; ein Änderungsweg wäre eine neue Fähigkeit, kein Nachzug.
+     */
+    public function addEditSection(array $sections, array $horse): array {
+        // Das Bearbeitungsformular verlangt horses.edit, diese Daten aber
+        // zuchtschau-ergebnisse.manage. Ohne diese Prüfung sähe ein Redakteur
+        // ein Formular, das beim Absenden 403 liefert. Fail-closed.
+        if (!\App\Permission\GroupMembership::hasPermission(
+            (int) ($_SESSION['user_id'] ?? 0), 'zuchtschau-ergebnisse', 'manage'
+        )) {
+            return $sections;
+        }
+
+        $horseId = (int) ($horse['id'] ?? 0);
+        if ($horseId <= 0) {
+            return $sections;
+        }
+
+        $db = Database::getInstance();
+        $stmt = $db->prepare(
+            'SELECT id, event_name, event_date, category, score, judge, placement, `comment`
+             FROM `plugin_zuchtschau_ergebnisse`
+             WHERE horse_id = :id
+             ORDER BY event_date DESC, id DESC'
+        );
+        $stmt->execute(['id' => $horseId]);
+        $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Teilwertungen (#82) der angezeigten Ergebnisse in EINEM Zug laden
+        // und nach Ergebnis gruppieren - erspart eine Query je Ergebniszeile.
+        // Eine Obergrenze braucht es hier nicht mehr: Der Abschnitt zeigt die
+        // Ergebnisse EINES Pferdes, nicht mehr den gesamten Bestand - genau
+        // deshalb hatte die alte Seite eine (HORSE_OPTION_LIMIT/RESULT_LIMIT).
+        $teilwertungenByErgebnis = [];
+        $ergebnisIds = array_map(static fn (array $r): int => (int) $r['id'], $results);
+        if ($ergebnisIds !== []) {
+            $platzhalter = implode(',', array_fill(0, count($ergebnisIds), '?'));
+            $twStmt = $db->prepare(
+                'SELECT id, ergebnis_id, bezeichnung, wertung, note, platzierung, distanz, zeit
+                 FROM `plugin_zuchtschau_teilwertungen`
+                 WHERE ergebnis_id IN (' . $platzhalter . ')
+                 ORDER BY id ASC'
+            );
+            $twStmt->execute($ergebnisIds);
+            foreach ($twStmt->fetchAll(PDO::FETCH_ASSOC) as $tw) {
+                $teilwertungenByErgebnis[(int) $tw['ergebnis_id']][] = $tw;
+            }
+        }
+
+        $csrfToken = Router::generateCsrfToken();
+        $esc = static fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
+
+        // Nur Geometrie, keine Farben - die kommen aus den Theme-Variablen
+        // (Addons#66). Der Block steht im Admin-Layout des Kerns.
+        $html = '<style>'
+            . '.zs-abschnitt-block{border:1px solid var(--border-color);border-radius:var(--border-radius, 4px);padding:0.75rem;margin-bottom:0.75rem;}'
+            . '.zs-abschnitt-kopf{display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-bottom:0.5rem;}'
+            . '.zs-abschnitt-tw-form{display:grid;grid-template-columns:repeat(6,1fr) auto;gap:0.5rem;align-items:end;margin-top:0.5rem;}'
+            . '</style>';
+        $html .= '<h3 style="margin-top:0;">🏆 Zuchtschau-/Körungsergebnisse</h3>';
+
+        foreach ($results as $row) {
+            $ergebnisId = (int) $row['id'];
+            $teilwertungen = $teilwertungenByErgebnis[$ergebnisId] ?? [];
+
+            // Der Anker ist das Gegenstück zum Rückweg der Teilwertungs-Routen:
+            // Nach dem Anlegen oder Löschen einer Teilwertung landet der
+            // Benutzer wieder an genau diesem Block, nicht am Seitenanfang.
+            $html .= '<div class="zs-abschnitt-block" id="zs-ergebnis-' . $ergebnisId . '">';
+
+            $html .= '<div class="zs-abschnitt-kopf">';
+            $html .= '<strong>' . $esc($row['event_name'])
+                . ($row['event_date'] !== null ? ' (' . $esc($row['event_date']) . ')' : '') . '</strong>';
+            $html .= '<form method="POST" action="/plugin/zuchtschau-ergebnisse/ergebnisse/delete" style="margin:0;"'
+                . ' onsubmit="return confirm(\'Ergebnis wirklich löschen? Zugehörige Teilwertungen werden mitgelöscht.\');">'
+                . '<input type="hidden" name="csrf_token" value="' . $esc($csrfToken) . '">'
+                . '<input type="hidden" name="id" value="' . $ergebnisId . '">'
+                . '<button type="submit" class="btn btn-secondary" style="color:var(--danger-fg);">Ergebnis löschen</button>'
+                . '</form>';
+            $html .= '</div>';
+
+            $html .= '<p style="margin:0 0 0.5rem 0;color:var(--text-muted);font-size:0.9em;">'
+                . 'Kategorie: ' . $esc($row['category'] ?? '–')
+                . ' · Note: ' . $esc($row['score'] ?? '–')
+                . ' · Platzierung: ' . $esc($row['placement'] ?? '–')
+                . ' · Richter: ' . $esc($row['judge'] ?? '–') . '</p>';
+            if (!empty($row['comment'])) {
+                $html .= '<p style="margin:0 0 0.5rem 0;">' . nl2br($esc($row['comment'])) . '</p>';
+            }
+
+            // Zweite Ebene: aufklappbar, aber offen, sobald es etwas zu sehen
+            // gibt - sonst verschwände nach dem Anlegen einer Teilwertung
+            // ausgerechnet das, was gerade entstanden ist.
+            $html .= '<details' . ($teilwertungen ? ' open' : '') . '>';
+            $html .= '<summary>Teilwertungen (' . count($teilwertungen) . ')</summary>';
+
+            if ($teilwertungen) {
+                $html .= '<table style="width:100%;border-collapse:collapse;font-size:0.9em;margin-top:0.5rem;">';
+                $html .= '<thead><tr style="text-align:left;border-bottom:1px solid var(--border-color);">'
+                    . '<th style="padding:0.2rem 0.4rem;">Bezeichnung</th><th style="padding:0.2rem 0.4rem;">Wertung</th>'
+                    . '<th style="padding:0.2rem 0.4rem;">Note</th><th style="padding:0.2rem 0.4rem;">Platzierung</th>'
+                    . '<th style="padding:0.2rem 0.4rem;">Distanz</th><th style="padding:0.2rem 0.4rem;">Zeit</th>'
+                    . '<th></th></tr></thead><tbody>';
+                foreach ($teilwertungen as $tw) {
+                    $html .= '<tr>';
+                    foreach (['bezeichnung', 'wertung', 'note', 'platzierung', 'distanz', 'zeit'] as $feld) {
+                        $html .= '<td style="padding:0.2rem 0.4rem;">' . $esc($tw[$feld] ?? '–') . '</td>';
+                    }
+                    $html .= '<td style="padding:0.2rem 0.4rem;">'
+                        . '<form method="POST" action="/plugin/zuchtschau-ergebnisse/ergebnisse/teilwertung/delete" style="margin:0;"'
+                        . ' onsubmit="return confirm(\'Teilwertung wirklich löschen?\');">'
+                        . '<input type="hidden" name="csrf_token" value="' . $esc($csrfToken) . '">'
+                        . '<input type="hidden" name="id" value="' . (int) $tw['id'] . '">'
+                        . '<button type="submit" class="btn btn-secondary" style="color:var(--danger-fg);">Löschen</button>'
+                        . '</form></td>';
+                    $html .= '</tr>';
+                }
+                $html .= '</tbody></table>';
+            }
+
+            // Eigenes Formular je Ergebnis: Die ergebnis_id ist der Bezug der
+            // zweiten Ebene und reist als verstecktes Feld mit. Aria-Labels
+            // statt sichtbarer <label>, weil die Platzhalter die Spalten
+            // bereits benennen und je Ergebnis sonst sechs id-Werte doppelt
+            // im Dokument stünden.
+            $html .= '<form method="POST" action="/plugin/zuchtschau-ergebnisse/ergebnisse/teilwertung/store" class="zs-abschnitt-tw-form">';
+            $html .= '<input type="hidden" name="csrf_token" value="' . $esc($csrfToken) . '">';
+            $html .= '<input type="hidden" name="ergebnis_id" value="' . $ergebnisId . '">';
+            $html .= '<input type="text" name="bezeichnung" class="form-control" placeholder="Bezeichnung" aria-label="Bezeichnung" maxlength="150" required>';
+            $html .= '<input type="text" name="wertung" class="form-control" placeholder="Wertung" aria-label="Wertung" maxlength="100">';
+            $html .= '<input type="text" name="note" class="form-control" placeholder="Note" aria-label="Note" maxlength="50">';
+            $html .= '<input type="text" name="platzierung" class="form-control" placeholder="Platzierung" aria-label="Platzierung" maxlength="50">';
+            $html .= '<input type="text" name="distanz" class="form-control" placeholder="Distanz" aria-label="Distanz" maxlength="50">';
+            $html .= '<input type="text" name="zeit" class="form-control" placeholder="Zeit" aria-label="Zeit" maxlength="50">';
+            $html .= '<button type="submit" class="btn">Teilwertung anlegen</button>';
+            $html .= '</form>';
+
+            $html .= '</details>';
+            $html .= '</div>';
+        }
+
+        if (!$results) {
+            $html .= '<p style="color:var(--text-muted);">Für dieses Pferd ist noch kein Ergebnis erfasst.'
+                . ' Teilwertungen lassen sich erfassen, sobald das zugehörige Ergebnis gespeichert ist.</p>';
+        }
+
+        // Eigenes Formular mit eigener POST-Route: Der Abschnitt steht
+        // ausserhalb des Kern-Formulars (Framework#255), der Speichern-Knopf
+        // oben speichert diese Felder also NICHT mit.
+        //
+        // Die Feld-`id`s tragen das Präfix `zs_`: Das Kern-Formular auf
+        // derselben Seite führt eigene Felder, und zwei gleiche id-Werte in
+        // einem Dokument hängen das <label> an das falsche Feld. Die
+        // `name`-Attribute bleiben unverändert - sie gelten je Formular und
+        // sind der Vertrag mit store().
+        $html .= '<h4 style="margin-bottom:0.5rem;">Weiteres Ergebnis erfassen</h4>';
+        $html .= '<form method="POST" action="/plugin/zuchtschau-ergebnisse/ergebnisse/store">';
+        $html .= '<input type="hidden" name="csrf_token" value="' . $esc($csrfToken) . '">';
+        $html .= '<input type="hidden" name="horse_id" value="' . $horseId . '">';
+        $html .= '<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">';
+        $html .= '<div class="form-group"><label for="zs_event_name">Veranstaltung</label>'
+            . '<input type="text" name="event_name" id="zs_event_name" class="form-control" maxlength="150" required></div>';
+        $html .= '<div class="form-group"><label for="zs_event_date">Datum</label>'
+            . '<input type="date" name="event_date" id="zs_event_date" class="form-control"></div>';
+        $html .= '</div>';
+        $html .= '<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">';
+        $html .= '<div class="form-group"><label for="zs_category">Kategorie</label>'
+            . '<input type="text" name="category" id="zs_category" class="form-control" maxlength="100" placeholder="z. B. Körung, Zuchtschau"></div>';
+        $html .= '<div class="form-group"><label for="zs_score">Note</label>'
+            . '<input type="text" name="score" id="zs_score" class="form-control" maxlength="50"></div>';
+        $html .= '</div>';
+        $html .= '<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">';
+        $html .= '<div class="form-group"><label for="zs_placement">Platzierung</label>'
+            . '<input type="text" name="placement" id="zs_placement" class="form-control" maxlength="50"></div>';
+        $html .= '<div class="form-group"><label for="zs_judge">Richter</label>'
+            . '<input type="text" name="judge" id="zs_judge" class="form-control" maxlength="100"></div>';
+        $html .= '</div>';
+        $html .= '<div class="form-group"><label for="zs_comment">Kommentar</label>'
+            . '<textarea name="comment" id="zs_comment" class="form-control" rows="3"></textarea></div>';
+        // Beschriftung bewusst nicht "Speichern": Auf der Seite gibt es zwei
+        // Knöpfe, und wer hier drückt, verliert ungespeicherte Stammdaten oben.
+        $html .= '<p><button type="submit" class="btn">Ergebnis hinzufügen</button>'
+            . ' <span style="color:var(--text-muted);font-size:0.85rem;">Änderungen an den Stammdaten oben bitte zuerst speichern.'
+            . ' Teilwertungen werden anschließend am gespeicherten Ergebnis erfaßt.</span></p>';
+        $html .= '</form>';
+
+        $sections[] = $html;
+        return $sections;
     }
 
     /**
@@ -188,15 +400,14 @@ class Plugin {
     }
 
     /**
+     * Nur noch schreibende Routen (#124): Die GET-Route führte auf die
+     * entfallene Ergebnisseite. Was bleibt, sind die vier Ziele der Formulare
+     * im Pferdeabschnitt - zwei je Ebene.
+     *
      * @return array<int, array{method:string, path:string, callback:array}>
      */
     public function routes(): array {
         return [
-            [
-                'method' => 'GET',
-                'path' => '/ergebnisse',
-                'callback' => [ErgebnisseController::class, 'index'],
-            ],
             [
                 'method' => 'POST',
                 'path' => '/ergebnisse/store',
@@ -225,6 +436,13 @@ class Plugin {
  * Admin-Verwaltung der Zuchtschau-/Körungsergebnisse. Zugriffsschutz über
  * die selbst registrierte Berechtigung "zuchtschau-ergebnisse.manage",
  * analog zum besucherstatistik-Muster (StatistikController).
+ *
+ * Seit #124 hat der Controller keine eigene Seite mehr: Alle vier Routen sind
+ * die Ziele der Formulare im Abschnitt des Pferdeformulars
+ * (Plugin::addEditSection). Mit der Seite entfallen sind ihre beiden
+ * Obergrenzen (HORSE_OPTION_LIMIT, RESULT_LIMIT) - sie deckelten den
+ * KOMPLETTEN Pferdebestand und ALLE Ergebnisse, und beides lädt der Abschnitt
+ * gar nicht mehr: Er zeigt die Ergebnisse genau eines Pferdes.
  */
 class ErgebnisseController extends BaseController {
 
@@ -234,220 +452,63 @@ class ErgebnisseController extends BaseController {
         $this->requirePermission('zuchtschau-ergebnisse', 'manage');
     }
 
-    /**
-     * Obergrenzen der Uebersicht. Beide bewusst grosszuegig - sie sollen den
-     * Normalbetrieb nicht einschraenken, sondern nur verhindern, dass die
-     * Seite mit dem Bestand mitwaechst.
-     */
-    private const HORSE_OPTION_LIMIT = 500;
-    private const RESULT_LIMIT = 200;
-
-    public function index(): void {
-        $db = Database::getInstance();
-
-        // Drei Obergrenzen, wo vorher keine war. Die Seite lud den KOMPLETTEN
-        // Pferdebestand, ALLE Ergebnisse und ALLE Teilwertungen - drei
-        // Volltabellen-Abfragen bei jedem Aufruf, deren Ergebnis vollständig
-        // im PHP-Speicher landet. Mit ein paar hundert Zeilen faellt das nicht
-        // auf, mit dem Bestand waechst es linear mit; die Schwester-Addons
-        // (gesundheitstests, galerie, titel-praemierungen, verkaufsboerse)
-        // arbeiten aus genau diesem Grund laengst mit SEARCH_LIMIT.
-        $horses = $db->query(
-            'SELECT id, name, birth_year FROM horses WHERE deleted_at IS NULL'
-            . ' ORDER BY name ASC LIMIT ' . (self::HORSE_OPTION_LIMIT + 1)
-        )->fetchAll(PDO::FETCH_ASSOC);
-        $horsesCapped = count($horses) > self::HORSE_OPTION_LIMIT;
-        if ($horsesCapped) {
-            array_pop($horses);
-        }
-
-        $results = $db->query(
-            'SELECT e.*, h.name AS horse_name
-             FROM `plugin_zuchtschau_ergebnisse` e
-             JOIN horses h ON h.id = e.horse_id
-             ORDER BY e.event_date DESC, e.id DESC
-             LIMIT ' . (self::RESULT_LIMIT + 1)
-        )->fetchAll(PDO::FETCH_ASSOC);
-        $resultsCapped = count($results) > self::RESULT_LIMIT;
-        if ($resultsCapped) {
-            array_pop($results);
-        }
-
-        // Teilwertungen (#82) in einem Rutsch laden und nach Ergebnis
-        // gruppieren - erspart eine Query je Ergebniszeile. Jetzt aber nur
-        // noch fuer die tatsaechlich angezeigten Ergebnisse: Vorher wurde die
-        // gesamte Tabelle geladen, um die Teilwertungen von hoechstens ein
-        // paar Dutzend sichtbaren Zeilen zu beschriften.
-        $teilwertungenByErgebnis = [];
-        $ergebnisIds = array_map(static fn (array $r): int => (int) $r['id'], $results);
-        if ($ergebnisIds !== []) {
-            $platzhalter = implode(',', array_fill(0, count($ergebnisIds), '?'));
-            $twStmt = $db->prepare(
-                'SELECT id, ergebnis_id, bezeichnung, wertung, note, platzierung, distanz, zeit
-                 FROM `plugin_zuchtschau_teilwertungen`
-                 WHERE ergebnis_id IN (' . $platzhalter . ')
-                 ORDER BY id ASC'
-            );
-            $twStmt->execute($ergebnisIds);
-            foreach ($twStmt->fetchAll(PDO::FETCH_ASSOC) as $tw) {
-                $teilwertungenByErgebnis[(int) $tw['ergebnis_id']][] = $tw;
-            }
-        }
-
-        $csrfToken = Router::generateCsrfToken();
-
-        // Die Seite rendert als Fragment im Framework-Layout
-        // (App\Plugin\PluginPage, Addons#66) - Header, Navigation,
-        // Theme-Umschalter, Markenfarben und style.css kommen zentral vom
-        // Layout. Hier bleibt nur addon-spezifische Geometrie
-        // (Formular-Raster), Farben ausschließlich über Theme-Variablen.
-        $content = '<style>';
-        $content .= '.zuchtschau-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}';
-        $content .= '.zuchtschau-tw-form{display:grid;grid-template-columns:repeat(6,1fr) auto;gap:0.5rem;align-items:end;margin:0.3rem 0 0.5rem 0;}';
-        $content .= '.zuchtschau-tw-zelle{padding-left:1.5rem;}';
-        $content .= '</style>';
-
-        $content .= '<div class="card">';
-        $content .= '<h1>🏆 Zuchtschau-/Körungs-Ergebnisverwaltung</h1>';
-
-        $content .= '<h2>Neues Ergebnis erfassen</h2>';
-        if ($horsesCapped) {
-            $content .= '<p style="color: var(--text-muted); font-size: 0.9rem;">Die Auswahl zeigt die ersten '
-                . self::HORSE_OPTION_LIMIT . ' Pferde alphabetisch.</p>';
-        }
-        $content .= '<form method="POST" action="/plugin/zuchtschau-ergebnisse/ergebnisse/store">';
-        $content .= '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">';
-
-        $content .= '<div class="form-group"><label for="horse_id">Pferd</label>'
-            . '<select name="horse_id" id="horse_id" class="form-control" required>';
-        $content .= '<option value="">– auswählen –</option>';
-        foreach ($horses as $h) {
-            $content .= '<option value="' . (int) $h['id'] . '">'
-                . htmlspecialchars($h['name'] . ($h['birth_year'] ? ' (' . $h['birth_year'] . ')' : ''), ENT_QUOTES, 'UTF-8')
-                . '</option>';
-        }
-        $content .= '</select></div>';
-
-        $content .= '<div class="zuchtschau-row">';
-        $content .= '<div class="form-group"><label for="event_name">Veranstaltung</label><input type="text" name="event_name" id="event_name" class="form-control" required></div>';
-        $content .= '<div class="form-group"><label for="event_date">Datum</label><input type="date" name="event_date" id="event_date" class="form-control"></div>';
-        $content .= '</div>';
-
-        $content .= '<div class="zuchtschau-row">';
-        $content .= '<div class="form-group"><label for="category">Kategorie</label><input type="text" name="category" id="category" class="form-control" placeholder="z. B. Körung, Zuchtschau"></div>';
-        $content .= '<div class="form-group"><label for="score">Note</label><input type="text" name="score" id="score" class="form-control"></div>';
-        $content .= '</div>';
-
-        $content .= '<div class="zuchtschau-row">';
-        $content .= '<div class="form-group"><label for="placement">Platzierung</label><input type="text" name="placement" id="placement" class="form-control"></div>';
-        $content .= '<div class="form-group"><label for="judge">Richter</label><input type="text" name="judge" id="judge" class="form-control"></div>';
-        $content .= '</div>';
-
-        $content .= '<div class="form-group"><label for="comment">Kommentar</label><textarea name="comment" id="comment" class="form-control" rows="3"></textarea></div>';
-
-        $content .= '<p><button type="submit" class="btn">Speichern</button></p>';
-        $content .= '</form>';
-
-        $content .= '<h2>Erfasste Ergebnisse</h2>';
-        if ($resultsCapped) {
-            $content .= '<p style="color: var(--text-muted); font-size: 0.9rem;">Es werden die '
-                . self::RESULT_LIMIT . ' neuesten Ergebnisse angezeigt.</p>';
-        }
-        $content .= '<table><thead><tr><th>Pferd</th><th>Veranstaltung</th><th>Datum</th><th>Note</th><th>Platzierung</th><th></th></tr></thead><tbody>';
-        foreach ($results as $row) {
-            $content .= '<tr>';
-            $content .= '<td>' . htmlspecialchars((string) $row['horse_name'], ENT_QUOTES, 'UTF-8') . '</td>';
-            $content .= '<td>' . htmlspecialchars((string) $row['event_name'], ENT_QUOTES, 'UTF-8') . '</td>';
-            $content .= '<td>' . htmlspecialchars((string) ($row['event_date'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
-            $content .= '<td>' . htmlspecialchars((string) ($row['score'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
-            $content .= '<td>' . htmlspecialchars((string) ($row['placement'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
-            $content .= '<td><form method="POST" action="/plugin/zuchtschau-ergebnisse/ergebnisse/delete" style="margin:0;" onsubmit="return confirm(\'Ergebnis wirklich löschen? Zugehörige Teilwertungen werden mitgelöscht.\');">'
-                . '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">'
-                . '<input type="hidden" name="id" value="' . (int) $row['id'] . '">'
-                . '<button type="submit" class="btn btn-secondary" style="color:var(--danger-fg);">Löschen</button></form></td>';
-            $content .= '</tr>';
-
-            // Teilwertungen (#82) direkt unter der Ergebniszeile pflegen:
-            // vorhandene auflisten (mit Löschen-Knopf) und neue über ein
-            // Inline-Formular anlegen - gleiches CRUD-Muster wie beim
-            // Ergebnis selbst (anlegen/löschen, kein Bearbeiten).
-            $ergebnisId = (int) $row['id'];
-            $content .= '<tr><td colspan="6" class="zuchtschau-tw-zelle">';
-            $content .= '<details><summary>Teilwertungen ('
-                . count($teilwertungenByErgebnis[$ergebnisId] ?? []) . ')</summary>';
-
-            if (!empty($teilwertungenByErgebnis[$ergebnisId])) {
-                $content .= '<table style="font-size:0.9em;"><thead><tr><th>Bezeichnung</th><th>Wertung</th><th>Note</th><th>Platzierung</th><th>Distanz</th><th>Zeit</th><th></th></tr></thead><tbody>';
-                foreach ($teilwertungenByErgebnis[$ergebnisId] as $tw) {
-                    $content .= '<tr>';
-                    $content .= '<td>' . htmlspecialchars((string) ($tw['bezeichnung'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
-                    $content .= '<td>' . htmlspecialchars((string) ($tw['wertung'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
-                    $content .= '<td>' . htmlspecialchars((string) ($tw['note'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
-                    $content .= '<td>' . htmlspecialchars((string) ($tw['platzierung'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
-                    $content .= '<td>' . htmlspecialchars((string) ($tw['distanz'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
-                    $content .= '<td>' . htmlspecialchars((string) ($tw['zeit'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
-                    $content .= '<td><form method="POST" action="/plugin/zuchtschau-ergebnisse/ergebnisse/teilwertung/delete" style="margin:0;" onsubmit="return confirm(\'Teilwertung wirklich löschen?\');">'
-                        . '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">'
-                        . '<input type="hidden" name="id" value="' . (int) $tw['id'] . '">'
-                        . '<button type="submit" class="btn btn-secondary" style="color:var(--danger-fg);">Löschen</button></form></td>';
-                    $content .= '</tr>';
-                }
-                $content .= '</tbody></table>';
-            }
-
-            $content .= '<form method="POST" action="/plugin/zuchtschau-ergebnisse/ergebnisse/teilwertung/store" class="zuchtschau-tw-form">';
-            $content .= '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">';
-            $content .= '<input type="hidden" name="ergebnis_id" value="' . $ergebnisId . '">';
-            $content .= '<input type="text" name="bezeichnung" class="form-control" placeholder="Bezeichnung" aria-label="Bezeichnung" required>';
-            $content .= '<input type="text" name="wertung" class="form-control" placeholder="Wertung" aria-label="Wertung">';
-            $content .= '<input type="text" name="note" class="form-control" placeholder="Note" aria-label="Note">';
-            $content .= '<input type="text" name="platzierung" class="form-control" placeholder="Platzierung" aria-label="Platzierung">';
-            $content .= '<input type="text" name="distanz" class="form-control" placeholder="Distanz" aria-label="Distanz">';
-            $content .= '<input type="text" name="zeit" class="form-control" placeholder="Zeit" aria-label="Zeit">';
-            $content .= '<button type="submit" class="btn">Teilwertung anlegen</button>';
-            $content .= '</form>';
-
-            $content .= '</details></td></tr>';
-        }
-        if (empty($results)) {
-            $content .= '<tr><td colspan="6">Noch keine Ergebnisse erfasst.</td></tr>';
-        }
-        $content .= '</tbody></table>';
-
-        $content .= '<p><a href="/admin" class="btn btn-secondary">Zurück zum Dashboard</a></p>';
-        $content .= '</div>';
-
-        PluginPage::render('Zuchtschau-Ergebnisse verwalten', $content);
-    }
-
     public function store(): void {
         if (!Router::verifyCsrfToken($_POST['csrf_token'] ?? '')) {
             $this->renderForbidden('CSRF-Sicherheits-Token ungültig oder abgelaufen.');
         }
 
+        $db = Database::getInstance();
+
+        // Die horse_id kommt seit #124 ausschließlich aus dem Aufrufkontext der
+        // Pferdeseite (verstecktes Feld) - die <select>-Auswahl über den
+        // gesamten Bestand ist mit der Ergebnisseite entfallen.
+        //
+        // Existenz trotzdem prüfen: Ein erfundener Wert liefe sonst in den
+        // FOREIGN-KEY-Fehler und damit in eine 500er-Seite, obwohl das schlicht
+        // eine ungültige Eingabe ist.
         $horseId = !empty($_POST['horse_id']) ? (int) $_POST['horse_id'] : null;
+        if ($horseId !== null && !self::pferdExistiert($db, $horseId)) {
+            $horseId = null;
+        }
         $eventName = trim($_POST['event_name'] ?? '');
 
         if ($horseId && $eventName !== '') {
-            $stmt = Database::getInstance()->prepare(
+            $stmt = $db->prepare(
                 'INSERT INTO `plugin_zuchtschau_ergebnisse`
                     (horse_id, event_name, event_date, category, score, judge, placement, `comment`)
                  VALUES (:horse_id, :event_name, :event_date, :category, :score, :judge, :placement, :comment)'
             );
+            $eventDate = !empty($_POST['event_date']) ? $_POST['event_date'] : null;
             $stmt->execute([
                 'horse_id' => $horseId,
                 'event_name' => $eventName,
-                'event_date' => !empty($_POST['event_date']) ? $_POST['event_date'] : null,
+                'event_date' => $eventDate,
                 'category' => trim($_POST['category'] ?? '') ?: null,
                 'score' => trim($_POST['score'] ?? '') ?: null,
                 'judge' => trim($_POST['judge'] ?? '') ?: null,
                 'placement' => trim($_POST['placement'] ?? '') ?: null,
                 'comment' => trim($_POST['comment'] ?? '') ?: null,
             ]);
+
+            // Protokoll (#134): Kategorie = Addon-Slug. Genannt werden
+            // Datensatz und Bezug (welches Ergebnis, welches Pferd) sowie die
+            // Veranstaltung - das ist es, woran ein Eintrag im Nachhinein
+            // wiedererkannt wird.
+            //
+            // Draußen bleiben Richter und Kommentar: Der Richtername ist ein
+            // Personenbezug, der Kommentar freier Text über eine Person oder
+            // ein Pferd. Für den Nachweis der Handlung braucht es beides
+            // nicht, und das Protokoll wird dauerhaft aufbewahrt.
+            $ergebnisId = (int) $db->lastInsertId();
+            AuditLogger::log(
+                'Zuchtschau-Ergebnis angelegt',
+                'zuchtschau-ergebnisse',
+                "Ergebnis #{$ergebnisId}, Pferd #{$horseId} (" . self::pferdeName($db, $horseId) . '), '
+                    . "Veranstaltung: {$eventName}, Datum: " . ($eventDate ?? 'ohne Angabe')
+            );
         }
 
-        header('Location: /plugin/zuchtschau-ergebnisse/ergebnisse');
-        exit;
+        $this->redirectBack($horseId);
     }
 
     public function delete(): void {
@@ -456,15 +517,69 @@ class ErgebnisseController extends BaseController {
         }
 
         $id = !empty($_POST['id']) ? (int) $_POST['id'] : null;
+        // Die horse_id entscheidet über den Rückweg (#124) und stammt deshalb
+        // aus der gelesenen Zeile, nicht aus dem POST: Ein manipulierter Wert
+        // schickte den Benutzer sonst in den Datensatz eines fremden Pferdes.
+        $horseId = null;
         if ($id) {
+            $db = Database::getInstance();
+
+            // Vor dem Löschen gelesen (#134): Danach ist weder Veranstaltung
+            // noch Pferd zu ermitteln, und die Zahl der mitgelöschten
+            // Teilwertungen schon gar nicht - der CASCADE hinterlässt keine
+            // Spur. LEFT JOIN, damit ein fehlendes Pferd die Zeile nicht
+            // verschwinden lässt.
+            $stmt = $db->prepare(
+                'SELECT e.event_name, e.event_date, e.horse_id, h.name AS horse_name,
+                        (SELECT COUNT(*) FROM `plugin_zuchtschau_teilwertungen` t WHERE t.ergebnis_id = e.id) AS tw_anzahl
+                 FROM `plugin_zuchtschau_ergebnisse` e
+                 LEFT JOIN horses h ON h.id = e.horse_id
+                 WHERE e.id = :id'
+            );
+            $stmt->execute(['id' => $id]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($row) {
+                $horseId = (int) $row['horse_id'];
+            }
+
             // Zugehörige Teilwertungen räumt die Datenbank selbst ab
             // (FK ON DELETE CASCADE, siehe install()).
-            $stmt = Database::getInstance()->prepare('DELETE FROM `plugin_zuchtschau_ergebnisse` WHERE id = :id');
-            $stmt->execute(['id' => $id]);
+            $deleteStmt = $db->prepare('DELETE FROM `plugin_zuchtschau_ergebnisse` WHERE id = :id');
+            $deleteStmt->execute(['id' => $id]);
+
+            // Nur protokollieren, was tatsächlich gelöscht wurde: Ein POST auf
+            // eine längst entfernte ID ist kein Löschvorgang und hätte im
+            // Protokoll nichts zu suchen.
+            if ($row) {
+                AuditLogger::log(
+                    'Zuchtschau-Ergebnis gelöscht',
+                    'zuchtschau-ergebnisse',
+                    "Ergebnis #{$id}, Pferd #" . (int) $row['horse_id']
+                        . ' (' . (string) ($row['horse_name'] ?? 'unbekannt') . '), '
+                        . 'Veranstaltung: ' . (string) $row['event_name']
+                        . ', Datum: ' . (string) ($row['event_date'] ?? 'ohne Angabe')
+                        . ', mitgelöschte Teilwertungen: ' . (int) $row['tw_anzahl']
+                );
+            }
         }
 
-        header('Location: /plugin/zuchtschau-ergebnisse/ergebnisse');
-        exit;
+        // Ohne Anker: Den Block, auf den er zeigte, gibt es nicht mehr.
+        $this->redirectBack($horseId);
+    }
+
+    /**
+     * Name eines Pferdes für den Protokolleintrag (#134). Eine reine ID ist
+     * im Protokoll wertlos, sobald das Pferd selbst gelöscht ist - der Name
+     * bleibt lesbar. Fällt auf "unbekannt" zurück statt zu scheitern: Ein
+     * Protokolleintrag darf nie die Ursache dafür sein, dass die eigentliche
+     * Handlung abbricht.
+     */
+    private static function pferdeName(PDO $db, int $horseId): string {
+        $stmt = $db->prepare('SELECT name FROM horses WHERE id = ?');
+        $stmt->execute([$horseId]);
+        $name = $stmt->fetchColumn();
+
+        return $name !== false ? (string) $name : 'unbekannt';
     }
 
     /**
@@ -478,20 +593,27 @@ class ErgebnisseController extends BaseController {
             $this->renderForbidden('CSRF-Sicherheits-Token ungültig oder abgelaufen.');
         }
 
+        $db = Database::getInstance();
         $ergebnisId = !empty($_POST['ergebnis_id']) ? (int) $_POST['ergebnis_id'] : null;
         $bezeichnung = trim($_POST['bezeichnung'] ?? '');
+        // Der Rückweg führt seit #124 auf das PFERD, nicht auf eine eigene
+        // Seite - und die horse_id hängt am Elternergebnis, nicht am POST.
+        // Dieselbe Abfrage, die die Existenz prüft, liefert sie mit.
+        $horseId = null;
 
         if ($ergebnisId && $bezeichnung !== '') {
             // Existenz des Elternergebnisses vorab prüfen, statt den
             // FK-Fehler als 500er beim Benutzer landen zu lassen (z. B.
             // wenn das Ergebnis in einem zweiten Tab gelöscht wurde).
-            $check = Database::getInstance()->prepare(
-                'SELECT id FROM `plugin_zuchtschau_ergebnisse` WHERE id = :id'
+            $check = $db->prepare(
+                'SELECT horse_id FROM `plugin_zuchtschau_ergebnisse` WHERE id = :id'
             );
             $check->execute(['id' => $ergebnisId]);
+            $gefunden = $check->fetchColumn();
 
-            if ($check->fetchColumn() !== false) {
-                $stmt = Database::getInstance()->prepare(
+            if ($gefunden !== false) {
+                $horseId = (int) $gefunden;
+                $stmt = $db->prepare(
                     'INSERT INTO `plugin_zuchtschau_teilwertungen`
                         (ergebnis_id, bezeichnung, wertung, note, platzierung, distanz, zeit)
                      VALUES (:ergebnis_id, :bezeichnung, :wertung, :note, :platzierung, :distanz, :zeit)'
@@ -505,11 +627,23 @@ class ErgebnisseController extends BaseController {
                     'distanz' => trim($_POST['distanz'] ?? '') ?: null,
                     'zeit' => trim($_POST['zeit'] ?? '') ?: null,
                 ]);
+
+                // Protokoll (#134): Auch die Kindtabelle ist ein schreibender
+                // Zugriff. Bezug ist hier das Elternergebnis - über das hängt
+                // die Teilwertung am Pferd.
+                $teilwertungId = (int) $db->lastInsertId();
+                AuditLogger::log(
+                    'Zuchtschau-Teilwertung angelegt',
+                    'zuchtschau-ergebnisse',
+                    "Teilwertung #{$teilwertungId} zu Ergebnis #{$ergebnisId}, Bezeichnung: {$bezeichnung}"
+                );
             }
         }
 
-        header('Location: /plugin/zuchtschau-ergebnisse/ergebnisse');
-        exit;
+        // Mit Anker: Der Block des Ergebnisses ist die Stelle, an der gerade
+        // gearbeitet wurde - ohne ihn landete der Benutzer am Seitenanfang
+        // eines langen Formulars und müßte sein Ergebnis wiederfinden.
+        $this->redirectBack($horseId, $ergebnisId);
     }
 
     /**
@@ -522,12 +656,77 @@ class ErgebnisseController extends BaseController {
         }
 
         $id = !empty($_POST['id']) ? (int) $_POST['id'] : null;
+        $horseId = null;
+        $ergebnisId = null;
         if ($id) {
-            $stmt = Database::getInstance()->prepare('DELETE FROM `plugin_zuchtschau_teilwertungen` WHERE id = :id');
+            $db = Database::getInstance();
+
+            // Vor dem Löschen gelesen (#134) - danach ist nicht mehr
+            // festzustellen, zu welchem Ergebnis die Teilwertung gehörte. Der
+            // JOIN holt zugleich die horse_id des Elternergebnisses: Sie ist
+            // seit #124 der Rückweg, und dem POST wäre sie nicht zu glauben.
+            $leseStmt = $db->prepare(
+                'SELECT t.ergebnis_id, t.bezeichnung, e.horse_id
+                 FROM `plugin_zuchtschau_teilwertungen` t
+                 LEFT JOIN `plugin_zuchtschau_ergebnisse` e ON e.id = t.ergebnis_id
+                 WHERE t.id = :id'
+            );
+            $leseStmt->execute(['id' => $id]);
+            $row = $leseStmt->fetch(PDO::FETCH_ASSOC);
+            if ($row) {
+                $horseId = $row['horse_id'] !== null ? (int) $row['horse_id'] : null;
+                $ergebnisId = (int) $row['ergebnis_id'];
+            }
+
+            $stmt = $db->prepare('DELETE FROM `plugin_zuchtschau_teilwertungen` WHERE id = :id');
             $stmt->execute(['id' => $id]);
+
+            if ($row) {
+                AuditLogger::log(
+                    'Zuchtschau-Teilwertung gelöscht',
+                    'zuchtschau-ergebnisse',
+                    "Teilwertung #{$id} zu Ergebnis #" . (int) $row['ergebnis_id']
+                        . ', Bezeichnung: ' . (string) ($row['bezeichnung'] ?? 'ohne Angabe')
+                );
+            }
         }
 
-        header('Location: /plugin/zuchtschau-ergebnisse/ergebnisse');
+        // Mit Anker: Das Ergebnis steht noch, nur eine seiner Teilwertungen
+        // ist weg - der Benutzer soll den Block wiedersehen, nicht suchen.
+        $this->redirectBack($horseId, $ergebnisId);
+    }
+
+    /** Gibt es dieses Pferd (und ist es nicht im Papierkorb)? */
+    private static function pferdExistiert(PDO $db, int $horseId): bool {
+        $stmt = $db->prepare('SELECT 1 FROM horses WHERE id = :id AND deleted_at IS NULL');
+        $stmt->execute(['id' => $horseId]);
+        return $stmt->fetchColumn() !== false;
+    }
+
+    /**
+     * Rückweg nach jedem Schreibzugriff - beider Ebenen. Bewusst KEINE
+     * übergebene URL, sondern eine feste Adresse plus geprüfte Integer: eine
+     * mitgeschickte Zieladresse wäre ein offener Redirect.
+     *
+     * Seit #124 gibt es dafür keinen Schalter mehr: Alle Formulare stehen im
+     * Bearbeitungsformular des Pferdes, dorthin führt der Weg also immer
+     * zurück. Nur wenn die horse_id nicht zu ermitteln war (POST von Hand,
+     * Zeile inzwischen gelöscht), bleibt die Pferdeliste - die frühere
+     * Ergebnisseite gibt es nicht mehr, ein Verweis auf sie endete in 404.
+     *
+     * Die `ergebnis_id` wird als ANKER mitgeführt, nicht als Parameter: Sie
+     * betrifft allein die Sprungmarke im Dokument, der Server braucht sie beim
+     * erneuten Aufruf nicht. Das ist die zweite Ebene aus #124 - ohne sie
+     * landete man nach jeder Teilwertung am Anfang eines langen Formulars.
+     */
+    private function redirectBack(?int $horseId, ?int $ergebnisId = null): never {
+        if ($horseId === null || $horseId <= 0) {
+            header('Location: /admin/horses');
+            exit;
+        }
+
+        $anker = $ergebnisId !== null && $ergebnisId > 0 ? '#zs-ergebnis-' . $ergebnisId : '';
+        header('Location: /admin/horses/edit?id=' . $horseId . $anker);
         exit;
     }
 }

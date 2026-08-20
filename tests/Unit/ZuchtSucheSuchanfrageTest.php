@@ -9,7 +9,8 @@ use Plugin\ZuchtSuche\Suchanfrage;
 require_once __DIR__ . '/../../plugins/zucht-suche/Plugin.php';
 
 /**
- * Prüft die Eingabeprüfung der Zucht-Suche (Addons#105).
+ * Prüft die Eingabeprüfung der Zucht-Suche (Addons#105, seit Addons#122 auf
+ * die Kontaktliste umgestellt).
  *
  * Warum als Unit-Test: `Suchanfrage` ist die einzige Stelle, an der Werte aus
  * der Adresszeile in das Addon gelangen. Sie hängt an keiner Framework-Klasse
@@ -17,53 +18,89 @@ require_once __DIR__ . '/../../plugins/zucht-suche/Plugin.php';
  * String, „3x" als Seitennummer, `%` im Suchtext) nur mit einer vollständigen
  * Instanz und je einem Request prüfbar, hier sind es Millisekunden.
  *
- * Das Zusammenspiel mit dem Kern - 404 ohne persons.view/breeding_stations.view,
- * Verlinkung auf /person und /station - gehört nach tests/Functional und
- * braucht eine Datenbank.
+ * Das Zusammenspiel mit dem Kern - 404 ohne contacts.view, Verlinkung auf
+ * /kontakt - gehört nach tests/Functional und braucht eine Datenbank.
  */
 class ZuchtSucheSuchanfrageTest extends TestCase {
 
-    private const BEIDE = [Suchanfrage::ART_ZUECHTER, Suchanfrage::ART_STATIONEN];
+    /** Was ein Gast mit contacts.view UND horses.view sehen darf. */
+    private const ALLE_ROLLEN = [
+        Suchanfrage::ROLLE_ALLE,
+        Suchanfrage::ROLLE_ZUECHTER,
+        Suchanfrage::ROLLE_STATION,
+        Suchanfrage::ROLLE_BESITZER,
+        Suchanfrage::ROLLE_HALTER,
+    ];
 
-    public function testArtFaelltAufDenErstenErlaubtenReiterZurueck(): void {
-        $this->assertSame(Suchanfrage::ART_ZUECHTER, Suchanfrage::aus([], self::BEIDE)->art);
+    /** Ohne horses.view: nur das Kennzeichen am Kontakt, keine abgeleitete Rolle. */
+    private const OHNE_PFERDE = [Suchanfrage::ROLLE_ALLE, Suchanfrage::ROLLE_ZUECHTER];
+
+    /**
+     * Seit #122 gibt es keine zwei Reiter mehr, sondern einen Rollenfilter -
+     * und der hat mit „(alle)" immer eine gültige Antwort. Der Rückfallwert
+     * ist deshalb ROLLE_ALLE und nicht mehr der erste erlaubte Eintrag.
+     */
+    public function testOhneAngabeGiltAlle(): void {
+        $this->assertSame(Suchanfrage::ROLLE_ALLE, Suchanfrage::aus([], self::ALLE_ROLLEN)->rolle);
         $this->assertSame(
-            Suchanfrage::ART_ZUECHTER,
-            Suchanfrage::aus(['art' => 'voellig-erfunden'], self::BEIDE)->art,
-            'Eine unbekannte Art darf keinen dritten Reiter erfinden.'
+            Suchanfrage::ROLLE_ALLE,
+            Suchanfrage::aus(['rolle' => 'voellig-erfunden'], self::ALLE_ROLLEN)->rolle,
+            'Eine unbekannte Rolle darf keinen sechsten Filterwert erfinden.'
         );
+    }
+
+    public function testErlaubteRolleWirdUebernommen(): void {
+        foreach ([
+            Suchanfrage::ROLLE_ZUECHTER,
+            Suchanfrage::ROLLE_STATION,
+            Suchanfrage::ROLLE_BESITZER,
+            Suchanfrage::ROLLE_HALTER,
+        ] as $rolle) {
+            $this->assertSame($rolle, Suchanfrage::aus(['rolle' => $rolle], self::ALLE_ROLLEN)->rolle);
+        }
+    }
+
+    /**
+     * Der Kern der Fail-closed-Regel auf Parameterebene: Die abgeleiteten
+     * Rollen sind Aussagen über Pferde. Wer Pferde nicht sehen darf, bekommt
+     * sie auch nicht, wenn er sie in die Adresszeile schreibt - sonst wäre der
+     * Filter ein Orakel darüber, welche Kontakte Pferde haben.
+     */
+    public function testAbgeleiteteRollenBrauchenDasPferderecht(): void {
+        foreach ([
+            Suchanfrage::ROLLE_STATION,
+            Suchanfrage::ROLLE_BESITZER,
+            Suchanfrage::ROLLE_HALTER,
+        ] as $rolle) {
+            $anfrage = Suchanfrage::aus(['rolle' => $rolle], self::OHNE_PFERDE);
+            $this->assertSame(
+                Suchanfrage::ROLLE_ALLE,
+                $anfrage->rolle,
+                "Ohne horses.view darf '{$rolle}' nicht übernommen werden."
+            );
+            $this->assertArrayNotHasKey('rolle', $anfrage->alsQuery());
+        }
+
+        // Das Züchter-Kennzeichen steht am Kontakt selbst (contacts.is_breeder)
+        // und bleibt deshalb auch ohne horses.view wählbar.
         $this->assertSame(
-            Suchanfrage::ART_STATIONEN,
-            Suchanfrage::aus([], [Suchanfrage::ART_STATIONEN])->art,
-            'Ohne persons.view ist "Deckstationen" der Standard.'
+            Suchanfrage::ROLLE_ZUECHTER,
+            Suchanfrage::aus(['rolle' => Suchanfrage::ROLLE_ZUECHTER], self::OHNE_PFERDE)->rolle
         );
     }
 
     /**
-     * Der Kern der Fail-closed-Regel auf Parameterebene: Wer die Gattung nicht
-     * sehen darf, bekommt sie auch nicht, wenn er sie in die Adresszeile
-     * schreibt.
+     * Bis 0.7 gab es `membership_status` nur auf `persons` - der Filter war an
+     * den Züchter-Reiter gebunden und wurde sonst verworfen. Seit dem
+     * Zusammenlegen (#336) ist er ein Feld der gemeinsamen Kontaktliste und
+     * gilt für jeden Kontakt, unabhängig von der Rolle.
      */
-    public function testEineNichtErlaubteArtWirdNichtUebernommen(): void {
-        $anfrage = Suchanfrage::aus(['art' => Suchanfrage::ART_STATIONEN], [Suchanfrage::ART_ZUECHTER]);
-        $this->assertSame(Suchanfrage::ART_ZUECHTER, $anfrage->art);
-    }
-
-    public function testErlaubteArtWirdUebernommen(): void {
-        $this->assertSame(
-            Suchanfrage::ART_STATIONEN,
-            Suchanfrage::aus(['art' => Suchanfrage::ART_STATIONEN], self::BEIDE)->art
-        );
-    }
-
-    /** Der Mitgliedsstatus gehört zur Person - Deckstationen haben die Spalte nicht. */
-    public function testMitgliedsstatusGiltNurFuerZuechter(): void {
-        $zuechter = Suchanfrage::aus(['art' => Suchanfrage::ART_ZUECHTER, 'mitglied' => 'Mitglied'], self::BEIDE);
-        $this->assertSame('Mitglied', $zuechter->mitglied);
-
-        $stationen = Suchanfrage::aus(['art' => Suchanfrage::ART_STATIONEN, 'mitglied' => 'Mitglied'], self::BEIDE);
-        $this->assertSame('', $stationen->mitglied);
-        $this->assertArrayNotHasKey('mitglied', $stationen->alsQuery());
+    public function testMitgliedsstatusGiltFuerJedeRolle(): void {
+        foreach ([Suchanfrage::ROLLE_ALLE, Suchanfrage::ROLLE_ZUECHTER, Suchanfrage::ROLLE_STATION] as $rolle) {
+            $anfrage = Suchanfrage::aus(['rolle' => $rolle, 'mitglied' => 'Mitglied'], self::ALLE_ROLLEN);
+            $this->assertSame('Mitglied', $anfrage->mitglied);
+            $this->assertSame('Mitglied', $anfrage->alsQuery()['mitglied'] ?? null);
+        }
     }
 
     /** `?name[]=x` darf weder Warnung noch TypeError auslösen. */
@@ -110,29 +147,29 @@ class ZuchtSucheSuchanfrageTest extends TestCase {
         $this->assertSame(1, Suchanfrage::seite(['5']), 'Ein Array darf keinen TypeError auslösen.');
     }
 
-    /** Ein Reiter- oder Blätterwechsel darf die eingestellte Suche nicht verwerfen. */
+    /** Ein Rollen- oder Blätterwechsel darf die eingestellte Suche nicht verwerfen. */
     public function testAlsQueryTraegtDieGesetztenFilterWeiter(): void {
         $anfrage = Suchanfrage::aus([
-            'art' => Suchanfrage::ART_ZUECHTER,
+            'rolle' => Suchanfrage::ROLLE_ZUECHTER,
             'name' => 'Meier',
             'ort' => '',
             'land' => 'Deutschland',
             'seite' => '4',
-        ], self::BEIDE);
+        ], self::ALLE_ROLLEN);
 
         $this->assertSame(
-            ['art' => Suchanfrage::ART_ZUECHTER, 'name' => 'Meier', 'land' => 'Deutschland'],
+            ['rolle' => Suchanfrage::ROLLE_ZUECHTER, 'name' => 'Meier', 'land' => 'Deutschland'],
             $anfrage->alsQuery(),
             'Leere Filter und die Seitennummer gehören nicht in den Grund-Link.'
         );
 
         $this->assertSame(
-            ['art' => Suchanfrage::ART_STATIONEN, 'name' => 'Meier', 'land' => 'Deutschland'],
-            $anfrage->alsQuery(['art' => Suchanfrage::ART_STATIONEN])
+            ['rolle' => Suchanfrage::ROLLE_STATION, 'name' => 'Meier', 'land' => 'Deutschland'],
+            $anfrage->alsQuery(['rolle' => Suchanfrage::ROLLE_STATION])
         );
 
         $this->assertSame(
-            ['art' => Suchanfrage::ART_ZUECHTER, 'name' => 'Meier'],
+            ['rolle' => Suchanfrage::ROLLE_ZUECHTER, 'name' => 'Meier'],
             $anfrage->alsQuery(['land' => '']),
             'Ein leerer Wert entfernt den Parameter, statt ihn leer anzuhängen.'
         );
@@ -140,9 +177,19 @@ class ZuchtSucheSuchanfrageTest extends TestCase {
         $this->assertSame('5', $anfrage->alsQuery(['seite' => '5'])['seite']);
     }
 
+    /**
+     * „(alle)" ist der Leerwert und gehört nicht in den Link - sonst stünde
+     * `?rolle=` in jeder Adresse und sähe wie ein gesetzter Filter aus.
+     */
+    public function testRolleAlleStehtNichtImLink(): void {
+        $anfrage = Suchanfrage::aus(['name' => 'Meier'], self::ALLE_ROLLEN);
+        $this->assertArrayNotHasKey('rolle', $anfrage->alsQuery());
+        $this->assertSame(['name' => 'Meier'], $anfrage->alsQuery());
+    }
+
     /** Die Seitennummer bleibt gelesen - nur der Grund-Link führt sie nicht mit. */
     public function testSeitennummerWirdGelesenAberNichtInDenGrundLinkGeschrieben(): void {
-        $anfrage = Suchanfrage::aus(['seite' => '4'], self::BEIDE);
+        $anfrage = Suchanfrage::aus(['seite' => '4'], self::ALLE_ROLLEN);
         $this->assertSame(4, $anfrage->seite);
         $this->assertArrayNotHasKey('seite', $anfrage->alsQuery());
     }

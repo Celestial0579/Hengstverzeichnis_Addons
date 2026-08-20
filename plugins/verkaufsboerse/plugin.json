@@ -1,14 +1,14 @@
 {
     "slug": "verkaufsboerse",
     "name": "Verkaufs-/Vermittlungsbörse",
-    "version": "1.1.4",
-    "core_compatibility": ">=0.4.0",
-    "core_supported_max": "0.7",
+    "version": "1.2.0",
+    "core_compatibility": ">=0.8.0-beta.1",
+    "core_supported_max": "0.8",
     "description": "Markiert Pferde als 'zum Verkauf'/'zur Vermittlung' (unabhängig vom Kern-Status), mit eigener Übersichtsseite und Kontaktformular je Inserat.",
     "author": "Hengstverzeichnis_Addons",
     "hooks": [
         "horse.detail_sections",
-        "admin.dashboard_tiles"
+        "horse.edit_sections"
     ],
     "entry": "Plugin.php"
 }

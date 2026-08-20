@@ -1,0 +1,26 @@
+{
+    "slug": "pferd-des-tages",
+    "name": "Pferd des Tages",
+    "version": "1.0.0",
+    "core_compatibility": ">=0.8.0-beta.1",
+    "core_supported_max": "0.8",
+    "description": "Hebt auf der Startseite täglich ein veröffentlichtes Pferd hervor. Die Auswahl wird je Kalendertag genau einmal getroffen (deterministisch aus dem Datum abgeleitet und festgehalten) und steht damit für alle Besucher gleich - kein ORDER BY RAND() je Aufruf. Die Grundmenge ist einstellbar (Foto, Zuchtstatus, Geschlecht, Farbe, Rasse, Geburtsjahr, Verstorbene, Deckstation, Züchter), einzelne Pferde lassen sich dauerhaft ausnehmen und für einzelne Daten redaktionell vorgeben.",
+    "author": "Hengstverzeichnis_Addons",
+    "hooks": [
+        "home.sections_top",
+        "admin.dashboard_tiles"
+    ],
+    "permissions": [
+        "pferd-des-tages.manage"
+    ],
+    "owns": {
+        "tables": [
+            "plugin_pferd_des_tages_wahl",
+            "plugin_pferd_des_tages_ausschluss",
+            "plugin_pferd_des_tages_config"
+        ],
+        "directories": [],
+        "settings": []
+    },
+    "entry": "Plugin.php"
+}

@@ -1,0 +1,27 @@
+{
+    "slug": "plausibilitaetspruefung",
+    "name": "Plausibilitätsprüfung",
+    "version": "1.0.0",
+    "core_compatibility": ">=0.8.0-beta.1",
+    "core_supported_max": "0.8",
+    "description": "Prüft den Bestand auf Widersprüche (Elternteil jünger als das Fohlen, Vater = Mutter, Zeitraum nach dem Todesjahr, fehlende Lebensnummer, Zeichenschaden). Blockierende Widersprüche verhindern die Veröffentlichung des Pferds; alle Funde sammelt ein eigener Bericht mit Sprung ins Bearbeitungsformular. Geprüfte Einzelfälle lassen sich mit Begründung abhaken.",
+    "author": "Hengstverzeichnis_Addons",
+    "hooks": [
+        "horse.publish_blockers",
+        "horse.edit_sections",
+        "admin.dashboard_tiles"
+    ],
+    "permissions": [
+        "plausibilitaetspruefung.bericht",
+        "plausibilitaetspruefung.abhaken"
+    ],
+    "owns": {
+        "tables": [
+            "plugin_plausibilitaet_ausnahmen",
+            "plugin_plausibilitaet_zaehler"
+        ],
+        "directories": [],
+        "settings": []
+    },
+    "entry": "Plugin.php"
+}

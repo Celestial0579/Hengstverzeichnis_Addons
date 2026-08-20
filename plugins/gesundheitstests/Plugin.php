@@ -25,8 +25,8 @@ namespace Plugin\Gesundheitstests;
 use App\Controllers\BaseController;
 use App\Database;
 use App\Plugin\HookManager;
-use App\Plugin\PluginPage;
 use App\Router;
+use App\Service\AuditLogger;
 use PDO;
 
 class Plugin {
@@ -42,7 +42,14 @@ class Plugin {
         // und Anfrage, bei sieben Addons also sieben Roundtrips, bevor die
         // erste Zeile der Seite steht.
         $hooks->addFilter('horse.detail_sections', [$this, 'addDetailSection']);
-        $hooks->addFilter('admin.dashboard_tiles', [$this, 'addDashboardTile']);
+        // Seit #120 der einzige Pflegeweg: der Abschnitt im
+        // Bearbeitungsformular des Pferdes. Die addoneigene Verwaltungsseite
+        // und ihre Dashboard-Kachel sind entfallen - sie verlangten, dasselbe
+        // Pferd über eine zweite Suche erneut herauszusuchen, obwohl man in
+        // dessen Datensatz bereits steht. Die geschützte Download-Route
+        // bleibt: Sie ist der einzige Weg zu den Dokumenten außerhalb des
+        // Webroots.
+        $hooks->addFilter('horse.edit_sections', [$this, 'addEditSection']);
     }
 
     /**
@@ -126,13 +133,144 @@ class Plugin {
         return $sections;
     }
 
-    public function addDashboardTile(array $tiles): array {
-        $tiles[] = [
-            'url' => '/plugin/gesundheitstests/verwaltung',
-            'label' => 'Gesundheitstests',
-            'icon' => '🩺',
-        ];
-        return $tiles;
+    /**
+     * Filter (#120, Framework#255): hängt die Dokumentpflege direkt in das
+     * Admin-Bearbeitungsformular des Hengstes - wie zuvor schon bei
+     * `titel-praemierungen` (#117) und `verkaufsboerse` (#119).
+     *
+     * Die `horse_id` ist hier durch die Seite bereits gegeben; die
+     * Pferdeauswahl der entfallenen Verwaltungsseite (`horse_q` samt eigener
+     * JSON-Suche) fällt damit ersatzlos weg (Addons#125). Geladen wird nur
+     * noch, was zu diesem einen Pferd gehört.
+     *
+     * Zwei Dinge unterscheiden diesen Abschnitt von dem in #117:
+     *
+     * - **`enctype="multipart/form-data"`.** Der Abschnitt bringt sein eigenes
+     *   Formular mit (der Hook setzt es ausserhalb des Kern-Formulars ab), es
+     *   muss die Kodierung also selbst deklarieren - sonst käme der Upload als
+     *   leeres $_FILES an, und zwar ohne Fehlermeldung. Dieselbe Falle wie bei
+     *   der Galerie (#88).
+     * - **`is_public` ist und bleibt ein Opt-in.** Gesundheitsdaten erscheinen
+     *   nur, wenn der Eintrag ausdrücklich freigegeben ist; das Kästchen ist
+     *   deshalb leer vorbelegt, und die Beschriftung sagt, was das Setzen
+     *   bedeutet. Vorhandene Einträge lassen sich hier nicht nachträglich
+     *   freigeben - dieselbe Beschränkung wie auf der alten Seite: Freigeben
+     *   heißt neu erfassen, ein versehentlicher Klick in einer Liste kann
+     *   Gesundheitsdaten also nicht öffentlich machen.
+     */
+    public function addEditSection(array $sections, array $horse): array {
+        // Das Bearbeitungsformular verlangt horses.edit, diese Daten aber
+        // gesundheitstests.manage. Ohne diese Prüfung sähe ein Redakteur ein
+        // Formular, das beim Absenden 403 liefert. Fail-closed.
+        if (!\App\Permission\GroupMembership::hasPermission(
+            (int) ($_SESSION['user_id'] ?? 0), 'gesundheitstests', 'manage'
+        )) {
+            return $sections;
+        }
+
+        $horseId = (int) ($horse['id'] ?? 0);
+        if ($horseId <= 0) {
+            return $sections;
+        }
+
+        $stmt = Database::getInstance()->prepare(
+            'SELECT id, test_type, result_summary, file_name, file_original_name, is_public, issued_by, issued_at
+             FROM `plugin_gesundheitstests`
+             WHERE horse_id = :id
+             ORDER BY issued_at DESC, id DESC'
+        );
+        $stmt->execute(['id' => $horseId]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $csrfToken = Router::generateCsrfToken();
+        $esc = static fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
+
+        $html = '<h3 style="margin-top:0;">🩺 Gesundheitstests</h3>';
+
+        if ($rows) {
+            $html .= '<table style="width:100%;border-collapse:collapse;margin-bottom:1rem;">';
+            $html .= '<thead><tr style="text-align:left;border-bottom:2px solid var(--border-color);">'
+                . '<th style="padding:0.4rem;">Test/Untersuchung</th><th style="padding:0.4rem;">Ergebnis</th>'
+                . '<th style="padding:0.4rem;">Ausgestellt von</th><th style="padding:0.4rem;">Datum</th>'
+                . '<th style="padding:0.4rem;">Öffentlich</th><th style="padding:0.4rem;">Dokument</th>'
+                . '<th></th></tr></thead><tbody>';
+            foreach ($rows as $row) {
+                $html .= '<tr style="border-bottom:1px solid var(--border-color);">';
+                $html .= '<td style="padding:0.4rem;">' . $esc($row['test_type']) . '</td>';
+                $html .= '<td style="padding:0.4rem;">' . $esc($row['result_summary'] ?? '–') . '</td>';
+                $html .= '<td style="padding:0.4rem;">' . $esc($row['issued_by'] ?? '–') . '</td>';
+                $html .= '<td style="padding:0.4rem;">' . $esc($row['issued_at'] ?? '–') . '</td>';
+                // Die Freigabe farblich ausgewiesen: Sie entscheidet darüber,
+                // ob Gesundheitsdaten öffentlich sichtbar sind, und ist damit
+                // die wichtigste Angabe der Zeile.
+                $html .= '<td style="padding:0.4rem;">' . (!empty($row['is_public'])
+                    ? '<span style="color:var(--warning-fg);font-weight:bold;">ja</span>'
+                    : '<span style="color:var(--text-muted);">nein</span>') . '</td>';
+                $html .= '<td style="padding:0.4rem;">';
+                if (!empty($row['file_name'])) {
+                    $html .= '<a href="/plugin/gesundheitstests/download?id=' . (int) $row['id'] . '">📄 '
+                        . $esc($row['file_original_name'] ?: 'Dokument') . '</a>';
+                } else {
+                    $html .= '–';
+                }
+                $html .= '</td>';
+                $html .= '<td style="padding:0.4rem;">'
+                    . '<form method="POST" action="/plugin/gesundheitstests/verwaltung/delete" style="margin:0;"'
+                    . ' onsubmit="return confirm(\'Eintrag (inkl. Dokument) wirklich löschen?\');">'
+                    . '<input type="hidden" name="csrf_token" value="' . $esc($csrfToken) . '">'
+                    . '<input type="hidden" name="id" value="' . (int) $row['id'] . '">'
+                    . '<button type="submit" class="btn btn-secondary" style="color:var(--danger-fg);">Löschen</button>'
+                    . '</form></td>';
+                $html .= '</tr>';
+            }
+            $html .= '</tbody></table>';
+        } else {
+            $html .= '<p style="color:var(--text-muted);">Für dieses Pferd ist noch kein Gesundheitstest erfasst.</p>';
+        }
+
+        // Eigenes Formular mit eigener POST-Route: Der Abschnitt steht
+        // ausserhalb des Kern-Formulars (Framework#255), der Speichern-Knopf
+        // oben speichert diese Felder also NICHT mit. Das enctype ist hier
+        // NICHT optional - siehe Methodenkommentar.
+        //
+        // Die Feld-`id`s tragen das Präfix `gt_`: Das Kern-Formular auf
+        // derselben Seite führt eigene Felder, und zwei gleiche id-Werte in
+        // einem Dokument hängen das <label> an das falsche Feld. Die
+        // `name`-Attribute bleiben unverändert - sie gelten je Formular und
+        // sind der Vertrag mit store().
+        $html .= '<h4 style="margin-bottom:0.5rem;">Weiteren Test erfassen</h4>';
+        $html .= '<form method="POST" action="/plugin/gesundheitstests/verwaltung/store" enctype="multipart/form-data">';
+        $html .= '<input type="hidden" name="csrf_token" value="' . $esc($csrfToken) . '">';
+        $html .= '<input type="hidden" name="horse_id" value="' . $horseId . '">';
+        $html .= '<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">';
+        $html .= '<div class="form-group"><label for="gt_test_type">Test-/Untersuchungsart</label>'
+            . '<input type="text" name="test_type" id="gt_test_type" class="form-control" maxlength="100" required'
+            . ' placeholder="z. B. DNA-Abstammungstest, Röntgen, Gesundheitszeugnis"></div>';
+        $html .= '<div class="form-group"><label for="gt_issued_at">Ausgestellt am</label>'
+            . '<input type="date" name="issued_at" id="gt_issued_at" class="form-control"></div>';
+        $html .= '</div>';
+        $html .= '<div class="form-group"><label for="gt_issued_by">Ausgestellt von</label>'
+            . '<input type="text" name="issued_by" id="gt_issued_by" class="form-control" maxlength="150"'
+            . ' placeholder="z. B. Labor, Tierklinik"></div>';
+        $html .= '<div class="form-group"><label for="gt_result_summary">Ergebnis-Zusammenfassung</label>'
+            . '<textarea name="result_summary" id="gt_result_summary" class="form-control" rows="3"></textarea></div>';
+        $html .= '<div class="form-group"><label for="gt_document">Dokument (PDF oder Bild, max. 10 MB)</label>'
+            . '<input type="file" name="document" id="gt_document" class="form-control" accept="application/pdf,image/jpeg,image/png,image/webp"></div>';
+        $html .= '<p style="color:var(--text-muted);font-size:0.85rem;margin-top:0;">'
+            . 'Hochgeladene Dokumente werden außerhalb des Webroots gespeichert und sind nur über die zugriffsgeschützte Download-Route erreichbar.</p>';
+        $html .= '<div class="form-group"><label for="gt_is_public">'
+            . '<input type="checkbox" name="is_public" id="gt_is_public" value="1"> '
+            . 'Öffentlich sichtbar - der Eintrag erscheint dann samt Dokument auf der Pferdeseite für jeden Besucher'
+            . '</label><br><span style="color:var(--text-muted);font-size:0.85rem;">'
+            . 'Standard ist aus: Gesundheitsdaten erscheinen nie automatisch (Opt-in).</span></div>';
+        // Beschriftung bewusst nicht "Speichern": Auf der Seite gibt es zwei
+        // Knöpfe, und wer hier drückt, verliert ungespeicherte Stammdaten oben.
+        $html .= '<p><button type="submit" class="btn">Test hinzufügen</button>'
+            . ' <span style="color:var(--text-muted);font-size:0.85rem;">Änderungen an den Stammdaten oben bitte zuerst speichern.</span></p>';
+        $html .= '</form>';
+
+        $sections[] = $html;
+        return $sections;
     }
 
     /**
@@ -150,15 +288,19 @@ class Plugin {
     }
 
     /**
+     * Von den beiden früheren GET-Routen der Verwaltung bleibt keine (#120):
+     * Die Seite ist in den Pferdeabschnitt gewandert, und die addoneigene
+     * Pferdesuche (`/suche`) diente allein der Pferdeauswahl auf dieser Seite
+     * - der Kern liefert sie seit Framework#341 unter /admin/horses/search
+     * (Addons#125).
+     *
+     * `/download` bleibt: Die Dokumente liegen außerhalb des Webroots, und
+     * diese Route ist der einzige Weg dorthin.
+     *
      * @return array<int, array{method:string, path:string, callback:array}>
      */
     public function routes(): array {
         return [
-            ['method' => 'GET', 'path' => '/verwaltung', 'callback' => [VerwaltungController::class, 'index']],
-            // Serverseitige Pferdesuche für die Datalist im Formular (#74,
-            // Muster Framework-Katalog): JSON, max. 50 Treffer, nur mit
-            // gesundheitstests.manage (Konstruktor-Schutz des Controllers).
-            ['method' => 'GET', 'path' => '/suche', 'callback' => [VerwaltungController::class, 'suche']],
             ['method' => 'POST', 'path' => '/verwaltung/store', 'callback' => [VerwaltungController::class, 'store']],
             ['method' => 'POST', 'path' => '/verwaltung/delete', 'callback' => [VerwaltungController::class, 'delete']],
             ['method' => 'GET', 'path' => '/download', 'callback' => [DownloadController::class, 'serve']],
@@ -170,212 +312,24 @@ class Plugin {
  * Admin-Verwaltung der Test-/Gesundheitsdokumente. Zugriffsschutz über die
  * selbst registrierte Berechtigung "gesundheitstests.manage", analog zum
  * zuchtschau-ergebnisse-Muster.
+ *
+ * Seit #120 hat der Controller keine eigene Seite mehr: Beide Routen sind die
+ * Ziele der Formulare im Abschnitt des Pferdeformulars
+ * (Plugin::addEditSection). Der Name bleibt trotzdem `VerwaltungController` -
+ * er steckt in den Pfaden `/verwaltung/store` und `/verwaltung/delete`, und
+ * die umzubenennen hieße, die Formulare mitzuziehen, ohne dass sich dadurch
+ * irgendetwas verbesserte.
+ *
+ * Mit der Seite entfallen sind: die Seitennummer-Auswertung samt Deckelung
+ * (der Abschnitt zeigt die Einträge EINES Pferdes, da gibt es nichts zu
+ * blättern) und die addoneigene Pferdesuche (Addons#125).
  */
 class VerwaltungController extends BaseController {
-
-    /** Treffer-Deckel der Datalist-Suche (#74). */
-    private const SEARCH_LIMIT = 50;
-
-    /** Einträge je Verwaltungsseite (#74). */
-    private const ENTRIES_PER_PAGE = 50;
 
     public function __construct() {
         parent::__construct();
         $this->checkAuth();
         $this->requirePermission('gesundheitstests', 'manage');
-    }
-
-    /**
-     * Seitennummer aus der Anfrage - validiert, nicht umgedeutet.
-     *
-     * Vorher stand hier "(int) ($_GET['seite'] ?? 1)". Ein Cast macht aus
-     * jeder Eingabe eine Zahl: "abc" wird zu 0, "3x" zu 3. filter_var mit
-     * FILTER_VALIDATE_INT lehnt ab, was keine Zahl IST, und faellt auf 1
-     * zurueck - die Absicht steht damit im Code statt im Kopf des Lesers.
-     *
-     * Nebenwirkung, die hier den Ausschlag gab: Der Cast ist fuer eine
-     * statische Analyse keine erkennbare Bereinigung, filter_var schon. Die
-     * Seitennummer floss deshalb als "Nutzerdaten" bis in den HTML-Aufbau
-     * und liess dort eine Injection-Regel anschlagen. Der Befund war
-     * inhaltlich falsch, die Ursache aber echt: Dem Code sah man die
-     * Bereinigung nicht an.
-     */
-    private static function seitenNummer(): int {
-        $wert = filter_var(
-            $_GET['seite'] ?? 1,
-            FILTER_VALIDATE_INT,
-            ['options' => ['default' => 1, 'min_range' => 1]]
-        );
-        return is_int($wert) ? $wert : 1;
-    }
-
-    public function index(): void {
-        $db = Database::getInstance();
-
-        // Eintragsliste paginiert (#74): vorher lud die Seite die komplette
-        // Eintragstabelle per JOIN ohne LIMIT und renderte jede Zeile ins HTML.
-        $totalEntries = (int) $db->query('SELECT COUNT(*) FROM `plugin_gesundheitstests`')->fetchColumn();
-        $pageCount = max(1, (int) ceil($totalEntries / self::ENTRIES_PER_PAGE));
-        $page = min($pageCount, self::seitenNummer());
-
-        $entriesStmt = $db->prepare(
-            'SELECT g.*, h.name AS horse_name
-             FROM `plugin_gesundheitstests` g
-             JOIN horses h ON h.id = g.horse_id
-             ORDER BY g.issued_at DESC, g.id DESC
-             LIMIT :limit OFFSET :offset'
-        );
-        $entriesStmt->bindValue('limit', self::ENTRIES_PER_PAGE, PDO::PARAM_INT);
-        $entriesStmt->bindValue('offset', ($page - 1) * self::ENTRIES_PER_PAGE, PDO::PARAM_INT);
-        $entriesStmt->execute();
-        $entries = $entriesStmt->fetchAll(PDO::FETCH_ASSOC);
-
-        $csrfToken = Router::generateCsrfToken();
-
-        // Die Seite rendert als Fragment im Framework-Layout
-        // (App\Plugin\PluginPage, Addons#66) - Header, Navigation,
-        // Theme-Umschalter, Markenfarben und style.css kommen zentral vom
-        // Layout. Hier bleibt nur addon-spezifische Geometrie
-        // (Formular-Raster), Farben ausschließlich über Theme-Variablen.
-        $content = '<style>';
-        $content .= '.gesundheitstests-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}';
-        $content .= '.gesundheitstests-hint{color:var(--text-muted);font-size:0.85em;margin-top:0.3rem;}';
-        $content .= '</style>';
-
-        $content .= '<div class="card">';
-        $content .= '<h1>🩺 DNA-/Gesundheitstest-Verwaltung</h1>';
-
-        $content .= '<h2>Neuen Eintrag erfassen</h2>';
-        $content .= '<form method="POST" action="/plugin/gesundheitstests/verwaltung/store" enctype="multipart/form-data">';
-        $content .= '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">';
-
-        // Pferde-Auswahl als Suchfeld mit serverseitig nachgeladener
-        // Vorschlagsliste statt eines Voll-<select> über den gesamten
-        // Bestand (#74, Muster Framework-Katalog). Die gewählte ID landet
-        // per JS im Hidden-Feld horse_id; ohne JavaScript löst store() den
-        // getippten Text über resolveHorseId() auf.
-        $content .= '<div class="form-group"><label for="horse_q">Pferd</label>'
-            . '<input type="text" name="horse_q" id="horse_q" class="form-control" list="horse_q_liste" autocomplete="off"'
-            . ' placeholder="Namen eintippen und Vorschlag auswählen …" required>'
-            . '<datalist id="horse_q_liste"></datalist>'
-            . '<input type="hidden" name="horse_id" id="horse_id" value="">'
-            . '</div>';
-
-        $content .= '<div class="gesundheitstests-row">';
-        $content .= '<div class="form-group"><label for="test_type">Test-/Untersuchungsart</label>'
-            . '<input type="text" name="test_type" id="test_type" class="form-control" required placeholder="z. B. DNA-Abstammungstest, Röntgen, Gesundheitszeugnis"></div>';
-        $content .= '<div class="form-group"><label for="issued_at">Ausgestellt am</label><input type="date" name="issued_at" id="issued_at" class="form-control"></div>';
-        $content .= '</div>';
-
-        $content .= '<div class="form-group"><label for="issued_by">Ausgestellt von</label>'
-            . '<input type="text" name="issued_by" id="issued_by" class="form-control" placeholder="z. B. Labor, Tierklinik"></div>';
-        $content .= '<div class="form-group"><label for="result_summary">Ergebnis-Zusammenfassung</label>'
-            . '<textarea name="result_summary" id="result_summary" class="form-control" rows="3"></textarea></div>';
-
-        $content .= '<div class="form-group"><label for="document">Dokument (PDF oder Bild, max. 10 MB)</label>'
-            . '<input type="file" name="document" id="document" class="form-control" accept="application/pdf,image/jpeg,image/png,image/webp"></div>';
-        $content .= '<p class="gesundheitstests-hint">Hochgeladene Dokumente werden außerhalb des Webroots gespeichert und sind nur über die zugriffsgeschützte Download-Route erreichbar.</p>';
-
-        $content .= '<div class="form-group"><label><input type="checkbox" name="is_public" value="1"> Öffentlich sichtbar (Opt-in - Gesundheitsdaten erscheinen nie automatisch)</label></div>';
-
-        $content .= '<p><button type="submit" class="btn">Speichern</button></p>';
-        $content .= '</form>';
-
-        // Progressive Enhancement der Pferdesuche: lädt Vorschläge von
-        // /plugin/gesundheitstests/suche und mappt das gewählte Label auf die
-        // ID im Hidden-Feld. Ohne fetch()/JS greift der No-JS-Fallback in
-        // store().
-        $content .= '<script>
-(function () {
-    var input = document.getElementById("horse_q");
-    var hidden = document.getElementById("horse_id");
-    var list = document.getElementById("horse_q_liste");
-    if (!input || !hidden || !list || typeof window.fetch !== "function") { return; }
-
-    var byLabel = {};
-    var timer = null;
-
-    function sync() {
-        hidden.value = Object.prototype.hasOwnProperty.call(byLabel, input.value)
-            ? String(byLabel[input.value])
-            : "";
-    }
-
-    function loadSuggestions() {
-        var q = input.value.trim();
-        if (q === "") { return; }
-        fetch("/plugin/gesundheitstests/suche?q=" + encodeURIComponent(q))
-            .then(function (res) { return res.json(); })
-            .then(function (items) {
-                if (!Array.isArray(items)) { return; }
-                byLabel = {};
-                list.textContent = "";
-                items.forEach(function (item) {
-                    byLabel[item.label] = item.id;
-                    var option = document.createElement("option");
-                    option.value = item.label;
-                    list.appendChild(option);
-                });
-                sync();
-            })
-            .catch(function () { /* Suche nicht erreichbar - der No-JS-Fallback greift beim Absenden */ });
-    }
-
-    input.addEventListener("input", function () {
-        sync();
-        if (timer) { clearTimeout(timer); }
-        timer = setTimeout(loadSuggestions, 200);
-    });
-    input.addEventListener("change", sync);
-})();
-</script>';
-
-        $content .= '<h2>Erfasste Einträge</h2>';
-        $content .= '<table><thead><tr><th>Pferd</th><th>Test</th><th>Datum</th><th>Öffentlich</th><th>Dokument</th><th></th></tr></thead><tbody>';
-        foreach ($entries as $row) {
-            $content .= '<tr>';
-            $content .= '<td>' . htmlspecialchars((string) $row['horse_name'], ENT_QUOTES, 'UTF-8') . '</td>';
-            $content .= '<td>' . htmlspecialchars((string) $row['test_type'], ENT_QUOTES, 'UTF-8') . '</td>';
-            $content .= '<td>' . htmlspecialchars((string) ($row['issued_at'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
-            $content .= '<td>' . (!empty($row['is_public']) ? 'ja' : 'nein') . '</td>';
-            $content .= '<td>';
-            if (!empty($row['file_name'])) {
-                $content .= '<a href="/plugin/gesundheitstests/download?id=' . (int) $row['id'] . '">'
-                    . htmlspecialchars((string) ($row['file_original_name'] ?: 'Dokument'), ENT_QUOTES, 'UTF-8') . '</a>';
-            } else {
-                $content .= '–';
-            }
-            $content .= '</td>';
-            $content .= '<td><form method="POST" action="/plugin/gesundheitstests/verwaltung/delete" style="margin:0;" onsubmit="return confirm(\'Eintrag (inkl. Dokument) wirklich löschen?\');">'
-                . '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">'
-                . '<input type="hidden" name="seite" value="' . (int) $page . '">'
-                . '<input type="hidden" name="id" value="' . (int) $row['id'] . '">'
-                . '<button type="submit" class="btn btn-secondary" style="color:var(--danger-fg);">Löschen</button></form></td>';
-            $content .= '</tr>';
-        }
-        if (empty($entries)) {
-            $content .= '<tr><td colspan="6">Noch keine Einträge erfasst.</td></tr>';
-        }
-        $content .= '</tbody></table>';
-
-        // Blätter-Leiste (#74): erscheint erst, wenn es mehr als eine Seite
-        // gibt - die Ein-Seiten-Ansicht bleibt unverändert schlank.
-        if ($pageCount > 1) {
-            $content .= '<p class="gesundheitstests-hint">';
-            if ($page > 1) {
-                $content .= '<a class="btn btn-secondary" href="/plugin/gesundheitstests/verwaltung?seite=' . ($page - 1) . '">&laquo; Zurück</a> ';
-            }
-            $content .= 'Seite ' . (int) $page . ' von ' . (int) $pageCount . ' (' . (int) $totalEntries . ' Einträge)';
-            if ($page < $pageCount) {
-                $content .= ' <a class="btn btn-secondary" href="/plugin/gesundheitstests/verwaltung?seite=' . ($page + 1) . '">Weiter &raquo;</a>';
-            }
-            $content .= '</p>';
-        }
-
-        $content .= '<p><a href="/admin" class="btn btn-secondary">Zurück zum Dashboard</a></p>';
-        $content .= '</div>';
-
-        PluginPage::render('Gesundheitstests verwalten', $content);
     }
 
     public function store(): void {
@@ -385,20 +339,18 @@ class VerwaltungController extends BaseController {
 
         $db = Database::getInstance();
 
-        // ID aus dem Hidden-Feld (per JS gesetzt), sonst No-JS-Fallback:
-        // den getippten Text des Suchfelds serverseitig auflösen (#74). In
-        // beiden Fällen wird gegen den Bestand geprüft - eine frei erfundene
-        // ID liefe sonst in den FOREIGN-KEY-Fehler statt in einen Redirect.
+        // Die horse_id kommt seit #120 ausschließlich aus dem Aufrufkontext der
+        // Pferdeseite (verstecktes Feld). Die frühere Auflösung eines
+        // getippten Pferdenamens (`horse_q`) ist mit der Verwaltungsseite
+        // entfallen - es gibt kein Textfeld mehr, das sie füllen könnte
+        // (Addons#125).
+        //
+        // Existenz trotzdem prüfen: Ein erfundener Wert liefe sonst in den
+        // FOREIGN-KEY-Fehler und damit in eine 500er-Seite, obwohl das schlicht
+        // eine ungültige Eingabe ist.
         $horseId = !empty($_POST['horse_id']) ? (int) $_POST['horse_id'] : null;
-        if ($horseId !== null) {
-            $stmt = $db->prepare('SELECT id FROM horses WHERE id = ? AND deleted_at IS NULL');
-            $stmt->execute([$horseId]);
-            $horseId = $stmt->fetchColumn() !== false ? $horseId : null;
-        } else {
-            $horseQ = trim($_POST['horse_q'] ?? '');
-            if ($horseQ !== '') {
-                $horseId = $this->resolveHorseId($db, $horseQ);
-            }
+        if ($horseId !== null && !self::pferdExistiert($db, $horseId)) {
+            $horseId = null;
         }
 
         $testType = trim($_POST['test_type'] ?? '');
@@ -411,6 +363,7 @@ class VerwaltungController extends BaseController {
                     (horse_id, test_type, result_summary, file_name, file_original_name, file_mime, is_public, issued_by, issued_at)
                  VALUES (:horse_id, :test_type, :result_summary, :file_name, :file_original_name, :file_mime, :is_public, :issued_by, :issued_at)'
             );
+            $istOeffentlich = !empty($_POST['is_public']);
             $stmt->execute([
                 'horse_id' => $horseId,
                 'test_type' => $testType,
@@ -418,14 +371,36 @@ class VerwaltungController extends BaseController {
                 'file_name' => $upload['name'] ?? null,
                 'file_original_name' => $upload['original'] ?? null,
                 'file_mime' => $upload['mime'] ?? null,
-                'is_public' => !empty($_POST['is_public']) ? 1 : 0,
+                'is_public' => $istOeffentlich ? 1 : 0,
                 'issued_by' => trim($_POST['issued_by'] ?? '') ?: null,
                 'issued_at' => !empty($_POST['issued_at']) ? $_POST['issued_at'] : null,
             ]);
+
+            // Protokoll (#134): Kategorie = Addon-Slug. Vermerkt wird der
+            // Bezug (welcher Eintrag, welches Pferd), die Art der
+            // Untersuchung und die Freigabe - das Opt-in entscheidet darüber,
+            // ob Gesundheitsdaten öffentlich sichtbar werden, und gehört
+            // deshalb in den Nachweis.
+            //
+            // NICHT hinein gehen: die Ergebnis-Zusammenfassung, der
+            // Aussteller und der ursprüngliche Dateiname des Uploads. Das
+            // Protokoll wird dauerhaft aufbewahrt, während die Gesundheitsdaten
+            // selbst löschbar bleiben sollen - was hier landete, überlebte
+            // genau die Löschung, um die es geht. Beim Dokument steht deshalb
+            // der SELBST VERGEBENE Ablagename: Er benennt die Datei
+            // eindeutig, ohne den (frei wählbaren, oft personenbezogenen)
+            // Originalnamen mitzuschleppen.
+            $eintragId = (int) $db->lastInsertId();
+            AuditLogger::log(
+                'Gesundheitstest-Eintrag angelegt',
+                'gesundheitstests',
+                "Eintrag #{$eintragId}, Pferd #{$horseId} (" . self::pferdeName($db, $horseId) . '), '
+                    . "Art: {$testType}, öffentlich: " . ($istOeffentlich ? 'ja' : 'nein')
+                    . ', Dokument: ' . ($upload['name'] ?? 'keins')
+            );
         }
 
-        header('Location: /plugin/gesundheitstests/verwaltung');
-        exit;
+        $this->redirectBack($horseId);
     }
 
     public function delete(): void {
@@ -434,124 +409,111 @@ class VerwaltungController extends BaseController {
         }
 
         $id = !empty($_POST['id']) ? (int) $_POST['id'] : null;
+        // Die horse_id entscheidet über den Rückweg (#120) und stammt deshalb
+        // aus der gelesenen Zeile, nicht aus dem POST: Ein manipulierter Wert
+        // schickte den Benutzer sonst in den Datensatz eines fremden Pferdes.
+        $horseId = null;
         if ($id) {
             $db = Database::getInstance();
-            $stmt = $db->prepare('SELECT file_name FROM `plugin_gesundheitstests` WHERE id = :id');
+            // Testart und Pferd mitgelesen (#134): Nach dem DELETE ist beides
+            // nicht mehr zu ermitteln, und "Dokument gelöscht" ohne Angabe,
+            // welches und zu welchem Pferd, hilft niemandem. LEFT JOIN, damit
+            // ein fehlendes Pferd die Zeile nicht verschwinden lässt.
+            $stmt = $db->prepare(
+                'SELECT g.file_name, g.test_type, g.is_public, g.horse_id, h.name AS horse_name
+                 FROM `plugin_gesundheitstests` g
+                 LEFT JOIN horses h ON h.id = g.horse_id
+                 WHERE g.id = :id'
+            );
             $stmt->execute(['id' => $id]);
             $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if ($row) {
+                $horseId = (int) $row['horse_id'];
+                $dateiVermerk = 'kein Dokument hinterlegt';
                 if (!empty($row['file_name'])) {
                     // file_name ist ein selbst generierter basename ohne Pfadanteile
                     // (siehe handleDocumentUpload) - kein Traversal möglich.
-                    $path = Plugin::storageDir() . '/' . basename((string) $row['file_name']);
+                    $dateiName = basename((string) $row['file_name']);
+                    $path = Plugin::storageDir() . '/' . $dateiName;
                     if (is_file($path)) {
                         @unlink($path);
+                        // Nach dem unlink geprüft: Ein fehlgeschlagenes
+                        // Entfernen darf nicht als "Dokument entfernt"
+                        // protokolliert werden - sonst weist das Protokoll
+                        // ausgerechnet die Datei als gelöscht aus, die noch
+                        // in der Ablage liegt.
+                        $dateiVermerk = is_file($path)
+                            ? "Dokument {$dateiName} konnte NICHT entfernt werden"
+                            : "Dokument {$dateiName} entfernt";
+                    } else {
+                        $dateiVermerk = "Dokument {$dateiName} war bereits nicht mehr in der Ablage";
                     }
                 }
+
                 $deleteStmt = $db->prepare('DELETE FROM `plugin_gesundheitstests` WHERE id = :id');
                 $deleteStmt->execute(['id' => $id]);
+
+                // Protokoll (#134): Der wichtigste Fall des ganzen Addons.
+                // Gesundheitsdaten sind der heikelste Bestand im Verzeichnis,
+                // und ihr Löschen verschwand bisher spurlos - das Protokoll
+                // behauptete damit stillschweigend, es sei nichts geschehen.
+                // Ohne Ergebnis-Zusammenfassung und ohne Originaldateiname
+                // (siehe store()): Der Nachweis der Handlung darf nicht die
+                // Inhalte konservieren, die gerade gelöscht wurden.
+                AuditLogger::log(
+                    'Gesundheitstest-Eintrag gelöscht',
+                    'gesundheitstests',
+                    "Eintrag #{$id}, Pferd #" . (int) $row['horse_id']
+                        . ' (' . (string) ($row['horse_name'] ?? 'unbekannt') . '), '
+                        . 'Art: ' . (string) $row['test_type']
+                        . ', öffentlich: ' . (!empty($row['is_public']) ? 'ja' : 'nein')
+                        . ', ' . $dateiVermerk
+                );
             }
         }
 
-        // Zurück auf die Listenseite, von der gelöscht wurde (#74); index()
-        // klemmt einen inzwischen zu großen Wert selbst auf die letzte Seite.
-        $seite = (int) ($_POST['seite'] ?? 1);
-        header('Location: /plugin/gesundheitstests/verwaltung' . ($seite > 1 ? '?seite=' . $seite : ''));
-        exit;
+        $this->redirectBack($horseId);
+    }
+
+    /** Gibt es dieses Pferd (und ist es nicht im Papierkorb)? */
+    private static function pferdExistiert(PDO $db, int $horseId): bool {
+        $stmt = $db->prepare('SELECT 1 FROM horses WHERE id = :id AND deleted_at IS NULL');
+        $stmt->execute(['id' => $horseId]);
+        return $stmt->fetchColumn() !== false;
     }
 
     /**
-     * Serverseitige Pferdesuche für die Datalist (#74, Muster
-     * Framework-Katalog): JSON-Liste {id, label} über eine Teilstring-Suche
-     * im Namen, höchstens SEARCH_LIMIT Treffer. Läuft über denselben
-     * Konstruktor-Schutz (gesundheitstests.manage) wie die Verwaltungsseite.
-     */
-    public function suche(): void {
-        header('Content-Type: application/json; charset=utf-8');
-
-        $q = trim((string) ($_GET['q'] ?? ''));
-        if ($q === '') {
-            echo json_encode([]);
-            exit;
-        }
-
-        $stmt = Database::getInstance()->prepare(
-            'SELECT id, name, birth_year FROM horses
-             WHERE deleted_at IS NULL AND name LIKE ?
-             ORDER BY name ASC, id ASC LIMIT ' . self::SEARCH_LIMIT
-        );
-        $stmt->execute(['%' . addcslashes($q, '\\%_') . '%']);
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-        // Label-Duplikate (gleicher Name und Jahrgang) eindeutig machen: Die
-        // Datalist mappt Label -> ID, und der No-JS-Fallback löst das
-        // "[#id]"-Suffix in resolveHorseId() wieder auf.
-        $labelCounts = [];
-        foreach ($rows as $row) {
-            $label = self::horseLabel($row);
-            $labelCounts[$label] = ($labelCounts[$label] ?? 0) + 1;
-        }
-
-        $result = [];
-        foreach ($rows as $row) {
-            $label = self::horseLabel($row);
-            if ($labelCounts[$label] > 1) {
-                $label .= ' [#' . (int) $row['id'] . ']';
-            }
-            $result[] = ['id' => (int) $row['id'], 'label' => $label];
-        }
-
-        echo json_encode($result);
-        exit;
-    }
-
-    /**
-     * No-JS-Fallback: löst den getippten Text des Suchfelds serverseitig zu
-     * einer Pferde-ID auf - nur bei eindeutigem Treffer, sonst null.
-     */
-    private function resolveHorseId(PDO $db, string $q): ?int {
-        // 1) Eindeutigkeits-Suffix aus der Vorschlagsliste: "… [#123]"
-        if (preg_match('/\[#(\d+)\]\s*$/', $q, $m)) {
-            $stmt = $db->prepare('SELECT id FROM horses WHERE id = ? AND deleted_at IS NULL');
-            $stmt->execute([(int) $m[1]]);
-            $id = $stmt->fetchColumn();
-            return $id !== false ? (int) $id : null;
-        }
-
-        // 2) Label-Form "Name (Jahrgang)"
-        if (preg_match('/^(.*\S)\s*\((\d{3,4})\)$/u', $q, $m)) {
-            $stmt = $db->prepare('SELECT id FROM horses WHERE deleted_at IS NULL AND name = ? AND birth_year = ? LIMIT 2');
-            $stmt->execute([$m[1], (int) $m[2]]);
-            $ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
-            if (count($ids) === 1) {
-                return (int) $ids[0];
-            }
-            if (count($ids) > 1) {
-                return null; // mehrdeutig - nur die "[#id]"-Variante ist eindeutig
-            }
-            // kein Treffer: unten als wörtlichen Namen weiterversuchen
-        }
-
-        // 3) exakter Name, sofern eindeutig
-        $stmt = $db->prepare('SELECT id FROM horses WHERE deleted_at IS NULL AND name = ? LIMIT 2');
-        $stmt->execute([$q]);
-        $ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
-        return count($ids) === 1 ? (int) $ids[0] : null;
-    }
-
-    /**
-     * Anzeige-/Suchlabel eines Pferdes: "Name (Jahrgang)" bzw. nur "Name" -
-     * dieselbe Form, die früher die <select>-Optionen trugen.
+     * Rückweg nach dem Speichern/Löschen. Bewusst KEINE übergebene URL,
+     * sondern eine feste Adresse plus geprüfter Integer - eine mitgeschickte
+     * Zieladresse wäre ein offener Redirect.
      *
-     * @param array<string, mixed> $h
+     * Seit #120 gibt es dafür keinen Schalter mehr: Beide Formulare stehen im
+     * Bearbeitungsformular des Pferdes, dorthin führt der Weg also immer
+     * zurück. Nur wenn die horse_id nicht zu ermitteln war (POST von Hand,
+     * Zeile inzwischen gelöscht), bleibt die Pferdeliste - die frühere
+     * Verwaltungsseite gibt es nicht mehr, ein Verweis auf sie endete in 404.
      */
-    private static function horseLabel(array $h): string {
-        $label = (string) $h['name'];
-        if (!empty($h['birth_year'])) {
-            $label .= ' (' . (int) $h['birth_year'] . ')';
-        }
-        return $label;
+    private function redirectBack(?int $horseId): never {
+        header('Location: ' . ($horseId !== null && $horseId > 0
+            ? '/admin/horses/edit?id=' . $horseId
+            : '/admin/horses'));
+        exit;
+    }
+
+    /**
+     * Name eines Pferdes für den Protokolleintrag (#134). Eine reine ID ist
+     * im Protokoll wertlos, sobald das Pferd selbst gelöscht ist - der Name
+     * bleibt lesbar. Fällt auf "unbekannt" zurück statt zu scheitern: Ein
+     * Protokolleintrag darf nie die Ursache dafür sein, dass die eigentliche
+     * Handlung abbricht.
+     */
+    private static function pferdeName(PDO $db, int $horseId): string {
+        $stmt = $db->prepare('SELECT name FROM horses WHERE id = ?');
+        $stmt->execute([$horseId]);
+        $name = $stmt->fetchColumn();
+
+        return $name !== false ? (string) $name : 'unbekannt';
     }
 
     /**

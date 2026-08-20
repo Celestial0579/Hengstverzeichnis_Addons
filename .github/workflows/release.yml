@@ -77,3 +77,8 @@ jobs:
           # Titel/Beschreibung bewusst nicht gesetzt: bleiben manuell
           # kuratiert (CHANGELOG.md als Grundlage), wie im Framework.
           draft: false
+          # Vorabversionen ausdrücklich als solche kennzeichnen - wie im
+          # Framework. App\Service\AddonUpdateService bzw. der Store lesen
+          # den prerelease-Schalter; ohne diese Zeile bekämen alle Instanzen
+          # ein v0.8.0-beta.1 als reguläres Addon-Update angeboten.
+          prerelease: ${{ contains(github.ref_name, '-') }}

@@ -6,16 +6,31 @@ namespace Tests\Functional;
 use Tests\Support\HttpClient;
 
 /**
- * Legt Personen und Deckstationen über die echten Admin-Endpunkte an und
- * liefert ihre IDs zurück - das Pendant zu HorseListHelper für die beiden
- * Addons, die an Personen und Stationen hängen (zucht-suche, kontaktanfrage).
+ * Legt Kontakte über die echten Admin-Endpunkte an und liefert ihre IDs
+ * zurück - das Pendant zu HorseListHelper für die Addons, die an Kontakten
+ * hängen (zucht-suche, kontaktanfrage).
  *
- * Beide Datensatzarten sind ab Werk UNVERÖFFENTLICHT
- * (persons.is_published / breeding_stations.is_published DEFAULT 0), und
- * beide öffentlichen Detailseiten zeigen nur veröffentlichte Datensätze
- * (Kern-#121/#122). Die Helfer setzen `is_published => '1'` deshalb als
+ * Seit Framework#336 gibt es nur noch EINE Liste: `persons` und
+ * `breeding_stations` sind zu `contacts` zusammengeführt, und die alten
+ * Admin-Routen leiten nur mit GET dauerhaft um - `/admin/persons/store` und
+ * `/admin/breeding-stations/store` sind POST und existieren schlicht nicht
+ * mehr. Der Helfer schreibt deshalb nach `/admin/contacts/store`.
+ *
+ * createPerson() und createStation() bleiben als Aliasse stehen (Addons#122),
+ * damit die Tests der übrigen Kontakt-Addons unverändert weiterlaufen; sie
+ * legen beide denselben Datensatz an. Ein neuer Test benutzt createContact().
+ *
+ * Kontakte sind ab Werk UNVERÖFFENTLICHT (`contacts.is_published` DEFAULT 0),
+ * und die öffentliche Detailseite zeigt nur veröffentlichte Datensätze
+ * (Kern-#121/#122). Der Helfer setzt `is_published => '1'` deshalb als
  * Vorgabe; wer die Zugriffskontrolle prüfen will, überschreibt das
  * ausdrücklich mit '0'.
+ *
+ * `contact_public` bleibt bewusst auf dem Vorgabewert 0: Es ist seit dem
+ * Zusammenlegen der einzige Schutz für E-Mail, Telefon und Anschrift (siehe
+ * docs/kontaktliste-umstellung.md im Kern). Ein Helfer, der ihn stillschweigend
+ * setzte, machte jeden Datenschutz-Test wertlos - wer die Freigabe braucht,
+ * übergibt sie ausdrücklich.
  */
 trait PersonStationHelper {
 
@@ -23,39 +38,39 @@ trait PersonStationHelper {
      * @param array<string, string> $extra Zusätzliche POST-Felder
      *   (z. B. is_breeder, city, country, email, contact_public).
      */
-    private function createPerson(HttpClient $admin, string $name, array $extra = []): int {
-        $form = $admin->get('/admin/persons/create');
-        $response = $admin->post('/admin/persons/store', array_merge([
+    private function createContact(HttpClient $admin, string $name, array $extra = []): int {
+        $form = $admin->get('/admin/contacts/create');
+        $response = $admin->post('/admin/contacts/store', array_merge([
             'csrf_token' => $form->formField('csrf_token') ?? '',
             'name' => $name,
             'is_published' => '1',
         ], $extra));
         $this->assertSame(
-            '/admin/persons?success=created',
+            '/admin/contacts?success=created',
             $response->location(),
-            "Anlegen der Person '{$name}' fehlgeschlagen, Body: {$response->body}"
+            "Anlegen des Kontakts '{$name}' fehlgeschlagen, Body: {$response->body}"
         );
 
-        return $this->findRowIdByName($admin, '/admin/persons', $name, 'Person');
+        return $this->findRowIdByName($admin, '/admin/contacts', $name, 'Kontakt');
     }
 
     /**
+     * Alias auf createContact() - die Unterscheidung Person/Station gibt es
+     * seit Framework#336 nicht mehr.
+     *
+     * @param array<string, string> $extra Zusätzliche POST-Felder.
+     */
+    private function createPerson(HttpClient $admin, string $name, array $extra = []): int {
+        return $this->createContact($admin, $name, $extra);
+    }
+
+    /**
+     * Alias auf createContact(), siehe createPerson().
+     *
      * @param array<string, string> $extra Zusätzliche POST-Felder.
      */
     private function createStation(HttpClient $admin, string $name, array $extra = []): int {
-        $form = $admin->get('/admin/breeding-stations/create');
-        $response = $admin->post('/admin/breeding-stations/store', array_merge([
-            'csrf_token' => $form->formField('csrf_token') ?? '',
-            'name' => $name,
-            'is_published' => '1',
-        ], $extra));
-        $this->assertSame(
-            '/admin/breeding-stations?success=created',
-            $response->location(),
-            "Anlegen der Deckstation '{$name}' fehlgeschlagen, Body: {$response->body}"
-        );
-
-        return $this->findRowIdByName($admin, '/admin/breeding-stations', $name, 'Deckstation');
+        return $this->createContact($admin, $name, $extra);
     }
 
     /**

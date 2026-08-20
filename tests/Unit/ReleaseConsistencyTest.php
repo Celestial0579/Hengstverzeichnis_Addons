@@ -35,44 +35,75 @@ class ReleaseConsistencyTest extends TestCase {
         return [$exitCode, implode("\n", $lines)];
     }
 
+    /**
+     * Die Ziel-Linie wird ABGELEITET, nicht festgenagelt.
+     *
+     * Hier stand bis v0.8 ein fester Tag (`v0.7.0`) samt Begründung, welche
+     * Addons ihn erzwingen. Der Kommentar daneben warnte ausdrücklich vor
+     * genau diesem Fehler - "eine Zahl, die niemand nachzieht, ist eine
+     * falsche Aussage im Test" - und meinte damit die Addon-ANZAHL. Die
+     * VERSION daneben war derselbe Fehler eine Ebene höher: Beim Sprung auf
+     * 0.8 wurde der Test rot, obwohl der Repo-Stand in Ordnung war.
+     *
+     * Abgeleitet wird aus den Manifesten selbst: Die höchste
+     * `core_supported_max` ist die Linie, für die dieser Bestand vorbereitet
+     * ist. Der Test prüft dann nur noch, dass das Skript derselben Meinung
+     * ist - und dass es die Linie darüber ablehnt.
+     */
     public function testRealRepoStatePassesForItsTargetLine(): void {
-        // Der echte Bestand muss für seine Ziel-Linie durchgehen - auch mit
-        // refs/tags/-Präfix, wie ihn die Pipeline übergibt. Bewusst OHNE
-        // feste Addon-Anzahl im Kommentar: Die stand hier jahrelang als
-        // "alle 15 Addons, >=0.4.0" und stimmte längst nicht mehr (real 17
-        // Addons auf Linie 0.5) - eine Zahl, die niemand nachzieht, ist eine
-        // falsche Aussage im Test.
-        //
-        // Geprueft wird gegen v0.7.0: `kontaktanfrage` und `zucht-suche`
-        // setzen auf Hook-Punkten und Datenfeldern des Kerns 0.7.0 auf
-        // (person./station.detail_sections, person./station.edit_sections,
-        // persons.is_breeder, contact_public) und deklarieren deshalb
-        // ehrlich `>=0.7.0`. Der frueheste Tag, unter dem sich der
-        // Gesamtstand ausliefern laesst, ist damit v0.7.0 - und genau das
-        // soll das Gate durchsetzen.
-        [$exitCode, $output] = $this->runScript('v0.7.0');
-        $this->assertSame(0, $exitCode, $output);
-        $this->assertStringContainsString('0.7', $output);
+        $linie = $this->hoechsteUnterstuetzteLinie();
 
-        [$exitCode] = $this->runScript('refs/tags/v0.7.0');
+        [$exitCode, $output] = $this->runScript("v{$linie}.0");
+        $this->assertSame(0, $exitCode, $output);
+        $this->assertStringContainsString($linie, $output);
+
+        // Mit refs/tags/-Präfix, wie ihn die Pipeline übergibt.
+        [$exitCode] = $this->runScript("refs/tags/v{$linie}.0");
         $this->assertSame(0, $exitCode);
 
-        // Gegenprobe: Als v0.6.9 darf derselbe Bestand NICHT durchgehen.
-        [$exitCode, $output] = $this->runScript('v0.6.9');
-        $this->assertNotSame(0, $exitCode, 'kontaktanfrage verlangt >=0.7.0 - Linie 0.6 muss abgelehnt werden.');
-        $this->assertStringContainsString('kontaktanfrage', $output);
+        // Und als Vorabversion derselben Linie (seit v0.8: die Beta-Phase
+        // geht durch dieselbe Kette wie ein regulärer Release).
+        [$exitCode, $output] = $this->runScript("v{$linie}.0-beta.1");
+        $this->assertSame(0, $exitCode, $output);
     }
 
     public function testFailsWhenTargetLineIsOutsideTheBounds(): void {
-        // Linie 0.3 liegt unter der Untergrenze aller Addons.
+        // Unterhalb der höchsten Untergrenze: mindestens ein Addon verlangt
+        // mehr, als die Ziel-Linie hergibt.
         [$exitCode, $output] = $this->runScript('v0.3.9');
         $this->assertNotSame(0, $exitCode);
         $this->assertStringContainsString('core_compatibility', $output);
 
-        // Linie 0.8 reißt die Obergrenze core_supported_max 0.7.
-        [$exitCode, $output] = $this->runScript('v0.8.0');
-        $this->assertNotSame(0, $exitCode);
+        // Oberhalb der höchsten Obergrenze: die Linie darüber reißt
+        // core_supported_max. Auch das abgeleitet - sonst wäre der Test beim
+        // nächsten Minor-Sprung wieder rot.
+        [$major, $minor] = array_map('intval', explode('.', $this->hoechsteUnterstuetzteLinie()));
+        $darueber = $major . '.' . ($minor + 1);
+
+        [$exitCode, $output] = $this->runScript("v{$darueber}.0");
+        $this->assertNotSame(0, $exitCode, "Linie {$darueber} muss die Obergrenzen reißen.");
         $this->assertStringContainsString('core_supported_max', $output);
+    }
+
+    /**
+     * Höchste `core_supported_max` über alle Addons - die Linie, für die
+     * dieser Bestand vorbereitet ist.
+     */
+    private function hoechsteUnterstuetzteLinie(): string {
+        $hoechste = null;
+        foreach (glob(__DIR__ . '/../../plugins/*/plugin.json') ?: [] as $datei) {
+            $manifest = json_decode((string)file_get_contents($datei), true);
+            $max = is_array($manifest) ? ($manifest['core_supported_max'] ?? null) : null;
+            if (!is_string($max) || !preg_match('/^\d+\.\d+$/', $max)) {
+                continue;
+            }
+            if ($hoechste === null || version_compare($max, $hoechste, '>')) {
+                $hoechste = $max;
+            }
+        }
+
+        $this->assertNotNull($hoechste, 'Kein Addon nennt eine gültige core_supported_max - der Bestand ist unbrauchbar.');
+        return $hoechste;
     }
 
     public function testFailsOnInvalidTagFormat(): void {

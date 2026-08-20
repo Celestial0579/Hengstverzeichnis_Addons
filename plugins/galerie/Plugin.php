@@ -31,6 +31,7 @@ use App\Database;
 use App\Plugin\HookManager;
 use App\Plugin\PluginPage;
 use App\Router;
+use App\Service\AuditLogger;
 use PDO;
 
 class Plugin {
@@ -442,10 +443,12 @@ class Plugin {
     public function routes(): array {
         return [
             ['method' => 'GET', 'path' => '/verwaltung', 'callback' => [VerwaltungController::class, 'index']],
-            // Serverseitige Pferdesuche für die Datalist im Formular (#74,
-            // Muster Framework-Katalog): JSON, max. 50 Treffer, nur mit
-            // galerie.manage (Konstruktor-Schutz des Controllers).
-            ['method' => 'GET', 'path' => '/suche', 'callback' => [VerwaltungController::class, 'suche']],
+            // Die addoneigene Pferdesuche (/suche) ist mit Addons#125
+            // entfallen: Sieben Addons brachten dieselbe Route und denselben
+            // JS-Block mit, und jede Kopie war eine eigene Stelle, an der
+            // Deckelung, Rechteprüfung und das Maskieren der LIKE-Platzhalter
+            // richtig sein mussten. Der Kern liefert das seit Framework#341
+            // unter /admin/horses/search.
             ['method' => 'POST', 'path' => '/verwaltung/store', 'callback' => [VerwaltungController::class, 'store']],
             ['method' => 'POST', 'path' => '/verwaltung/delete', 'callback' => [VerwaltungController::class, 'delete']],
             // Zugriffsgeschützte Bildauslieferung. Die Bilder liegen außerhalb
@@ -483,8 +486,9 @@ class VerwaltungController extends BaseController {
     }
 
 
-    /** Treffer-Deckel der Datalist-Suche (#74). */
-    private const SEARCH_LIMIT = 50;
+    // Der Treffer-Deckel der Pferdesuche steht seit Addons#125 im Kern
+    // (HorseSearchController::MAX_TREFFER) - die addoneigene Konstante ist
+    // damit entfallen, zusammen mit der Route, die sie deckelte.
 
     /** Medien je Verwaltungsseite (#74). */
     private const MEDIA_PER_PAGE = 50;
@@ -537,16 +541,23 @@ class VerwaltungController extends BaseController {
         $content .= '<form method="POST" action="/plugin/galerie/verwaltung/store" enctype="multipart/form-data">';
         $content .= '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') . '">';
 
-        // Pferde-Auswahl als Suchfeld mit serverseitig nachgeladener
-        // Vorschlagsliste statt eines Voll-<select> über den gesamten
-        // Bestand (#74, Muster Framework-Katalog). Die gewählte ID landet
-        // per JS im Hidden-Feld horse_id; ohne JavaScript löst store() den
-        // getippten Text über resolveHorseId() auf.
+        // Pferde-Auswahl über das gemeinsame Suchfeld des Kerns (Addons#125):
+        // `hv-pferdesuche` verdrahtet /js/horse-search.js mit dem Endpunkt
+        // /admin/horses/search und füllt das über `data-ziel` benannte
+        // <select>. Der frühere addoneigene JS-Block samt /suche-Route ist
+        // damit weg - inklusive seines Wettlaufs zwischen zwei schnell
+        // aufeinanderfolgenden Anfragen, den er nicht behandelte.
+        //
+        // Das Textfeld behält seinen Namen `horse_q`: Ohne JavaScript bleibt
+        // die Auswahlliste leer, und dann löst store() den getippten Text
+        // über resolveHorseId() auf. Ein <select> allein wäre ohne JS ein
+        // Formular, das sich nicht absenden lässt.
         $content .= '<div class="form-group"><label for="horse_q">Pferd</label>'
-            . '<input type="text" name="horse_q" id="horse_q" class="form-control" list="horse_q_liste" autocomplete="off"'
+            . '<input type="text" name="horse_q" id="horse_q" class="form-control hv-pferdesuche"'
+            . ' data-ziel="horse_id" autocomplete="off"'
             . ' placeholder="Namen eintippen und Vorschlag auswählen …" required>'
-            . '<datalist id="horse_q_liste"></datalist>'
-            . '<input type="hidden" name="horse_id" id="horse_id" value="">'
+            . '<select name="horse_id" id="horse_id" class="form-control" style="margin-top:0.4rem;">'
+            . '<option value="">– bitte oben suchen –</option></select>'
             . '</div>';
 
         $content .= '<div class="galerie-row">';
@@ -565,53 +576,11 @@ class VerwaltungController extends BaseController {
         $content .= '<p><button type="submit" class="btn">Hinzufügen</button></p>';
         $content .= '</form>';
 
-        // Progressive Enhancement der Pferdesuche: lädt Vorschläge von
-        // /plugin/galerie/suche und mappt das gewählte Label auf die ID im
-        // Hidden-Feld. Ohne fetch()/JS greift der No-JS-Fallback in store().
-        $content .= '<script>
-(function () {
-    var input = document.getElementById("horse_q");
-    var hidden = document.getElementById("horse_id");
-    var list = document.getElementById("horse_q_liste");
-    if (!input || !hidden || !list || typeof window.fetch !== "function") { return; }
-
-    var byLabel = {};
-    var timer = null;
-
-    function sync() {
-        hidden.value = Object.prototype.hasOwnProperty.call(byLabel, input.value)
-            ? String(byLabel[input.value])
-            : "";
-    }
-
-    function loadSuggestions() {
-        var q = input.value.trim();
-        if (q === "") { return; }
-        fetch("/plugin/galerie/suche?q=" + encodeURIComponent(q))
-            .then(function (res) { return res.json(); })
-            .then(function (items) {
-                if (!Array.isArray(items)) { return; }
-                byLabel = {};
-                list.textContent = "";
-                items.forEach(function (item) {
-                    byLabel[item.label] = item.id;
-                    var option = document.createElement("option");
-                    option.value = item.label;
-                    list.appendChild(option);
-                });
-                sync();
-            })
-            .catch(function () { /* Suche nicht erreichbar - der No-JS-Fallback greift beim Absenden */ });
-    }
-
-    input.addEventListener("input", function () {
-        sync();
-        if (timer) { clearTimeout(timer); }
-        timer = setTimeout(loadSuggestions, 200);
-    });
-    input.addEventListener("change", sync);
-})();
-</script>';
+        // Progressive Enhancement der Pferdesuche: Das Skript des Kerns
+        // (Framework#341) verdrahtet jedes Feld mit der Klasse
+        // `hv-pferdesuche`. Ohne fetch()/JS greift der No-JS-Fallback in
+        // store().
+        $content .= '<script src="/js/horse-search.js"></script>';
 
         $content .= '<h2>Erfasste Medien</h2>';
         $content .= '<table><thead><tr><th>Pferd</th><th>Typ</th><th>Vorschau/Link</th><th>Bildunterschrift</th><th>Sortierung</th><th></th></tr></thead><tbody>';
@@ -668,8 +637,9 @@ class VerwaltungController extends BaseController {
 
         $db = Database::getInstance();
 
-        // ID aus dem Hidden-Feld (per JS gesetzt), sonst No-JS-Fallback:
-        // den getippten Text des Suchfelds serverseitig auflösen (#74). In
+        // ID aus dem Auswahlfeld, das das gemeinsame Suchfeld des Kerns füllt
+        // (Addons#125), sonst No-JS-Fallback: den getippten Text des
+        // Suchfelds serverseitig auflösen (#74). In
         // beiden Fällen wird gegen den Bestand geprüft - eine frei erfundene
         // ID liefe sonst in den FOREIGN-KEY-Fehler statt in einen Redirect.
         $horseId = !empty($_POST['horse_id']) ? (int) $_POST['horse_id'] : null;
@@ -713,6 +683,23 @@ class VerwaltungController extends BaseController {
                     'caption' => trim($_POST['caption'] ?? '') ?: null,
                     'sort_order' => (int) ($_POST['sort_order'] ?? 0),
                 ]);
+
+                // Protokoll (#134): Kategorie = Addon-Slug. Der Eintrag nennt
+                // Datensatz und Bezug (welches Medium, welches Pferd) sowie
+                // die Medienquelle - bei einem Bild den ABGELEGTEN Dateinamen,
+                // denn genau der wird beim Löschen wieder entfernt.
+                // Die Bildunterschrift bleibt draußen: freier Text, der
+                // Personen benennen kann, und für den Nachweis der Handlung
+                // ohne Wert.
+                $mediumId = (int) $db->lastInsertId();
+                AuditLogger::log(
+                    'Galerie: Medium hinzugefügt',
+                    'galerie',
+                    "Medium #{$mediumId}, Pferd #{$horseId} (" . self::pferdeName($db, $horseId) . '), '
+                        . ($type === 'image'
+                            ? 'Bild, Datei: ' . $imagePath
+                            : 'Video, Verweis: ' . $safeVideoUrl)
+                );
             }
         }
 
@@ -737,24 +724,55 @@ class VerwaltungController extends BaseController {
         $id = !empty($_POST['id']) ? (int) $_POST['id'] : null;
         if ($id) {
             $db = Database::getInstance();
-            $stmt = $db->prepare('SELECT type, file_path FROM `plugin_galerie_media` WHERE id = :id');
+            // Pferd mitgelesen (#134): Nach dem DELETE ist der Bezug nicht mehr
+            // zu ermitteln - "Medium gelöscht" ohne Angabe, welches und zu
+            // welchem Pferd, hilft im Protokoll niemandem. LEFT JOIN, damit ein
+            // fehlendes Pferd die Zeile nicht verschwinden lässt.
+            $stmt = $db->prepare(
+                'SELECT m.type, m.file_path, m.horse_id, h.name AS horse_name
+                 FROM `plugin_galerie_media` m
+                 LEFT JOIN horses h ON h.id = m.horse_id
+                 WHERE m.id = :id'
+            );
             $stmt->execute(['id' => $id]);
             $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if ($row) {
+                $dateiVermerk = 'ohne hochgeladene Datei';
                 if ($row['type'] === 'image' && !empty($row['file_path'])) {
                     // file_path ist ein selbst generierter Dateiname (siehe
                     // handleImageUpload) - basename() verhindert zusätzlich
                     // jedes Traversal. Bestandsdatensätze, die noch den alten
                     // öffentlichen Pfad tragen, reduziert basename() auf
                     // denselben Namen.
-                    $path = Plugin::storageDir() . '/' . basename((string) $row['file_path']);
+                    $dateiName = basename((string) $row['file_path']);
+                    $path = Plugin::storageDir() . '/' . $dateiName;
                     if (is_file($path)) {
                         @unlink($path);
+                        // Nach dem unlink geprüft: Ein fehlgeschlagenes
+                        // Entfernen darf nicht als "Datei entfernt"
+                        // protokolliert werden - dann bliebe genau die Datei
+                        // liegen, die das Protokoll als gelöscht ausweist.
+                        $dateiVermerk = is_file($path)
+                            ? "Datei {$dateiName} konnte NICHT entfernt werden"
+                            : "Datei {$dateiName} entfernt";
+                    } else {
+                        $dateiVermerk = "Datei {$dateiName} war bereits nicht mehr vorhanden";
                     }
                 }
+
                 $deleteStmt = $db->prepare('DELETE FROM `plugin_galerie_media` WHERE id = :id');
                 $deleteStmt->execute(['id' => $id]);
+
+                // Protokoll (#134): das Löschen eines Galeriebildes samt Datei
+                // war bisher spurlos. Ohne Bildunterschrift - freier Text.
+                AuditLogger::log(
+                    'Galerie: Medium gelöscht',
+                    'galerie',
+                    "Medium #{$id}, Pferd #" . (int) $row['horse_id']
+                        . ' (' . (string) ($row['horse_name'] ?? 'unbekannt') . '), '
+                        . ($row['type'] === 'image' ? 'Bild' : 'Video') . ', ' . $dateiVermerk
+                );
             }
         }
 
@@ -773,56 +791,15 @@ class VerwaltungController extends BaseController {
     }
 
     /**
-     * Serverseitige Pferdesuche für die Datalist (#74, Muster
-     * Framework-Katalog): JSON-Liste {id, label} über eine Teilstring-Suche
-     * im Namen, höchstens SEARCH_LIMIT Treffer. Läuft über denselben
-     * Konstruktor-Schutz (galerie.manage) wie die Verwaltungsseite.
-     */
-    public function suche(): void {
-        header('Content-Type: application/json; charset=utf-8');
-
-        $q = trim((string) ($_GET['q'] ?? ''));
-        if ($q === '') {
-            echo json_encode([]);
-            exit;
-        }
-
-        $stmt = Database::getInstance()->prepare(
-            'SELECT id, name, birth_year FROM horses
-             WHERE deleted_at IS NULL AND name LIKE ?
-             ORDER BY name ASC, id ASC LIMIT ' . self::SEARCH_LIMIT
-        );
-        $stmt->execute(['%' . addcslashes($q, '\\%_') . '%']);
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-        // Label-Duplikate (gleicher Name und Jahrgang) eindeutig machen: Die
-        // Datalist mappt Label -> ID, und der No-JS-Fallback löst das
-        // "[#id]"-Suffix in resolveHorseId() wieder auf.
-        $labelCounts = [];
-        foreach ($rows as $row) {
-            $label = self::horseLabel($row);
-            $labelCounts[$label] = ($labelCounts[$label] ?? 0) + 1;
-        }
-
-        $result = [];
-        foreach ($rows as $row) {
-            $label = self::horseLabel($row);
-            if ($labelCounts[$label] > 1) {
-                $label .= ' [#' . (int) $row['id'] . ']';
-            }
-            $result[] = ['id' => (int) $row['id'], 'label' => $label];
-        }
-
-        echo json_encode($result);
-        exit;
-    }
-
-    /**
      * No-JS-Fallback: löst den getippten Text des Suchfelds serverseitig zu
      * einer Pferde-ID auf - nur bei eindeutigem Treffer, sonst null.
      */
     private function resolveHorseId(PDO $db, string $q): ?int {
-        // 1) Eindeutigkeits-Suffix aus der Vorschlagsliste: "… [#123]"
+        // 1) Eindeutigkeits-Suffix "… [#123]". Die Vorschlagsliste des Kerns
+        //    erzeugt es seit Addons#125 nicht mehr (sie hängt UELN und
+        //    Jahrgang an); als ausdrückliche Eingabe bleibt es der einzige
+        //    Weg, ohne JavaScript ein bestimmtes von zwei namensgleichen
+        //    Pferden zu benennen - deshalb wird es weiterhin akzeptiert.
         if (preg_match('/\[#(\d+)\]\s*$/', $q, $m)) {
             $stmt = $db->prepare('SELECT id FROM horses WHERE id = ? AND deleted_at IS NULL');
             $stmt->execute([(int) $m[1]]);
@@ -852,17 +829,18 @@ class VerwaltungController extends BaseController {
     }
 
     /**
-     * Anzeige-/Suchlabel eines Pferdes: "Name (Jahrgang)" bzw. nur "Name" -
-     * dieselbe Form, die früher die <select>-Optionen trugen.
-     *
-     * @param array<string, mixed> $h
+     * Name eines Pferdes für den Protokolleintrag (#134). Eine reine ID ist
+     * im Protokoll wertlos, sobald das Pferd selbst gelöscht ist - der Name
+     * bleibt lesbar. Fällt auf "unbekannt" zurück statt zu scheitern: Ein
+     * Protokolleintrag darf nie die Ursache dafür sein, dass die eigentliche
+     * Handlung abbricht.
      */
-    private static function horseLabel(array $h): string {
-        $label = (string) $h['name'];
-        if (!empty($h['birth_year'])) {
-            $label .= ' (' . (int) $h['birth_year'] . ')';
-        }
-        return $label;
+    private static function pferdeName(PDO $db, int $horseId): string {
+        $stmt = $db->prepare('SELECT name FROM horses WHERE id = ?');
+        $stmt->execute([$horseId]);
+        $name = $stmt->fetchColumn();
+
+        return $name !== false ? (string) $name : 'unbekannt';
     }
 
     /**

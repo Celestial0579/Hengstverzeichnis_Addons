@@ -15,11 +15,18 @@ anhand der Farbgenetik des Norwegischen Fjordpferds.
   "Farben im Register" dort listet die Farbwerte nicht gelöschter Pferde mit
   eingetragener Farbe, auch unveröffentlichter - zulässig, weil
   berechtigungsgeschützt, aber bewusst mehr als die öffentliche Sicht. Die
-  Tabelle ist auf die ersten 200 Pferde (alphabetisch) gedeckelt (#74);
-  darüber hinaus schlägt ein Suchfeld (`<input list>` + `<datalist>`) über
-  `GET /plugin/farbvererbung/suche?q=…` nach (höchstens 50 Treffer, gleiche
-  Berechtigung wie der Rechner) - jeder Vorschlag nennt Farbe und
-  Falb-Einordnung direkt im Text.
+  Tabelle ist auf die ersten 200 Pferde (alphabetisch) gedeckelt (#74).
+- **Farbe aus dem Register übernehmen** (#125): Neben jedem Farb-Auswahlfeld
+  steht ein Pferde-Suchfeld (`hv-pferdesuche`, gespeist aus dem Kern-Endpunkt
+  `GET /admin/horses/search?q=…&nur_mit_farbe=1`, Framework#341). Der Rechner
+  übernimmt die Farbe des gewählten Pferdes selbst, statt sie - wie das
+  frühere Nachschlage-Feld - nur anzuzeigen. Eine ausdrücklich gewählte Farbe
+  hat Vorrang; lässt sich die eingetragene Farbe keiner der fünf Falbfarben
+  zuordnen, sagt die Seite das und ändert nichts.
+  Die addoneigene Route `/plugin/farbvererbung/suche` ist damit entfallen -
+  sie war eine von sieben Kopien derselben Pferdesuche (#125). **Achtung:** Der
+  Kern-Endpunkt verlangt `horses.view`; wer den Rechner nutzen darf, braucht
+  für die Übernahme zusätzlich dieses Leserecht.
 - **Detailseiten-Hinweis** (`horse.detail_sections`): ordnet die im Feld
   *Farbe* eingetragene Bezeichnung – sofern erkennbar – einer der fünf
   Falbfarben zu und zeigt die genetische Einordnung an.

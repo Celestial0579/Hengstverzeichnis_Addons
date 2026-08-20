@@ -11,7 +11,7 @@ im Framework-Repo):
 
 ```
 plugins/
-  besucherstatistik/
+  beispiel-erweiterungspunkte/
     plugin.json
     Plugin.php
     README.md
@@ -24,15 +24,20 @@ Zur Installation eines Addons wird dessen Verzeichnis lokal in das (dort
 gitignorete) `plugins/`-Verzeichnis des Framework-Checkouts kopiert:
 
 ```bash
-cp -r plugins/besucherstatistik /pfad/zu/Hengstverzeichnis_Framework/plugins/besucherstatistik
+cp -r plugins/beispiel-erweiterungspunkte /pfad/zu/Hengstverzeichnis_Framework/plugins/beispiel-erweiterungspunkte
 ```
 
 Danach unter **Admin → Plugins verwalten** (`/admin/plugins`) aktivieren.
 
 ## Verfügbare Addons
 
-- [`besucherstatistik`](plugins/besucherstatistik/README.md) - zählt
-  Seitenaufrufe je Pferd und zeigt eine Rangliste der meistgesehenen Pferde.
+- [`beispiel-erweiterungspunkte`](plugins/beispiel-erweiterungspunkte/README.md) -
+  **Lehrbeispiel, nicht für den Produktivbetrieb.** Belegt jeden
+  Erweiterungspunkt des Kerns mit einem sichtbaren Ergebnis - alle Hooks,
+  eigene Routen, Berechtigungen, Zusatzfunktion, eigene Tabellen,
+  Spam-Schutz-Anbieter, Protokollierung, Übersetzungen. Wer ein Addon
+  schreibt, fängt hier an. Ersetzt `besucherstatistik` als Referenz, das mit
+  der Zusammenführung der Statistik-Addons (#127) entfallen ist.
 - [`inzuchtkoeffizient`](plugins/inzuchtkoeffizient/README.md) - berechnet
   Wright's Inzuchtkoeffizienten auf der Pferde-Detailseite und bietet einen
   Verpaarungsrechner für den voraussichtlichen COI eines Fohlens.
@@ -81,6 +86,19 @@ Danach unter **Admin → Plugins verwalten** (`/admin/plugins`) aktivieren.
 - [`zucht-suche`](plugins/zucht-suche/README.md) - Öffentliche Einstiegsseite
   „Zucht": Züchter und Deckstationen suchen und filtern, statt sie nur über ein
   Pferd zu finden.
+- [`captcha-altcha`](plugins/captcha-altcha/README.md) - Spam-Schutz per
+  Rechennachweis im Browser (Proof of Work), **selbst gehostet**: keine
+  Drittanbieter, keine Schlüssel, keine Übermittlung von IP-Adressen, keine
+  Lockerung der Content-Security-Policy. Von den drei Anbieter-Addons die
+  einzige Variante, die auch für das DSGVO-Portal in Frage kommt.
+- [`captcha-turnstile`](plugins/captcha-turnstile/README.md) - Spam-Schutz per
+  Cloudflare Turnstile. **Drittanbieter:** IP-Adresse und Browser-Angaben der
+  Besucher gehen an Cloudflare, Inc. (USA) - gehört in die
+  Datenschutzerklärung, siehe README des Addons.
+- [`captcha-hcaptcha`](plugins/captcha-hcaptcha/README.md) - Spam-Schutz per
+  hCaptcha. **Drittanbieter:** IP-Adresse und Browser-Angaben der Besucher
+  gehen an Intuition Machines, Inc. (USA) - gehört in die
+  Datenschutzerklärung, siehe README des Addons.
 
 ## Automatisierte Tests
 
@@ -190,7 +208,9 @@ die Pflicht-Manifestgrenzen (`core_compatibility` als Untergrenze,
 3. Eine eigene `tests/Functional/<Addon>Test.php` ergänzen, die das Addon
    aktiviert und sein tatsächliches Verhalten (Hooks, Routen, Berechtigungen)
    gegen die echte Framework-Instanz prüft - am einfachsten als Kopie von
-   [`tests/Functional/BesucherstatistikPluginTest.php`](tests/Functional/BesucherstatistikPluginTest.php).
+   [`tests/Functional/BeispielErweiterungspunktePluginTest.php`](tests/Functional/BeispielErweiterungspunktePluginTest.php).
+   Welcher Hook wofür da ist und was die Falle daran ist, steht kommentiert in
+   [`plugins/beispiel-erweiterungspunkte/Plugin.php`](plugins/beispiel-erweiterungspunkte/Plugin.php).
 4. Bei jeder späteren inhaltlichen Änderung am Addon-Code die `version` in
    dessen `plugin.json` erhöhen - der Kern erkennt Änderungen an aktivierten
    Plugins über einen Inhalts-Hash und sperrt sie fail-closed, bis ein Admin
