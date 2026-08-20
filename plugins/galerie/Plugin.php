@@ -116,7 +116,7 @@ class Plugin {
                 if ($row['type'] === 'image' && !empty($row['file_path'])) {
                     // Bewusst ohne Lightbox: Sie hängt an JS/CSS der
                     // öffentlichen Detailseite und wäre hier funktionslos.
-                    $html .= '<img src="' . $esc($row['file_path']) . '" alt="" loading="lazy" decoding="async"'
+                    $html .= '<img src="' . $esc(self::bildUrl((int) $row['id'])) . '" alt="" loading="lazy" decoding="async"'
                         . ' style="width:64px;height:64px;object-fit:cover;border-radius:var(--border-radius, 4px);border:1px solid var(--border-color);">';
                 } else {
                     $html .= '<span style="font-size:1.5rem;" aria-hidden="true">🎬</span>';
@@ -173,6 +173,30 @@ class Plugin {
      * Aktivierung und nach einem Addon-Update genau einmal auf - das
      * DDL-Statement läuft damit nicht mehr in jedem Request.
      */
+    /**
+     * Ablageverzeichnis für hochgeladene Bilder: bewusst AUSSERHALB des
+     * Webroots (public/), damit die Dateien nie direkt per URL abrufbar sind,
+     * sondern ausschließlich über die zugriffsgeschützte Route `/bild`.
+     *
+     * Vorher lagen sie unter public/uploads/plugin_galerie/ und der rohe Pfad
+     * stand im <img src>. Damit war der Dateiname öffentlich bekannt, und die
+     * Datei blieb nach einer Depublikation des Pferdes weiter abrufbar - die
+     * Depublikation war für Galeriebilder also wirkungslos. Dasselbe Muster
+     * wie beim Addon `gesundheitstests`, das seine Dokumente schon immer so
+     * ablegt.
+     */
+    public static function storageDir(): string {
+        return dirname(__DIR__, 2) . '/storage/plugin_galerie';
+    }
+
+    /**
+     * Adresse eines Mediums für die Ausgabe im HTML. Die Datei-ID genügt: Der
+     * Dateiname erscheint nirgends mehr in einer öffentlichen Antwort.
+     */
+    public static function bildUrl(int $mediaId): string {
+        return '/plugin/galerie/bild?id=' . $mediaId;
+    }
+
     public function install(): void {
         Database::getInstance()->exec(
             'CREATE TABLE IF NOT EXISTS `plugin_galerie_media` (
@@ -187,6 +211,81 @@ class Plugin {
                 FOREIGN KEY (`horse_id`) REFERENCES `horses`(`id`) ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
         );
+
+        $this->migriereBestandsdateien();
+    }
+
+    /**
+     * Holt Bestandsbilder aus dem Webroot in die geschützte Ablage.
+     *
+     * `install()` läuft bei der Aktivierung UND nach jedem Addon-Update, ist
+     * also die richtige Stelle - aber genau deshalb muss der Schritt beliebig
+     * oft wiederholbar sein, ohne Schaden anzurichten:
+     *
+     * - Eine Datei, die im alten Verzeichnis nicht (mehr) liegt, wird
+     *   übersprungen; beim zweiten Lauf ist das der Normalfall.
+     * - Liegt die Datei am Ziel bereits, wird die Quelle nur noch entfernt.
+     *   Die Zieldatei wird nie überschrieben - der Dateiname trägt einen
+     *   Zufallsanteil, eine Namensgleichheit bei verschiedenem Inhalt ist
+     *   damit praktisch ausgeschlossen, und im Zweifel gilt das Ziel.
+     * - Erst wenn die Datei nachweislich am Ziel liegt, wird `file_path` in
+     *   der Datenbank auf den bloßen Dateinamen umgestellt. Bricht der Lauf
+     *   dazwischen ab, findet ihn der nächste im selben Zustand wieder.
+     *
+     * Der Wert in `file_path` unterscheidet die beiden Zustände von selbst:
+     * alt = '/uploads/plugin_galerie/<datei>', neu = '<datei>'.
+     */
+    private function migriereBestandsdateien(): void {
+        $db = Database::getInstance();
+        $alteAblage = dirname(__DIR__, 2) . '/public/uploads/plugin_galerie';
+        $zielAblage = self::storageDir();
+
+        $rows = $db->query(
+            "SELECT id, file_path FROM `plugin_galerie_media`
+             WHERE type = 'image' AND file_path LIKE '/uploads/plugin_galerie/%'"
+        )->fetchAll(PDO::FETCH_ASSOC);
+
+        if (!$rows) {
+            return;
+        }
+
+        if (!is_dir($zielAblage) && !mkdir($zielAblage, 0750, true) && !is_dir($zielAblage)) {
+            error_log('galerie: Ablage ' . $zielAblage . ' liess sich nicht anlegen - Bestandsbilder bleiben liegen.');
+            return;
+        }
+
+        $update = $db->prepare('UPDATE `plugin_galerie_media` SET file_path = :pfad WHERE id = :id');
+
+        foreach ($rows as $row) {
+            $name = basename((string) $row['file_path']);
+            if ($name === '' || $name === '.' || $name === '..') {
+                continue;
+            }
+
+            $quelle = $alteAblage . '/' . $name;
+            $ziel = $zielAblage . '/' . $name;
+
+            if (is_file($ziel)) {
+                // Schon umgezogen (abgebrochener Vorlauf): nur die Quelle weg.
+                if (is_file($quelle)) {
+                    @unlink($quelle);
+                }
+            } elseif (is_file($quelle)) {
+                if (!@rename($quelle, $ziel)) {
+                    error_log('galerie: ' . $quelle . ' liess sich nicht nach ' . $ziel . ' verschieben.');
+                    continue;
+                }
+                @chmod($ziel, 0640);
+            } else {
+                // Datei fehlt in beiden Ablagen - der Datensatz zeigt ins
+                // Leere. Der Pfad wird trotzdem umgestellt, damit dieser
+                // Datensatz nicht bei jedem Update erneut geprüft wird; die
+                // Ausgabe behandelt fehlende Dateien ohnehin als "kein Bild".
+                error_log('galerie: Datei ' . $name . ' zu Medium ' . (int) $row['id'] . ' fehlt in beiden Ablagen.');
+            }
+
+            $update->execute(['pfad' => $name, 'id' => (int) $row['id']]);
+        }
     }
     /**
      * Erlaubte Video-Hosts: nur bekannte Plattformen, ausschließlich https.
@@ -246,7 +345,7 @@ class Plugin {
      */
     public function addDetailSection(array $sections, array $horse, array $horsePersons, ?array $pedigree): array {
         $stmt = Database::getInstance()->prepare(
-            'SELECT type, file_path, video_url, caption
+            'SELECT id, type, file_path, video_url, caption
              FROM `plugin_galerie_media`
              WHERE horse_id = :id
              ORDER BY sort_order ASC, id ASC'
@@ -265,7 +364,7 @@ class Plugin {
         foreach ($media as $item) {
             $caption = htmlspecialchars((string) ($item['caption'] ?? ''), ENT_QUOTES, 'UTF-8');
             if ($item['type'] === 'image' && !empty($item['file_path'])) {
-                $src = htmlspecialchars((string) $item['file_path'], ENT_QUOTES, 'UTF-8');
+                $src = htmlspecialchars(self::bildUrl((int) $item['id']), ENT_QUOTES, 'UTF-8');
                 $html .= '<figure style="margin:0;">'
                     . '<img src="' . $src . '" alt="' . $caption . '" loading="lazy" '
                     . 'style="width:100%;height:120px;object-fit:cover;border-radius:var(--border-radius, 6px);cursor:zoom-in;" '
@@ -349,6 +448,11 @@ class Plugin {
             ['method' => 'GET', 'path' => '/suche', 'callback' => [VerwaltungController::class, 'suche']],
             ['method' => 'POST', 'path' => '/verwaltung/store', 'callback' => [VerwaltungController::class, 'store']],
             ['method' => 'POST', 'path' => '/verwaltung/delete', 'callback' => [VerwaltungController::class, 'delete']],
+            // Zugriffsgeschützte Bildauslieferung. Die Bilder liegen außerhalb
+            // des Webroots und sind ausschließlich hierüber erreichbar -
+            // dieselben Sichtbarkeitsregeln wie beim Kernfoto über
+            // /media/horse-image.
+            ['method' => 'GET', 'path' => '/bild', 'callback' => [BildController::class, 'serve']],
         ];
     }
 }
@@ -517,7 +621,7 @@ class VerwaltungController extends BaseController {
             $content .= '<td>' . ($row['type'] === 'image' ? 'Foto' : 'Video') . '</td>';
             $content .= '<td>';
             if ($row['type'] === 'image' && !empty($row['file_path'])) {
-                $content .= '<img class="galerie-thumb" src="' . htmlspecialchars((string) $row['file_path'], ENT_QUOTES, 'UTF-8') . '" alt="">';
+                $content .= '<img class="galerie-thumb" src="' . htmlspecialchars(Plugin::bildUrl((int) $row['id']), ENT_QUOTES, 'UTF-8') . '" alt="">';
             } elseif (!empty($row['video_url'])) {
                 $url = htmlspecialchars((string) $row['video_url'], ENT_QUOTES, 'UTF-8');
                 $content .= '<a href="' . $url . '" target="_blank" rel="noopener noreferrer">' . $url . '</a>';
@@ -639,10 +743,12 @@ class VerwaltungController extends BaseController {
 
             if ($row) {
                 if ($row['type'] === 'image' && !empty($row['file_path'])) {
-                    // file_path ist ein selbst generierter Pfad unter
-                    // /uploads/plugin_galerie/ (siehe handleImageUpload) -
-                    // basename() verhindert zusätzlich jedes Traversal.
-                    $path = dirname(__DIR__, 2) . '/public/uploads/plugin_galerie/' . basename((string) $row['file_path']);
+                    // file_path ist ein selbst generierter Dateiname (siehe
+                    // handleImageUpload) - basename() verhindert zusätzlich
+                    // jedes Traversal. Bestandsdatensätze, die noch den alten
+                    // öffentlichen Pfad tragen, reduziert basename() auf
+                    // denselben Namen.
+                    $path = Plugin::storageDir() . '/' . basename((string) $row['file_path']);
                     if (is_file($path)) {
                         @unlink($path);
                     }
@@ -762,8 +868,12 @@ class VerwaltungController extends BaseController {
     /**
      * Gleiches Upload-/Validierungsmuster wie HorseController::
      * handleImageUpload() im Kern (echte MIME-Prüfung per finfo, max. 5 MB,
-     * Zufallsname), nur mit eigenem Zielverzeichnis unter
-     * public/uploads/plugin_galerie/.
+     * Zufallsname), nur mit eigenem Zielverzeichnis - und dieses liegt
+     * AUSSERHALB des Webroots (Plugin::storageDir()).
+     *
+     * Gespeichert wird deshalb nur noch der bloße Dateiname, nicht mehr ein
+     * öffentlicher Pfad: Die Adresse entsteht erst bei der Ausgabe aus der
+     * Medien-ID (Plugin::bildUrl()), der Dateiname erscheint nirgends.
      */
     private function handleImageUpload(?array $file): ?string {
         if (!$file || ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK || ($file['size'] ?? 0) === 0) {
@@ -782,16 +892,153 @@ class VerwaltungController extends BaseController {
             return null;
         }
 
-        $uploadDir = dirname(__DIR__, 2) . '/public/uploads/plugin_galerie/';
-        if (!is_dir($uploadDir)) {
-            mkdir($uploadDir, 0755, true);
-        }
-
-        $filename = 'galerie_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $allowedMimeTypes[$mime];
-        if (!move_uploaded_file($file['tmp_name'], $uploadDir . $filename)) {
+        $uploadDir = Plugin::storageDir();
+        if (!is_dir($uploadDir) && !mkdir($uploadDir, 0750, true) && !is_dir($uploadDir)) {
             return null;
         }
 
-        return '/uploads/plugin_galerie/' . $filename;
+        $filename = 'galerie_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $allowedMimeTypes[$mime];
+        if (!move_uploaded_file($file['tmp_name'], $uploadDir . '/' . $filename)) {
+            return null;
+        }
+        @chmod($uploadDir . '/' . $filename, 0640);
+
+        return $filename;
+    }
+}
+
+/**
+ * Zugriffsgeschützte Auslieferung der Galeriebilder.
+ *
+ * Vorher lagen die Bilder unter public/uploads/plugin_galerie/ und der rohe
+ * Pfad stand im `<img src>`. Damit gab es für sie überhaupt keine Prüfung: Der
+ * Webserver lieferte die Datei aus, der Dateiname war öffentlich bekannt, und
+ * nach einer Depublikation des Pferdes - etwa nach einem Widerspruch nach
+ * Art. 21 DSGVO - blieb das Foto unter der bekannten Adresse abrufbar.
+ *
+ * Die Regeln hier sind bewusst dieselben wie im Kern für das Hauptfoto
+ * (App\Controllers\MediaController::horseImage()); eine eigene, schlankere
+ * Fassung wäre eine zweite Fassung derselben Regel:
+ *
+ * - Eine Sitzung zählt nur, wenn sie checkAuth() besteht - nicht, wenn
+ *   irgendwann einmal jemand angemeldet war. Sonst gölte hier keine der
+ *   Prüfungen des übrigen Backends (gelöschtes Konto, session_version nach
+ *   einem Passwortwechsel, User-Agent, Inaktivität).
+ * - `horses.view` ist Pflicht, für Gäste wie für Angemeldete.
+ * - Ein unveröffentlichtes Pferd ist für Gäste nicht vorhanden - sein Foto
+ *   also auch nicht.
+ *
+ * Unbekannte, gelöschte und nicht zugängliche IDs liefern eine identische 404,
+ * damit die Route kein Existenz-Orakel wird.
+ */
+class BildController extends BaseController {
+
+    /** Positivliste statt finfo-Raten - dieselbe wie beim Upload. */
+    private const TYPES = [
+        'jpg' => 'image/jpeg',
+        'jpeg' => 'image/jpeg',
+        'png' => 'image/png',
+        'webp' => 'image/webp',
+    ];
+
+    public function serve(): void {
+        $id = isset($_GET['id']) ? (int) $_GET['id'] : 0;
+        if ($id <= 0) {
+            $this->renderNotFound('Bild nicht gefunden.');
+        }
+
+        // Datenbankfehler enden als 404, nicht als 500: "kein Bild" ist die
+        // richtige Antwort auf eine Bildanfrage. Protokolliert wird trotzdem.
+        try {
+            $stmt = Database::getInstance()->prepare(
+                "SELECT m.file_path, h.is_published
+                 FROM `plugin_galerie_media` m
+                 JOIN horses h ON h.id = m.horse_id AND h.deleted_at IS NULL
+                 WHERE m.id = ? AND m.type = 'image'"
+            );
+            $stmt->execute([$id]);
+            $medium = $stmt->fetch(PDO::FETCH_ASSOC);
+        } catch (\Throwable $e) {
+            error_log('galerie: Bildabfrage fehlgeschlagen: ' . $e->getMessage());
+            $this->renderNotFound('Bild nicht gefunden.');
+            return;
+        }
+
+        if (!$medium || empty($medium['file_path'])) {
+            $this->renderNotFound('Bild nicht gefunden.');
+        }
+
+        $angemeldet = false;
+        if (!empty($_SESSION['user_id'])) {
+            $this->checkAuth();
+            $angemeldet = true;
+        }
+
+        if (!$this->hasPermission('horses', 'view')) {
+            $this->renderNotFound('Bild nicht gefunden.');
+        }
+        if (empty($medium['is_published']) && !$angemeldet) {
+            $this->renderNotFound('Bild nicht gefunden.');
+        }
+
+        $pfad = $this->dateiPfad((string) $medium['file_path']);
+        if ($pfad === null) {
+            $this->renderNotFound('Bild nicht gefunden.');
+        }
+
+        $endung = strtolower(pathinfo($pfad, PATHINFO_EXTENSION));
+
+        header('Content-Type: ' . self::TYPES[$endung]);
+        header('Content-Length: ' . (string) filesize($pfad));
+        header('X-Content-Type-Options: nosniff');
+        // Wie im Kern: hält fremde Seiten davon ab, die Bilder einzubetten.
+        header('Cross-Origin-Resource-Policy: same-origin');
+        // Ein zugriffsabhängiges Bild darf nie in einem gemeinsamen
+        // Zwischenspeicher landen (Framework#315): Sonst liegt das Foto eines
+        // unveröffentlichten Pferdes dort und geht von da an jeden Gast.
+        if (empty($medium['is_published'])) {
+            header('Cache-Control: private, no-store');
+        } else {
+            header('Cache-Control: public, max-age=31536000, immutable');
+        }
+        readfile($pfad);
+        exit;
+    }
+
+    /**
+     * Bildet den gespeicherten Wert auf eine Datei in der geschützten Ablage
+     * ab. Gibt null zurück, sobald irgendetwas nicht passt - insbesondere,
+     * wenn der aufgelöste Pfad das Verzeichnis verlässt.
+     *
+     * `basename()` deckt zugleich die Bestandsdatensätze ab, die noch den
+     * alten öffentlichen Pfad tragen, falls die Migration in install() eine
+     * Zeile nicht umstellen konnte.
+     */
+    private function dateiPfad(string $gespeichert): ?string {
+        $basis = realpath(Plugin::storageDir());
+        if ($basis === false) {
+            return null;
+        }
+
+        $name = basename($gespeichert);
+        if ($name === '' || $name === '.' || $name === '..') {
+            return null;
+        }
+
+        if (!isset(self::TYPES[strtolower(pathinfo($name, PATHINFO_EXTENSION))])) {
+            return null;
+        }
+
+        // realpath löst Symlinks auf: Ein Link in der Ablage dürfte sonst auf
+        // jede Datei des Systems zeigen.
+        $voll = realpath($basis . '/' . $name);
+        if ($voll === false || !is_file($voll)) {
+            return null;
+        }
+        if (!str_starts_with($voll, $basis . DIRECTORY_SEPARATOR)) {
+            return null;
+        }
+
+        return $voll;
     }
 }

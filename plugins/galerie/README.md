@@ -21,8 +21,15 @@ der gewünschten Gruppe unter `/admin/groups` die Berechtigung
 
 - **Fotos** werden mit demselben Validierungsmuster wie das bestehende
   `image_url`-Feld hochgeladen (echte MIME-Prüfung per `finfo`,
-  JPEG/PNG/WebP, max. 5 MB, Zufallsname) und unter
-  `public/uploads/plugin_galerie/` gespeichert.
+  JPEG/PNG/WebP, max. 5 MB, Zufallsname) und unter `storage/plugin_galerie/`
+  gespeichert - **außerhalb des Webroots**. Ausgeliefert werden sie
+  ausschließlich über die zugriffsgeschützte Route
+  `/plugin/galerie/bild?id=<medium>`, die je Anfrage Sitzung, `horses.view`
+  und `is_published` prüft. Der Dateiname erscheint damit nirgends in einer
+  öffentlichen Seite. Vorher lagen die Dateien im Webroot und der rohe Pfad
+  stand im `<img src>`; nach einer Depublikation des Pferdes blieb das Foto
+  darüber weiter abrufbar (GHSA-xrrq-9j94-fr5g). Bestandsdateien zieht
+  `install()` beim Update selbsttätig um.
 - **Videos** werden bewusst nur als externer Link erfasst (nur `https://`
   auf YouTube/Vimeo-Hosts) statt selbst gehostet - eigenes
   Video-Hosting/Transcoding wäre ein erheblicher Mehraufwand und passt
@@ -60,6 +67,6 @@ der gewünschten Gruppe unter `/admin/groups` die Berechtigung
   läuft.
 - Tabelle: `plugin_galerie_media`. Beim endgültigen Löschen eines Pferdes
   entfernt `ON DELETE CASCADE` nur die Datenbank-Zeilen - die hochgeladenen
-  Dateien unter `public/uploads/plugin_galerie/` bleiben dann als Waisen
+  Dateien unter `storage/plugin_galerie/` bleiben dann als Waisen
   liegen (nur das Löschen über die Verwaltungsseite entfernt auch die
   Datei). Betreiber sollten das Verzeichnis gelegentlich abgleichen.
