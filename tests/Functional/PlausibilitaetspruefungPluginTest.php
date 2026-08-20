@@ -293,9 +293,96 @@ class PlausibilitaetspruefungPluginTest extends FunctionalTestCase {
         ])->statusCode);
     }
 
+    /**
+     * Lesen berechtigt NICHT zum Abhaken (#143).
+     *
+     * Das Addon bringt zwei getrennte Rechte mit: `bericht` oeffnet die Liste,
+     * `abhaken` hebt eine Veroeffentlichungssperre auf - ein als Blocker
+     * eingestufter Fund verhindert sonst, dass ein Pferd oeffentlich wird.
+     * Geprueft wurde bisher nur ein Benutzer, der BEIDE nicht hat; die
+     * Trennlinie dazwischen hielt keine Zusicherung. Faellt die zweite
+     * Pruefung bei einem Umbau weg - naheliegend, weil der Konstruktor schon
+     * requirePermission aufruft und sie wie eine Dopplung aussieht -, duerfte
+     * jeder Leser Blocker abraeumen.
+     *
+     * Die Ansicht blendet den Knopf zwar aus, aber ein direkter POST kommt
+     * ohne Knopf aus.
+     */
+    public function testLesenBerechtigtNichtZumAbhaken(): void {
+        $admin = $this->authenticatedClient();
+        $admin->post('/admin/plugins/toggle', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'slug' => self::SLUG,
+            'enable' => '1',
+        ]);
+
+        $unique = uniqid();
+        $gruppe = $this->createCustomGroup($admin, "Nur Bericht {$unique}");
+        $this->setGroupPermissions($admin, $gruppe, self::EDITOR_DEFAULT_PERMISSIONS + [
+            // Bewusst OHNE 'abhaken' - das ist der ganze Punkt.
+            self::SLUG => ['bericht'],
+        ]);
+        $leser = $this->createAndLoginEditor(
+            $admin,
+            "plausleser{$unique}",
+            "plausleser-{$unique}@example.com",
+            [$gruppe]
+        );
+
+        // Der Bericht ist erreichbar - sonst prueft der POST unten die falsche
+        // Huerde.
+        $bericht = $leser->get(self::BERICHT);
+        $this->assertSame(200, $bericht->statusCode, 'Mit dem Recht bericht muss die Liste offenstehen');
+
+        // Das Token MUSS von einer Seite kommen, die dieser Benutzer sehen
+        // darf. currentCsrfToken() der Basisklasse holt es von
+        // /admin/users/create - dort bekaeme ein Redakteur 403 und damit ein
+        // LEERES Token; der POST scheiterte dann am CSRF-Check, und der Test
+        // waere gruen, ohne die Rechtepruefung je erreicht zu haben.
+        $tokenSeite = $leser->get('/admin/contacts/create');
+        $this->assertSame(200, $tokenSeite->statusCode, 'Die Token-Quelle muss fuer diesen Benutzer erreichbar sein');
+        $token = $tokenSeite->formField('csrf_token') ?? '';
+        $this->assertNotSame('', $token, 'Ohne gueltiges Token prueft der POST nur den CSRF-Zweig');
+
+        $vorher = $this->ausnahmenAnzahl();
+
+        foreach ([self::ABHAKEN, self::ZURUECKNEHMEN] as $route) {
+            $antwort = $leser->post($route, [
+                'csrf_token' => $token,
+                'horse_id' => '1',
+                'regel' => 'eltern-juenger',
+                'begruendung' => 'darf nicht ankommen',
+            ]);
+            $this->assertSame(403, $antwort->statusCode, "Erwartet wurde 403 fuer {$route}, Body: {$antwort->body}");
+        }
+
+        $this->assertSame($vorher, $this->ausnahmenAnzahl(), 'Ein abgelehnter Aufruf darf nichts geschrieben haben');
+    }
+
     // ----------------------------------------------------------------------
     // Helfer
     // ----------------------------------------------------------------------
+
+    private function ausnahmenAnzahl(): int {
+        try {
+            return (int) $this->db()->query(
+                'SELECT COUNT(*) FROM `plugin_plausibilitaetspruefung_ausnahmen`'
+            )->fetchColumn();
+        } catch (\Throwable $e) {
+            return 0;   // Tabelle noch nicht angelegt - dann gibt es auch nichts.
+        }
+    }
+
+    private function createCustomGroup(\Tests\Support\HttpClient $admin, string $name): int {
+        $groupsPage = $admin->get('/admin/groups');
+        $response = $admin->post('/admin/groups/create', [
+            'csrf_token' => $groupsPage->formField('csrf_token') ?? '',
+            'name' => $name,
+        ]);
+        preg_match('/group=(\d+)/', (string) $response->location(), $matches);
+        $this->assertNotEmpty($matches, "Konnte neue Gruppen-ID nicht ermitteln, Body: {$response->body}");
+        return (int) $matches[1];
+    }
 
     private function db(): PDO {
         return Database::getInstance();

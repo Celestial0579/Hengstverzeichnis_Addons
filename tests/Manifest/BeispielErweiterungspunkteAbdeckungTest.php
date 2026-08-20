@@ -87,15 +87,18 @@ class BeispielErweiterungspunkteAbdeckungTest extends TestCase {
      * hier verschwindet. Anders bliebe die Liste stehen und deckte irgendwann
      * eine echte Luecke zu.
      *
-     * Stand 2026-08-20 (Kern 0.8.0-beta.1): vier Hooks aus #335, #346 und
-     * #356 haben es nicht in die Tabelle geschafft.
+     * Stand 2026-08-21 (Kern 0.8.0): LEER. Die vier Hooks aus #335, #346 und
+     * #356 (home.sections_top, home.sections_bottom, horse.publish_blockers,
+     * horse.search_ids) stehen inzwischen in der Hook-Tabelle des Kerns - der
+     * Eintrag ist deshalb hier entfallen, genau wie der Kommentar oben es
+     * vorschreibt.
+     *
+     * Dass es auffiel, hat einen Nebenaspekt, der hier festgehalten gehoert:
+     * Gegen den in composer.lock festgenagelten Kern war der Test gruen, gegen
+     * den AKTUELLEN Kern rot. Wer diese Liste pflegt, prueft sie gegen den
+     * Kern-Stand, gegen den das Addon-Release tatsaechlich ausgeliefert wird.
      */
-    private const DOKU_LUECKEN = [
-        'home.sections_bottom',
-        'home.sections_top',
-        'horse.publish_blockers',
-        'horse.search_ids',
-    ];
+    private const DOKU_LUECKEN = [];
 
     /**
      * Die Plugin-Klasse steht nicht im Composer-Autoloader (Addons liegen

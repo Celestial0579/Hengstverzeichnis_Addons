@@ -263,4 +263,85 @@ class BildauslieferungTest extends FunctionalTestCase {
         $unbekannt = $gast->get('/plugin/galerie/bild?id=999999');
         $this->assertSame(404, $unbekannt->statusCode);
     }
+
+    /**
+     * Bedingte Anfragen an die Galerie-Route (#142).
+     *
+     * Die Route uebernahm die Sicherheitsregeln des Kerns wortgetreu, aber
+     * keine seiner Entlastungen: kein ETag, kein Last-Modified, keine
+     * 304-Behandlung. Eine Verwaltungsseite mit 50 Vorschaubildern holte
+     * deshalb bei jedem Neuladen 50 Bilder vollstaendig - und fuer
+     * unveroeffentlichte Pferde gilt `no-store`, dort half auch die
+     * Jahresfrist nicht.
+     */
+    public function testGalerieRouteBeantwortetBedingteAnfragenMit304(): void {
+        $admin = $this->authenticatedClient();
+        $this->aktiviere($admin, 'galerie');
+        $unique = uniqid();
+
+        $pferdId = $this->createHorse($admin, "GalerieETag-{$unique}", ['status' => 'active']);
+        $mediumId = $this->legeGalerieBildAn($pferdId, "etag_{$unique}");
+
+        $gast = $this->newClient();
+        $erste = $gast->get('/plugin/galerie/bild?id=' . $mediumId);
+
+        $this->assertSame(200, $erste->statusCode);
+        $etag = (string) $erste->header('ETag');
+        $this->assertNotSame('', $etag, 'Ohne ETag kann der Browser gar nicht bedingt nachfragen.');
+        $this->assertNotSame('', (string) $erste->header('Last-Modified'));
+
+        $zweite = $gast->get('/plugin/galerie/bild?id=' . $mediumId, ['If-None-Match' => $etag]);
+        $this->assertSame(304, $zweite->statusCode, 'Ein unveraendertes Bild muss mit 304 beantwortet werden.');
+        $this->assertSame('', trim($zweite->body), 'Eine 304 darf keinen Rumpf haben.');
+
+        // Und der Fall, der am meisten davon hat: ein unveroeffentlichtes
+        // Pferd. Dort gilt `no-store`, der Browser darf also nichts ablegen -
+        // er fragt aber trotzdem bedingt nach, und 304 spart die Uebertragung.
+        $verborgenId = $this->createHorse($admin, "GalerieETagVerborgen-{$unique}", ['is_published' => '0']);
+        $verborgenesMedium = $this->legeGalerieBildAn($verborgenId, "etagverb_{$unique}");
+
+        $adminAntwort = $admin->get('/plugin/galerie/bild?id=' . $verborgenesMedium);
+        $this->assertSame(200, $adminAntwort->statusCode);
+        $this->assertStringContainsString('no-store', (string) $adminAntwort->header('Cache-Control'));
+
+        $adminZweite = $admin->get(
+            '/plugin/galerie/bild?id=' . $verborgenesMedium,
+            ['If-None-Match' => (string) $adminAntwort->header('ETag')]
+        );
+        $this->assertSame(304, $adminZweite->statusCode);
+    }
+
+    /**
+     * Die Sitzungssperre wird freigegeben, bevor die Datei gelesen wird (#142).
+     *
+     * WARUM DAS HIER AM QUELLTEXT UND NICHT UEBER HTTP GEPRUEFT WIRD: Die
+     * Wirkung - 50 Vorschaubilder laufen parallel statt hintereinander - ist
+     * in dieser Testumgebung grundsaetzlich nicht messbar. Die Functional-Suite
+     * faehrt den PHP-eigenen Entwicklungsserver, und der bearbeitet ohnehin
+     * nur EINE Anfrage zur Zeit; er serialisiert also unabhaengig davon, ob
+     * PHP die Sitzungsdatei sperrt. Eine Zeitmessung waere hier kein Nachweis,
+     * sondern eine Zufallszahl.
+     *
+     * Geprueft wird deshalb die Zusicherung selbst: dass der Aufruf da ist und
+     * VOR der Auslieferung steht. Dasselbe Muster wie beim Signatur-Waechter
+     * des Kerns (HorseSearchSqlSafetyTest) - eine Regel, die sich nur am Code
+     * festhalten laesst, wird am Code festgehalten.
+     */
+    public function testGalerieGibtDieSitzungssperreVorDemAusliefernFrei(): void {
+        $quelle = (string) file_get_contents(__DIR__ . '/../../plugins/galerie/Plugin.php');
+
+        $anfang = strpos($quelle, 'public function serve(): void {');
+        $this->assertNotFalse($anfang, 'BildController::serve() nicht gefunden - wurde umbenannt?');
+
+        $freigabe = strpos($quelle, 'session_write_close();', $anfang);
+        $ausliefern = strpos($quelle, 'readfile($pfad);', $anfang);
+
+        $this->assertNotFalse($freigabe, 'serve() muss session_write_close() aufrufen - sonst laufen die Bildanfragen seriell.');
+        $this->assertNotFalse($ausliefern, 'readfile() nicht gefunden.');
+        $this->assertLessThan(
+            $ausliefern,
+            $freigabe,
+            'session_write_close() muss VOR dem Ausliefern stehen, sonst bleibt die Sperre waehrend der Uebertragung bestehen.'
+        );
+    }
 }
