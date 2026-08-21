@@ -3,7 +3,7 @@
     "name": "Embed-Widget (Katalog auf fremden Seiten)",
     "version": "1.1.0",
     "core_compatibility": ">=0.5.1",
-    "core_supported_max": "0.8",
+    "core_supported_max": "0.9",
     "description": "Erzeugt im Admin-Bereich einen fertigen iframe-Schnipsel, mit dem sich der öffentliche Pferdekatalog - optional vorgefiltert - auf einer fremden Website einbetten lässt. Prüft dabei, ob die Domain-Allowlist des Kerns überhaupt eine Einbettung erlaubt.",
     "author": "Hengstverzeichnis_Addons",
     "hooks": [

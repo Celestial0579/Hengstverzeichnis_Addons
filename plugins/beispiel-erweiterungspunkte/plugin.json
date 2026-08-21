@@ -3,7 +3,7 @@
     "name": "Beispiel: Erweiterungspunkte",
     "version": "1.0.0",
     "core_compatibility": ">=0.8.0-beta.1",
-    "core_supported_max": "0.8",
+    "core_supported_max": "0.9",
     "description": "LEHRBEISPIEL, NICHT FUER DEN PRODUKTIVBETRIEB. Belegt jeden Erweiterungspunkt des Kerns mit einem sichtbaren Ergebnis: alle 22 Hooks, eigene Routen (GET und POST), Berechtigungen, Zusatzfunktion, eigene Tabellen mit install()/uninstall(), Spam-Schutz-Anbieter samt eigenem Formular-Kontext, Protokollierung und Uebersetzungen.",
     "author": "Hengstverzeichnis_Addons",
     "hooks": [

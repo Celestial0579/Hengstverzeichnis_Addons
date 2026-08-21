@@ -6,6 +6,35 @@ sich an [Keep a Changelog](https://keepachangelog.com/de/1.1.0/); die
 Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 (siehe [docs/releasing.md](docs/releasing.md)).
 
+## [0.9.0-beta.1] – 2026-08-21
+
+Anschluss an **Framework v0.9.0-beta.1**. Alle 26 Addons stehen auf
+`core_supported_max: "0.9"`.
+
+### Dieser Release ist Pflicht
+
+Ein Addon mit `core_supported_max: "0.8"` ist auf einem Kern der Linie 0.9
+**fail-closed unsichtbar** — das ist die Kompatibilitätsmechanik und kein
+Fehler. Wer den Kern auf 0.9.0-beta.1 hebt, ohne die Addons nachzuziehen, sieht
+aktivierte Addons, deren Funktionen verschwunden sind.
+
+### Inhaltlich
+
+Keine funktionalen Änderungen an den Addons. Der Kern-Block dieser Beta (#340
+API-Schlüssel-Ablauf, #357 Profilseite, #358 Sperre statt Löschung) berührt
+kein Addon-Verhalten; die Suiten laufen unverändert gegen den neuen Kern
+(Manifest 372, Unit 199, Functional 61).
+
+**Für Betreiber mit eigenen Addon-Anbindungen an die JSON-API:** Die
+Bestandsschlüssel laufen mit dem Kern-Update ab (Framework #340). Das trifft
+auch Skripte, die über einen API-Schlüssel auf Addon-Daten zugreifen.
+
+### Noch offen im Meilenstein
+
+#131 (Mitglieder als Benutzer anlegen) setzt Framework #348 und #354 voraus,
+#116 (galerie-Verwaltungsseite entfernen) setzt Framework #339 voraus. #129
+(responsives Verhalten) folgt mit dem Kern-Gegenstück #345.
+
 ## [0.8.0] – 2026-08-21
 
 Die stabile Fassung der 0.8er-Linie. Inhaltlich ist sie `0.8.0-beta.2` plus

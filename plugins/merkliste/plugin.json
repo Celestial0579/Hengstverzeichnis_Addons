@@ -3,7 +3,7 @@
     "name": "Merkliste für anonyme Besucher",
     "version": "1.2.0",
     "core_compatibility": ">=0.4.0",
-    "core_supported_max": "0.8",
+    "core_supported_max": "0.9",
     "description": "Rein clientseitige Merkliste ohne Account: \"Merken\"-Button auf Detailseite und Katalogkarten speichert Pferde-IDs im localStorage des Browsers, eine eigene Merklisten-Seite löst sie über eine schreibgeschützte JSON-API zu Name/Bild/Link auf.",
     "author": "Hengstverzeichnis_Addons",
     "hooks": [

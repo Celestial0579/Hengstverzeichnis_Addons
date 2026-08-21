@@ -3,7 +3,7 @@
     "name": "Mitgliedsstatus",
     "version": "1.0.0",
     "core_compatibility": ">=0.8.0-beta.1",
-    "core_supported_max": "0.8",
+    "core_supported_max": "0.9",
     "description": "Führt Mitglied/Nichtmitglied je Kontakt als eigenständiges Feld mit fester Werteliste - statt des Freitextfelds, das der Kern in v0.9.0 entfernt (Framework#349). Übernimmt die Bestandswerte bei der Installation, hält nicht abbildbare Wortlaute unverändert zur Nachbearbeitung fest und schaltet die öffentliche Anzeige je Kontakt frei (Vorgabe: nicht öffentlich). Enthält ausserdem die Verlinkung eines Kontakts in eine CiviCRM-Instanz - nur Kennung und Link, ausdrücklich kein Datenabgleich.",
     "author": "Hengstverzeichnis_Addons",
     "hooks": [
