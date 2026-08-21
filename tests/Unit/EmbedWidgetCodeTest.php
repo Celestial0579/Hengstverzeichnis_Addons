@@ -111,6 +111,25 @@ class EmbedWidgetCodeTest extends TestCase {
             substr_count($schnipsel, '<iframe'),
             'Genau ein iframe - kein aus dem Attribut ausgebrochenes Markup.'
         );
+
+        // UND der Fall, den die Zeilen oben NICHT abdecken: eine rohe
+        // Adresse, die nicht durch url() gelaufen ist.
+        //
+        // url() baut mit http_build_query() und prozentkodiert `"`, `<` und
+        // `>` bereits vollstaendig - der an snippet() uebergebene Wert enthielt
+        // also gar kein gefaehrliches Zeichen mehr. Die Maskierung IN
+        // snippet() liess sich damit ersatzlos streichen, ohne dass dieser
+        // Test rot wurde. snippet() ist aber public und nimmt eine beliebige
+        // Zeichenkette entgegen; genau dafuer ist die Maskierung da.
+        $roh = EmbedCode::snippet('https://hengste.example/katalog?embed=1" onload="alert(1)', 100, 900, true);
+
+        $this->assertStringNotContainsString(
+            'onload="alert(1)"',
+            $roh,
+            'Ein roher Wert darf nicht als zweites Attribut aus dem src-Attribut ausbrechen.'
+        );
+        $this->assertStringContainsString('&quot;', $roh, 'Das Anfuehrungszeichen muss maskiert im Attribut stehen.');
+        $this->assertSame(1, substr_count($roh, '<iframe'));
         $this->assertSame(
             1,
             substr_count($schnipsel, '</iframe>'),

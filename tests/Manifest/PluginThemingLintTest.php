@@ -150,11 +150,47 @@ class PluginThemingLintTest extends TestCase {
      */
     #[DataProvider('pluginSlugProvider')]
     public function testExceptionMarkersCarryAReason(string $slug): void {
-        $violations = $this->findViolations(
-            $slug,
-            static fn(string $line): bool => str_contains($line, self::MARKER)
-                && !(bool)preg_match('/theming-ausnahme:\s*\S+/', $line)
-        );
+        // NICHT ueber findViolations(): Dessen Ausnahmeregel wuerde diese
+        // Pruefung aufheben. isExcepted() beginnt bei der Fundzeile SELBST -
+        // und die enthaelt hier bauartbedingt den Marker, weil der Matcher
+        // genau danach sucht. `$matcher($line) && !$this->isExcepted(...)`
+        // war damit fuer jede Eingabe false: Die Liste blieb garantiert leer,
+        // und assertSame([], ...) konnte unter keinen Umstaenden fehlschlagen.
+        // Nachgewiesen: Alle acht Marker der Addons auf die nackte Form
+        // gestrippt - der Test blieb gruen.
+        $violations = [];
+        $marker = 0;
+        foreach ($this->phpFilesOf($slug) as $file) {
+            $lines = explode("\n", (string)file_get_contents($file));
+            foreach ($lines as $index => $line) {
+                if (!str_contains($line, self::MARKER)) {
+                    continue;
+                }
+                $marker++;
+                if (!preg_match('/theming-ausnahme:\s*\S+/', $line)) {
+                    $violations[] = basename($file) . ':' . ($index + 1) . ': ' . trim($line);
+                }
+            }
+        }
+
         $this->assertSame([], $violations, "{$slug}: theming-ausnahme-Marker ohne Begründung");
+        self::$markerGezaehlt += $marker;
+    }
+
+    /**
+     * Ueber alle Slugs mitgezaehlte Marker. Ohne diese Klammer wuerde der
+     * Test wieder still inhaltsleer, sobald der Scanner nichts mehr findet -
+     * etwa weil sich die Schreibweise des Markers aendert.
+     */
+    private static int $markerGezaehlt = 0;
+
+    public static function tearDownAfterClass(): void {
+        self::assertGreaterThan(
+            0,
+            self::$markerGezaehlt,
+            'Es wurde kein einziger theming-ausnahme-Marker gefunden - dann prueft '
+            . 'testExceptionMarkersCarryAReason() nichts mehr. Schreibweise geaendert?'
+        );
+        self::$markerGezaehlt = 0;
     }
 }

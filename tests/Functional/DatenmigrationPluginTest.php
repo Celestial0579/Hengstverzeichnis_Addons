@@ -285,7 +285,11 @@ class DatenmigrationPluginTest extends FunctionalTestCase {
         ]);
 
         try {
-            $csrf = $this->currentCsrfToken($editor);
+            // editorCsrfToken(): /admin/users/create ist fuer diesen Benutzer
+            // gesperrt, das Token waere leer - und der POST scheiterte dann am
+            // CSRF-Check statt an der Adminpflicht, die hier geprueft werden
+            // soll (Framework#377).
+            $csrf = $this->editorCsrfToken($editor);
 
             $exportForm = $editor->get('/plugin/datenmigration/export');
             $this->assertSame(403, $exportForm->statusCode, 'Auswahlseite ohne Adminrechte muss abgewiesen werden');

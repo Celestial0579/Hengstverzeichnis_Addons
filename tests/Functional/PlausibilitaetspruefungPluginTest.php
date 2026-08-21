@@ -285,8 +285,14 @@ class PlausibilitaetspruefungPluginTest extends FunctionalTestCase {
         );
 
         $this->assertSame(403, $editor->get(self::BERICHT)->statusCode);
+        // editorCsrfToken() holt das Token vom Dashboard, das jeder
+        // angemeldeten Sitzung offensteht. currentCsrfToken() nutzt
+        // /admin/users/create - dort bekaeme dieser Benutzer 403, das Token
+        // waere leer, und der POST scheiterte am CSRF-Check STATT an der
+        // Rechtepruefung. Der Test waere gruen, ohne sie je erreicht zu haben
+        // (Framework#377).
         $this->assertSame(403, $editor->post(self::ABHAKEN, [
-            'csrf_token' => $this->currentCsrfToken($editor),
+            'csrf_token' => $this->editorCsrfToken($editor),
             'horse_id' => '1',
             'regel' => 'eltern-juenger',
             'begruendung' => 'Sollte gar nicht erst ankommen.',
@@ -363,14 +369,23 @@ class PlausibilitaetspruefungPluginTest extends FunctionalTestCase {
     // Helfer
     // ----------------------------------------------------------------------
 
+    /**
+     * Zahl der abgehakten Faelle.
+     *
+     * DER TABELLENNAME IST `plugin_plausibilitaet_ausnahmen`, nicht
+     * `plugin_plausibilitaetspruefung_ausnahmen`. Hier stand zuerst der lange
+     * Name samt try/catch, das den daraus folgenden SQL-Fehler in ein
+     * `return 0` verwandelte - die Zusicherung "es wurde nichts geschrieben"
+     * war damit inhaltsleer und haette auch dann gegolten, wenn das Addon
+     * munter INSERTs abgesetzt haette.
+     *
+     * Kein try/catch mehr: Ein Fehler beim Zaehlen ist kein Ergebnis 0,
+     * sondern ein kaputter Test, und der soll auffallen.
+     */
     private function ausnahmenAnzahl(): int {
-        try {
-            return (int) $this->db()->query(
-                'SELECT COUNT(*) FROM `plugin_plausibilitaetspruefung_ausnahmen`'
-            )->fetchColumn();
-        } catch (\Throwable $e) {
-            return 0;   // Tabelle noch nicht angelegt - dann gibt es auch nichts.
-        }
+        return (int) $this->db()->query(
+            'SELECT COUNT(*) FROM `plugin_plausibilitaet_ausnahmen`'
+        )->fetchColumn();
     }
 
     private function createCustomGroup(\Tests\Support\HttpClient $admin, string $name): int {
