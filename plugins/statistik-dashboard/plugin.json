@@ -3,7 +3,7 @@
     "name": "Statistik",
     "version": "1.2.0",
     "core_compatibility": ">=0.8.0-beta.1",
-    "core_supported_max": "0.8",
+    "core_supported_max": "0.9",
     "description": "Statistik-Seite für den Admin-Bereich mit zwei Abschnitten: Bestand (Pferde nach Status, Verteilung nach Deckstation, Wachstum über Zeit, meistgenutzte Blutlinien) und Aufrufe (Rangliste der meistgesehenen Pferde, gezählt auf der öffentlichen Detailseite). Löst das frühere Addon \"Besucherstatistik\" ab und übernimmt dessen Zähldaten.",
     "author": "Hengstverzeichnis_Addons",
     "hooks": [

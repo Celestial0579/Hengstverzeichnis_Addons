@@ -3,7 +3,7 @@
     "name": "Titel & Prämierungen",
     "version": "1.2.0",
     "core_compatibility": ">=0.4.0",
-    "core_supported_max": "0.8",
+    "core_supported_max": "0.9",
     "description": "Erfasst Titel, Prämierungen und sportliche Erfolge strukturiert pro Pferd (Art, Bezeichnung, Jahr, Kommentar) im Admin-Bereich und zeigt sie auf der öffentlichen Detailseite an.",
     "author": "Hengstverzeichnis_Addons",
     "hooks": [

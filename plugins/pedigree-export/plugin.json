@@ -3,7 +3,7 @@
     "name": "Pedigree-Export (Druck/PDF)",
     "version": "1.2.0",
     "core_compatibility": ">=0.4.0",
-    "core_supported_max": "0.8",
+    "core_supported_max": "0.9",
     "description": "Druckoptimierte, eigenständige Ansicht des Stammbaums eines Pferdes (bis zu 6 Generationen) zum Sichern als PDF über die Browser-Druckfunktion - verlinkt automatisch von der öffentlichen Pferde-Detailseite.",
     "author": "Hengstverzeichnis_Addons",
     "hooks": [

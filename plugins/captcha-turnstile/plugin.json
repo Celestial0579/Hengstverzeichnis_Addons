@@ -3,7 +3,7 @@
     "name": "Spam-Schutz: Cloudflare Turnstile",
     "version": "1.0.0",
     "core_compatibility": ">=0.8.0-beta.1",
-    "core_supported_max": "0.8",
+    "core_supported_max": "0.9",
     "description": "Bindet Cloudflare Turnstile als wählbaren Spam-Schutz für die öffentlichen Formulare an (captcha.*-Hooks). ACHTUNG: Drittanbieter - IP-Adresse und Browser-Angaben der Besucher gehen an Cloudflare, Inc. (USA). Gehört in die Datenschutzerklärung; für das DSGVO-Portal ausdrücklich nicht empfohlen, siehe README.",
     "author": "Hengstverzeichnis_Addons",
     "hooks": [

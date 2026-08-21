@@ -3,7 +3,7 @@
     "name": "DNA-/Gesundheitstest-Verwaltung",
     "version": "1.2.0",
     "core_compatibility": ">=0.8.0-beta.1",
-    "core_supported_max": "0.8",
+    "core_supported_max": "0.9",
     "description": "Erfasst DNA-Tests, Röntgenbefunde und Gesundheitszeugnisse strukturiert pro Pferd inkl. Dokument-Upload (außerhalb des Webroots, Zugriff nur über geschützte Download-Route). Öffentliche Anzeige nur für explizit freigegebene Einträge (Opt-in).",
     "author": "Hengstverzeichnis_Addons",
     "hooks": [
