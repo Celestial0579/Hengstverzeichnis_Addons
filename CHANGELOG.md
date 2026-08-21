@@ -6,6 +6,34 @@ sich an [Keep a Changelog](https://keepachangelog.com/de/1.1.0/); die
 Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 (siehe [docs/releasing.md](docs/releasing.md)).
 
+## [0.9.0-beta.2] – 2026-08-22
+
+Anschluss an **Framework v0.9.0-beta.2** (Anmelde-Block: Anmeldung über den
+Benutzernamen, zweiter Faktor per E-Mail).
+
+**An den Addons selbst hat sich nichts geändert.** Alle 26 stehen weiterhin auf
+`core_supported_max: "0.9"` und waren damit auch auf dem neuen Kern schon
+sichtbar — dieser Release ist, anders als `0.9.0-beta.1`, **keine Pflicht**.
+
+Er wird trotzdem gesetzt, und zwar aus einem handfesten Grund: `composer.lock`
+nagelt den Kern über einen Branch-Zeiger fest, und Dependabot hebt Zweig-Zeiger
+nicht. Bleibt der Lock stehen, prüft die Addons-Suite dauerhaft gegen einen
+alten Kern und meldet grün — genau der Fall, der in diesem Repo schon einmal
+tagelang unbemerkt lief. Der Lock zeigt jetzt auf `1a6f04a`.
+
+### Geprüft gegen den neuen Kern
+
+Die Bruchstelle des Kerns (Login-Formularfeld `email` → `kennung`) betrifft
+kein Addon: Kein Plugin bedient das Anmeldeformular, und keines liest die
+`users`-Tabelle. Die Testsuiten laufen über `FunctionalTestCase` des Kerns,
+das den neuen Feldnamen mitbringt.
+
+| Suite | |
+|---|---|
+| Manifest | 372 Tests |
+| Unit | 199 Tests |
+| Functional | 61 Tests (gegen den echten Kern `1a6f04a`) |
+
 ## [0.9.0-beta.1] – 2026-08-21
 
 Anschluss an **Framework v0.9.0-beta.1**. Alle 26 Addons stehen auf
