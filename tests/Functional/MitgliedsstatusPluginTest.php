@@ -278,11 +278,15 @@ class MitgliedsstatusPluginTest extends FunctionalTestCase {
             'kontakt_id' => (string) $klar,
             'status' => 'mitglied',
         ]);
-        $this->assertNotSame(
-            '/admin/contacts/edit?id=' . $klar . '&ms=status',
-            $anonym->location(),
-            'Ohne Anmeldung darf hier nichts gespeichert werden.'
-        );
+        // POSITIV pruefen, nicht negativ: Ein assertNotSame() auf die
+        // Erfolgs-Adresse ist auch dann erfuellt, wenn checkAuth() im
+        // Konstruktor ersatzlos fehlt - der Aufruf liefe dann in den
+        // CSRF-Check dahinter, der mit 403 und OHNE Location antwortet, und
+        // null ist nun einmal ungleich der Erfolgs-Adresse. Der Test waere
+        // gruen geblieben, obwohl die Route gar keinen Anmeldeschutz mehr
+        // haette. Deshalb wird hier festgenagelt, WAS herauskommen muss.
+        $this->assertSame(302, $anonym->statusCode, 'Ohne Anmeldung muss die Route auf die Anmeldung leiten.');
+        $this->assertSame('/login', $anonym->location(), 'Ohne Anmeldung darf hier nichts gespeichert werden.');
 
         // 14. Fail-closed ohne `mitgliedsstatus.manage`: Die Verwaltungsseite
         //     ist für einen Redakteur ohne dieses Recht nicht erreichbar.

@@ -95,6 +95,20 @@ class BeispielErweiterungspunktePluginTest extends FunctionalTestCase {
         // -------------------------------------------------------------
         // 3. Oeffentliche Ausgabe: Detailseite, Katalog, Startseite, Navigation
         // -------------------------------------------------------------
+
+        // Dem Pferd ein Foto geben. OHNE DAS prueft die Zusicherung weiter
+        // unten ("nie ueber /uploads/") gar nichts: createHorse() setzt
+        // horses.image_url nie, das Schaufenster rendert dann ueberhaupt kein
+        // Bild, und assertStringNotContainsString('/uploads/horses/') waere
+        // eine Aussage ueber eine Seite ohne Bilder. Der Aufruf von
+        // MediaUrl::horseImage() im Addon liesse sich durch den rohen
+        // Spaltenwert ersetzen - also genau durch die "FALLE", vor der der
+        // Kommentar in Fragmente.php warnt -, ohne dass dieser Test rot wird.
+        $dateiname = 'beispiel_' . uniqid() . '.jpg';
+        \App\Database::getInstance()
+            ->prepare('UPDATE horses SET image_url = ? WHERE id = ?')
+            ->execute(['/uploads/horses/' . $dateiname, $horseId]);
+
         $gast = $this->newClient();
 
         $detail = $gast->get('/horse?id=' . $horseId);
@@ -123,6 +137,13 @@ class BeispielErweiterungspunktePluginTest extends FunctionalTestCase {
         );
 
         // Das Foto laeuft ueber die geschuetzte Route, nie ueber /uploads/.
+        // Beide Richtungen: Ohne die positive Zusicherung waere die negative
+        // wieder inhaltsleer, sobald das Schaufenster kein Bild mehr rendert.
+        $this->assertStringContainsString(
+            '/media/horse-image?id=' . $horseId,
+            $start->body,
+            'Das Schaufenster muss das Foto ueber die geschuetzte Route einbinden - sonst prueft die Zeile darunter nichts.'
+        );
         $this->assertStringNotContainsString('/uploads/horses/', $start->body);
 
         // -------------------------------------------------------------
@@ -410,8 +431,13 @@ class BeispielErweiterungspunktePluginTest extends FunctionalTestCase {
             'Ohne horses.beispielnotiz darf der Addon-Abschnitt gar nicht erst erscheinen.'
         );
 
+        // editorCsrfToken() statt currentCsrfToken(): Letzteres holt das Token
+        // von /admin/users/create, das dieser Benutzer nicht sehen darf - es
+        // waere leer, und der POST scheiterte am CSRF-Check STATT an der
+        // Rechtepruefung. Der Test waere gruen, ohne die Zusicherung je
+        // erreicht zu haben (Framework#377).
         $versuch = $editor->post(self::BASIS . '/notiz', [
-            'csrf_token' => $this->currentCsrfToken($editor),
+            'csrf_token' => $this->editorCsrfToken($editor),
             'horse_id' => (string)$horseId,
             'notiz' => 'darf nicht durchkommen',
         ]);
