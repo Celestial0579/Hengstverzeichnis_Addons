@@ -576,4 +576,81 @@ class KatalogExportPluginTest extends FunctionalTestCase {
             'Der Eintrag muss dem angemeldeten Konto zugeordnet sein - genau das ist der Zweck.'
         );
     }
+    /**
+     * Ein Platzhalter-Datum gehört nicht als Tatsache in eine CSV-Datei
+     * (Framework#379, Addons#156).
+     *
+     * `birth_date_precision = 'year'` heißt: Nur das Jahr ist bekannt,
+     * Monat und Tag sind Platzhalter — in dieser Branche der 1. Januar, im
+     * Altbestand bei knapp der Hälfte aller Pferde. Der Kern zeigt in dem
+     * Fall nur noch das Jahr; diese Datei wird per E-Mail weitergereicht und
+     * in eine Tabellenkalkulation geladen, wo der Tag als Tatsache steht —
+     * und zwar weiter weg von jeder Korrektur als die Seite, von der er
+     * stammt.
+     *
+     * Die Zelle bleibt LEER statt das Jahr zu wiederholen: Genau das ist die
+     * Form, die der CSV-Import des Kerns als „nur das Jahr bekannt" annimmt.
+     */
+    public function testEinPlatzhalterDatumErscheintNichtImExport(): void {
+        $admin = $this->authenticatedClient();
+        $admin->post('/admin/plugins/toggle', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'slug' => self::SLUG,
+            'enable' => '1',
+        ]);
+        $unique = uniqid();
+
+        $genau = "CsvGenau-{$unique}";
+        $platzhalter = "CsvPlatzhalter-{$unique}";
+
+        $this->createHorse($admin, $genau, [
+            'birth_date' => '1976-06-13',
+            'is_published' => '1',
+        ]);
+        $mitPlatzhalter = $this->createHorse($admin, $platzhalter, [
+            'birth_date' => '1976-01-01',
+            'birth_date_precision' => 'year',
+            'is_published' => '1',
+        ]);
+
+        // Vorbedingung: Der Kern hat die Genauigkeit wirklich gespeichert -
+        // sonst prüfte der Rest an einem tagesgenauen Datensatz vorbei.
+        $stmt = \App\Database::getInstance()->prepare(
+            'SELECT birth_date, birth_date_precision FROM horses WHERE id = ?'
+        );
+        $stmt->execute([$mitPlatzhalter]);
+        $zeile = $stmt->fetch(\PDO::FETCH_ASSOC);
+        $this->assertSame('year', (string)$zeile['birth_date_precision']);
+        $this->assertSame('1976-01-01', (string)$zeile['birth_date'],
+            'Das Quelldatum bleibt in der Datenbank - nur der Export zeigt es nicht.');
+
+        $csv = $admin->get('/plugin/katalog-export/csv');
+        $this->assertSame(200, $csv->statusCode);
+
+        $zeilen = [];
+        foreach (preg_split('/\r\n|\n/', $csv->body) as $line) {
+            foreach ([$genau, $platzhalter] as $name) {
+                if (str_contains($line, $name)) {
+                    $zeilen[$name] = str_getcsv($line, ';', '"', '');
+                }
+            }
+        }
+        $this->assertArrayHasKey($genau, $zeilen);
+        $this->assertArrayHasKey($platzhalter, $zeilen);
+
+        // Spalte 4 = Geburtsjahr, Spalte 5 = Geburtsdatum (siehe Kopfzeile).
+        $this->assertSame('1976-06-13', $zeilen[$genau][5],
+            'Ein tagesgenaues Datum muss weiterhin exportiert werden.');
+        $this->assertSame('1976', $zeilen[$platzhalter][4],
+            'Das Jahr ist die Angabe, die stimmt - es bleibt stehen.');
+        $this->assertSame('', $zeilen[$platzhalter][5],
+            'Ein Platzhalter-Datum darf nicht als Tatsache in der Datei stehen.');
+
+        $admin->post('/admin/plugins/toggle', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'slug' => self::SLUG,
+            'enable' => '0',
+        ]);
+    }
+
 }

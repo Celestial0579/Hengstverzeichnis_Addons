@@ -377,7 +377,7 @@ class ExportController extends BaseController {
         // rechtegeschützten Pfad.
         $sql = "
             SELECT
-                h.id, h.name, h.ueln, h.foreign_ueln, h.birth_year, h.birth_date, h.color, h.sex, h.breed, h.height_cm, h.status, h.is_deceased, h.death_year,
+                h.id, h.name, h.ueln, h.foreign_ueln, h.birth_year, h.birth_date, h.birth_date_precision, h.color, h.sex, h.breed, h.height_cm, h.status, h.is_deceased, h.death_year,
                 COALESCE(bs.name, h.breeding_station) AS station_name,
                 COALESCE(sire.name, h.sire_name) AS sire_display,
                 COALESCE(dam.name, h.dam_name) AS dam_display,
@@ -467,7 +467,23 @@ class ExportController extends BaseController {
                 $row['ueln'],
                 $row['foreign_ueln'],
                 $row['birth_year'],
-                $row['birth_date'],
+                // Ein Geburtsdatum nur dann, wenn es TAGESGENAU ist
+                // (Framework#379). Steht dort 'year', sind Monat und Tag
+                // Platzhalter - in dieser Branche der 1. Januar, im
+                // Altbestand bei knapp der Haelfte aller Pferde.
+                //
+                // Diese Datei wird per E-Mail weitergereicht und in eine
+                // Tabellenkalkulation geladen; dort steht der Tag dann als
+                // Tatsache, und zwar weiter weg von jeder Korrektur als die
+                // Seite, von der er stammt. Das Jahr steht ohnehin in der
+                // Spalte daneben und ist die Angabe, die stimmt.
+                //
+                // Die Zelle bleibt LEER statt das Jahr zu wiederholen: Genau
+                // so sieht die Form aus, die der CSV-Import des Kerns als
+                // "nur das Jahr bekannt" annimmt - leeres birth_date,
+                // gefuelltes birth_year. Die Datei laesst sich damit ohne
+                // Zeilenfehler zurueckspielen.
+                (($row['birth_date_precision'] ?? 'day') === 'year') ? '' : $row['birth_date'],
                 $row['color'],
                 $row['sex'],
                 $row['breed'],
