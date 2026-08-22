@@ -159,7 +159,6 @@ return [
     'station.horses_heading' => '🐴 Päerd vun dëser Deckstatioun',
     'station.no_horses' => 'Momentan si keng Päerd vun dëser Deckstatioun am Verzeechnes hannerluecht.',
     'field.location' => 'Uert',
-    'field.membership_status' => 'Memberstatus',
     'person.is_breeder' => 'Ziichter',
     'person.not_found' => 'Déi ugefrote Persoun existéiert net oder gouf aus dem Verzeechnes ewechgeholl.',
     'person.horses_heading' => '🐴 Päerd vun dëser Persoun',

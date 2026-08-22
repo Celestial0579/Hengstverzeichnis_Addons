@@ -90,16 +90,32 @@ class ZuchtSucheSuchanfrageTest extends TestCase {
     }
 
     /**
-     * Bis 0.7 gab es `membership_status` nur auf `persons` - der Filter war an
-     * den Züchter-Reiter gebunden und wurde sonst verworfen. Seit dem
-     * Zusammenlegen (#336) ist er ein Feld der gemeinsamen Kontaktliste und
-     * gilt für jeden Kontakt, unabhängig von der Rolle.
+     * Der Filter „Mitgliedsstatus" ist mit Framework#349 ersatzlos entfallen.
+     *
+     * Er wird nicht nur nicht mehr angeboten - er darf auch nicht mehr WIRKEN.
+     * Ein Lesezeichen aus v0.8 trägt `?mitglied=…` weiterhin in der Adresse,
+     * und die Spalte `contacts.membership_status` gibt es bis zum Release
+     * nach v0.9.0 noch. Bliebe die Auswertung stehen, filterte die
+     * öffentliche Suche weiter nach einem Merkmal, dessen Freigabe jetzt beim
+     * Addon `mitgliedsstatus` liegt - unsichtbar, weil das Formular den Filter
+     * nicht mehr zeigt.
+     *
+     * Der Parameter darf auch nicht in die Blätter-Links zurückwandern:
+     * `alsQuery()` baut sie, und was dort steht, überlebt jeden Seitenwechsel.
      */
-    public function testMitgliedsstatusGiltFuerJedeRolle(): void {
+    public function testDerEntfalleneMitgliedsfilterWirdIgnoriert(): void {
         foreach ([Suchanfrage::ROLLE_ALLE, Suchanfrage::ROLLE_ZUECHTER, Suchanfrage::ROLLE_STATION] as $rolle) {
             $anfrage = Suchanfrage::aus(['rolle' => $rolle, 'mitglied' => 'Mitglied'], self::ALLE_ROLLEN);
-            $this->assertSame('Mitglied', $anfrage->mitglied);
-            $this->assertSame('Mitglied', $anfrage->alsQuery()['mitglied'] ?? null);
+
+            $this->assertArrayNotHasKey(
+                'mitglied',
+                $anfrage->alsQuery(),
+                'Ein alter ?mitglied=-Parameter darf nicht in die Blätter-Links zurückwandern.'
+            );
+            $this->assertFalse(
+                property_exists($anfrage, 'mitglied'),
+                'Die Suchanfrage darf den entfallenen Filter nicht mehr führen (Framework#349).'
+            );
         }
     }
 

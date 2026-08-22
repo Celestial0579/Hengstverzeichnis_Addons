@@ -154,7 +154,6 @@ return [
     'station.horses_heading' => '🐴 Cavalli di questa stazione di monta',
     'station.no_horses' => 'Al momento non ci sono cavalli di questa stazione di monta nel registro.',
     'field.location' => 'Località',
-    'field.membership_status' => 'Stato di socio',
     'person.is_breeder' => 'Allevatore',
     'person.not_found' => 'La persona richiesta non esiste o è stata rimossa dall\'elenco.',
     'person.horses_heading' => '🐴 Cavalli di questa persona',

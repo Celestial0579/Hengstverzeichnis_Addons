@@ -154,7 +154,6 @@ return [
     'station.horses_heading' => '🐴 Hästar på denna hingststation',
     'station.no_horses' => 'För närvarande finns inga hästar från denna hingststation i registret.',
     'field.location' => 'Ort',
-    'field.membership_status' => 'Medlemsstatus',
     'person.is_breeder' => 'Uppfödare',
     'person.not_found' => 'Den begärda personen finns inte eller har tagits bort ur registret.',
     'person.horses_heading' => '🐴 Denna persons hästar',

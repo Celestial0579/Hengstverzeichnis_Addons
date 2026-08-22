@@ -365,8 +365,10 @@ class ExportController extends BaseController {
         // Wer hier Kontaktspalten ergänzen will, wendet dieselbe Regel an wie
         // die öffentliche Seite (docs/kontaktliste-umstellung.md,
         // "Datenschutz-Grenze"):
-        //   immer:                 id, name, city, state, country,
-        //                          membership_status, website, is_breeder
+        //   immer:                 id, name, city, state, country, website,
+        //                          is_breeder  (membership_status stand bis
+        //                          v0.8 mit hier und ist mit Framework#349
+        //                          entfallen)
         //   nur bei contact_public=1: email, phone, mobile, street,
         //                          house_number, postal_code, address,
         //                          contact_person

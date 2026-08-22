@@ -154,7 +154,6 @@ return [
     'station.horses_heading' => '🐴 Paarden van dit dekstation',
     'station.no_horses' => 'Er zijn momenteel geen paarden van dit dekstation in het register opgenomen.',
     'field.location' => 'Plaats',
-    'field.membership_status' => 'Lidmaatschapsstatus',
     'person.is_breeder' => 'Fokker',
     'person.not_found' => 'De opgevraagde persoon bestaat niet of is uit het register verwijderd.',
     'person.horses_heading' => '🐴 Paarden van deze persoon',
