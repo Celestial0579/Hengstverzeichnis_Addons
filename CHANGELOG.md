@@ -8,6 +8,59 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+## [0.9.0] – 2026-08-22
+
+Der geprüfte Gesamtstand zur Framework-Linie **0.9**. Dieser Abschnitt fasst
+auch zusammen, was zwischendurch als `v0.9.0-beta.3` und `v0.9.0-beta.4`
+herausging — für beide wurde seinerzeit kein eigener Abschnitt angelegt.
+
+> **Setzt Kern `v0.9.0` voraus**, wo die Addons an den neuen
+> Erweiterungspunkten hängen. Alle Manifeste tragen `core_supported_max: 0.9`.
+
+### Geändert
+
+- **Responsives Verhalten der Addon-Fragmente** (#129, Gegenstück zu
+  Framework#345).
+
+  Ein Addon liefert sein Fragment **in** eine Kernseite. Was dort überläuft,
+  sprengt nicht nur das Fragment, sondern die ganze Seite — und der Betreiber
+  sucht den Fehler im Kern. Gemessen wurde auf 360 px:
+
+  - **19 Tabellen in 10 Addons** in `<div class="tabelle-scroll">` gefasst.
+    Die Klasse liefert der Kern; kein Addon erfindet sie neu.
+  - **Feste Rasterspalten in 7 Addons** durch
+    `repeat(auto-fit, minmax(200px, 1fr))` ersetzt.
+    `grid-template-columns: 1fr 1fr` heisst auf 360 px zwei Felder von je rund
+    150 Pixeln.
+  - **Bildreihen in `merkliste` und `verkaufsboerse`** brechen jetzt um, statt
+    die Textspalte auf Restbreite zu quetschen.
+  - **Eigener Umbruchpunkt in `embed-widget` entfernt.** Ein zweiter Satz
+    neben dem des Kerns wäre genau die Doppelung, die dieses Issue beendet.
+
+  Zwei neue Regeln in `tests/Manifest/PluginThemingLintTest.php` halten das
+  fest; die Ansage für Addon-Autoren steht im Kern in
+  `docs/plugin-development.md`.
+
+- **`zucht-suche`: Filter und Spalte „Mitgliedsstatus" sind weg**
+  (Framework#349).
+
+  Der Kern führt das Freitextfeld nicht mehr. Die Angabe führt jetzt
+  `mitgliedsstatus` mit fester Werteliste und Freigabe **je Kontakt** — eine
+  öffentliche Trefferliste, die ungefragt danach filtert und die Werte in
+  einer Spalte ausgibt, würde genau diese Freigabe umgehen.
+
+  Ein altes Lesezeichen mit `?mitglied=…` schadet nicht: Der Parameter wird
+  nicht mehr gelesen und wandert auch nicht in die Blätter-Links zurück.
+
+- **`mitgliedsstatus` verlangt jetzt Kern `>=0.9.0`.** Auf einem 0.8er Kern
+  hielte seine zentrale Zusage nicht: Dort veröffentlicht der Kern
+  `contacts.membership_status` weiterhin bedingungslos, während das Addon
+  Freigabe je Kontakt verspricht — der Betreiber hielte etwas für nicht
+  öffentlich, das es ist.
+
+- **`field.membership_status` aus den zehn Sprach-Addons entfernt.** Der Kern
+  kennt den Schlüssel seit `v0.9.0` nicht mehr.
+
 ### Neu
 
 - **Zehn Sprach-Addons** (`sprache-cs`, `sprache-da`, `sprache-fi`,
