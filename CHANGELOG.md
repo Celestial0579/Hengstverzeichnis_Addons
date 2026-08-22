@@ -8,6 +8,42 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+### Entfernt
+
+- **Das Addon `galerie` gibt es nicht mehr** (Addons#116, Framework#339). Der
+  Kern pflegt Fotos und Videos je Pferd seit `v0.9.0` selbst — samt Hauptbild,
+  Reihenfolge, Bildunterschrift und geschützter Auslieferung. Zwei
+  Pflegeoberflächen für dieselben Daten wären genau der Zustand, den
+  Framework#339 beendet.
+
+  **Für Betreiber:** Das Kern-Update entfernt das Addon von selbst
+  (`UpdateService::ABGELOESTE_ADDONS`) — vorher holt der Migrationsschritt
+  `339_galerie_uebernahme` Zeilen und Dateien in den Kern. Es geht nichts
+  verloren, und es ist nichts von Hand zu tun.
+
+  Addons#116 verlangte ursprünglich nur, Dashboard-Kachel und eigene
+  Verwaltungsseite zu entfernen. Das ist mit dem ganzen Addon erledigt; die
+  dort offene Frage nach dem Rechteschnitt (`galerie.manage` neben
+  `horses.edit`) beantwortet Framework#339: Wer `horses.edit` hat, pflegt die
+  Medien — eine eigene Berechtigung gibt es nicht mehr.
+
+  **Was bewusst wegfällt**, wie in Addons#116 festgehalten: die bestandsweite
+  Übersicht „Erfasste Medien". Die Frage „welche Medien liegen insgesamt im
+  Verzeichnis" hat keine Antwortseite mehr — die Pflege läuft am Pferd, und
+  dort war sie schon vollständig.
+
+  Nebenbefund aus Addons#116 mit erledigt: Das Dateifeld bot `image/gif` an,
+  serverseitig war GIF nicht erlaubt. Der Kern lässt es jetzt beides.
+
+  **Und ein Fund beim Aufräumen:** Der Unit-Test `GalerieVideoUrlTest` lief
+  nach dem Entfernen ins Leere — und beim Nachsehen, was er eigentlich prüfte,
+  stellte sich heraus, dass die Kern-Fassung **schwächer** prüfte als das
+  Addon: nur das Schema statt einer Host-Allowlist mit Neubau der URL aus den
+  geprüften Teilen. Im Kern nachgezogen (Framework#339, PR #388), Tests
+  übernommen. Eine Ablösung, die weniger kann als das Abgelöste, ist der
+  unangenehmste Fall dabei — die Oberfläche sieht gleich aus.
+
+
 ### Neu
 
 - **`mitglieder-konten`** (Addons#131): legt Benutzerkonten für

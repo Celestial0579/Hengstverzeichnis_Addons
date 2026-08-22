@@ -57,7 +57,6 @@ Danach unter **Admin → Plugins verwalten** (`/admin/plugins`) aktivieren.
   der Pferde-Detailseite, sendet direkt an die hinterlegte Deckstation.
   Erscheint nur, wenn die verknüpfte Deckstation veröffentlicht und ihre
   E-Mail-Adresse damit öffentlich sichtbar ist.
-- [`galerie`](plugins/galerie/README.md) - Bild- und Video-Galerie je Pferd
   (Uploads plus YouTube/Vimeo-Links) mit eigener Verwaltungsseite.
 - [`gesundheitstests`](plugins/gesundheitstests/README.md) - verwaltet
   Gesundheits-/Gentest-Befunde je Pferd; Dokumente liegen außerhalb des
