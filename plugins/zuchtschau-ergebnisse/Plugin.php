@@ -120,7 +120,7 @@ class Plugin {
         $html = '<style>'
             . '.zs-abschnitt-block{border:1px solid var(--border-color);border-radius:var(--border-radius, 4px);padding:0.75rem;margin-bottom:0.75rem;}'
             . '.zs-abschnitt-kopf{display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-bottom:0.5rem;}'
-            . '.zs-abschnitt-tw-form{display:grid;grid-template-columns:repeat(6,1fr) auto;gap:0.5rem;align-items:end;margin-top:0.5rem;}'
+            . '.zs-abschnitt-tw-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:0.5rem;align-items:end;margin-top:0.5rem;}'
             . '</style>';
         $html .= '<h3 style="margin-top:0;">🏆 Zuchtschau-/Körungsergebnisse</h3>';
 
@@ -160,7 +160,7 @@ class Plugin {
             $html .= '<summary>Teilwertungen (' . count($teilwertungen) . ')</summary>';
 
             if ($teilwertungen) {
-                $html .= '<table style="width:100%;border-collapse:collapse;font-size:0.9em;margin-top:0.5rem;">';
+                $html .= '<div class="tabelle-scroll"><table style="width:100%;border-collapse:collapse;font-size:0.9em;margin-top:0.5rem;">';
                 $html .= '<thead><tr style="text-align:left;border-bottom:1px solid var(--border-color);">'
                     . '<th style="padding:0.2rem 0.4rem;">Bezeichnung</th><th style="padding:0.2rem 0.4rem;">Wertung</th>'
                     . '<th style="padding:0.2rem 0.4rem;">Note</th><th style="padding:0.2rem 0.4rem;">Platzierung</th>'
@@ -180,7 +180,7 @@ class Plugin {
                         . '</form></td>';
                     $html .= '</tr>';
                 }
-                $html .= '</tbody></table>';
+                $html .= '</tbody></table></div>';
             }
 
             // Eigenes Formular je Ergebnis: Die ergebnis_id ist der Bezug der
@@ -222,19 +222,19 @@ class Plugin {
         $html .= '<form method="POST" action="/plugin/zuchtschau-ergebnisse/ergebnisse/store">';
         $html .= '<input type="hidden" name="csrf_token" value="' . $esc($csrfToken) . '">';
         $html .= '<input type="hidden" name="horse_id" value="' . $horseId . '">';
-        $html .= '<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">';
+        $html .= '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;">';
         $html .= '<div class="form-group"><label for="zs_event_name">Veranstaltung</label>'
             . '<input type="text" name="event_name" id="zs_event_name" class="form-control" maxlength="150" required></div>';
         $html .= '<div class="form-group"><label for="zs_event_date">Datum</label>'
             . '<input type="date" name="event_date" id="zs_event_date" class="form-control"></div>';
         $html .= '</div>';
-        $html .= '<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">';
+        $html .= '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;">';
         $html .= '<div class="form-group"><label for="zs_category">Kategorie</label>'
             . '<input type="text" name="category" id="zs_category" class="form-control" maxlength="100" placeholder="z. B. Körung, Zuchtschau"></div>';
         $html .= '<div class="form-group"><label for="zs_score">Note</label>'
             . '<input type="text" name="score" id="zs_score" class="form-control" maxlength="50"></div>';
         $html .= '</div>';
-        $html .= '<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">';
+        $html .= '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;">';
         $html .= '<div class="form-group"><label for="zs_placement">Platzierung</label>'
             . '<input type="text" name="placement" id="zs_placement" class="form-control" maxlength="50"></div>';
         $html .= '<div class="form-group"><label for="zs_judge">Richter</label>'
@@ -334,7 +334,7 @@ class Plugin {
 
         $html = '<div style="margin-top:0.5rem;">';
         $html .= '<h3 style="margin-bottom:0.5rem;">🏆 Zuchtschau-/Körungsergebnisse</h3>';
-        $html .= '<table style="width:100%;border-collapse:collapse;">';
+        $html .= '<div class="tabelle-scroll"><table style="width:100%;border-collapse:collapse;">';
         $html .= '<thead><tr style="text-align:left;border-bottom:2px solid var(--border-color);">'
             . '<th style="padding:0.4rem;">Veranstaltung</th><th style="padding:0.4rem;">Datum</th>'
             . '<th style="padding:0.4rem;">Kategorie</th><th style="padding:0.4rem;">Note</th>'
@@ -360,7 +360,7 @@ class Plugin {
             $teilwertungen = $twStmt->fetchAll(PDO::FETCH_ASSOC);
             if (!empty($teilwertungen)) {
                 $html .= '<tr style="border-bottom:1px solid var(--border-color);"><td colspan="6" style="padding:0 0.4rem 0.5rem 1.2rem;">';
-                $html .= '<table style="width:100%;border-collapse:collapse;font-size:0.9em;">';
+                $html .= '<div class="tabelle-scroll"><table style="width:100%;border-collapse:collapse;font-size:0.9em;">';
                 $html .= '<thead><tr style="text-align:left;color:var(--text-muted);">'
                     . '<th style="padding:0.2rem 0.4rem;">Teilwertung</th><th style="padding:0.2rem 0.4rem;">Wertung</th>'
                     . '<th style="padding:0.2rem 0.4rem;">Note</th><th style="padding:0.2rem 0.4rem;">Platzierung</th>'
@@ -375,11 +375,11 @@ class Plugin {
                     $html .= '<td style="padding:0.2rem 0.4rem;">' . htmlspecialchars((string) ($tw['zeit'] ?? '–'), ENT_QUOTES, 'UTF-8') . '</td>';
                     $html .= '</tr>';
                 }
-                $html .= '</tbody></table></td></tr>';
+                $html .= '</tbody></table></div></td></tr>';
             }
         }
 
-        $html .= '</tbody></table></div>';
+        $html .= '</tbody></table></div></div>';
 
         $sections[] = $html;
         return $sections;

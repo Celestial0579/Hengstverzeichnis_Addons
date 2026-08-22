@@ -101,6 +101,81 @@ class PluginThemingLintTest extends TestCase {
         $this->assertSame([], $violations, "{$slug}: eigenständige Dokumente ohne theming-ausnahme-Marker");
     }
 
+    /**
+     * Jede Tabelle eines Addons braucht einen waagerechten Bildlauf
+     * (Addons#129, Gegenstück zu Framework#345).
+     *
+     * Ein Addon liefert sein Fragment IN eine Kernseite. Läuft seine Tabelle
+     * über, sprengt sie nicht nur sich selbst, sondern die ganze Seite - und
+     * der Betreiber sucht den Fehler im Kern. Gemessen wurden zwölf Addons
+     * mit Tabellen und zwei mit `overflow-x`.
+     *
+     * Die Klasse liefert der Kern (`.tabelle-scroll`), damit nicht jedes
+     * Addon seine eigene erfindet.
+     */
+    #[DataProvider('pluginSlugProvider')]
+    public function testJedeTabelleHatEinenBildlaufBehaelter(string $slug): void {
+        $mitTabelle = [];
+        $mitBildlauf = false;
+
+        foreach ($this->phpFilesOf($slug) as $datei) {
+            $inhalt = (string)file_get_contents($datei);
+            if (str_contains($inhalt, '<table')) {
+                $mitTabelle[] = basename($datei);
+            }
+            if (str_contains($inhalt, 'tabelle-scroll') || str_contains($inhalt, 'overflow-x')) {
+                $mitBildlauf = true;
+            }
+        }
+
+        if ($mitTabelle === []) {
+            $this->assertTrue(true, 'Keine Tabelle in diesem Addon.');
+            return;
+        }
+
+        $this->assertTrue(
+            $mitBildlauf,
+            "{$slug}: Tabelle in " . implode(', ', $mitTabelle) . ' ohne Bildlauf-Behälter. '
+            . '<div class="tabelle-scroll"> des Kerns benutzen.'
+        );
+    }
+
+    /**
+     * Kein Raster mit fest gezählten Spalten (Addons#129).
+     *
+     * `grid-template-columns: 1fr 1fr` heisst auf 360 px zwei Felder von je
+     * rund 150 Pixeln - in einem Pflegeformular unbedienbar. Und ein
+     * Inline-Style kann keine Media Query tragen, die es rettet.
+     */
+    #[DataProvider('pluginSlugProvider')]
+    public function testKeinRasterMitFestGezaehltenSpalten(string $slug): void {
+        $fest = [];
+
+        foreach ($this->phpFilesOf($slug) as $datei) {
+            $inhalt = (string)file_get_contents($datei);
+            preg_match_all('/grid-template-columns:\s*([^;"\']+)/i', $inhalt, $treffer);
+
+            foreach ($treffer[1] as $wert) {
+                $wert = trim($wert);
+                if (stripos($wert, 'auto-fit') !== false || stripos($wert, 'auto-fill') !== false) {
+                    continue;
+                }
+                // Lookaround, nicht verbrauchende Gruppen: Sonst zaehlt
+                // "1fr 1fr" als EINE Spalte (im Kern zuerst so passiert).
+                if (preg_match_all('/(?<=^|\s)[\d.]*fr(?=\s|$)/', $wert) >= 2) {
+                    $fest[] = basename($datei) . ': ' . $wert;
+                }
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $fest,
+            "{$slug}: fest gezählte Rasterspalten (" . implode(' | ', $fest) . '). '
+            . 'repeat(auto-fit, minmax(…, 1fr)) benutzen.'
+        );
+    }
+
     #[DataProvider('pluginSlugProvider')]
     public function testNoOwnFontFamilies(string $slug): void {
         $violations = $this->findViolations(

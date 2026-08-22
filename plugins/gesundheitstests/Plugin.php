@@ -105,7 +105,7 @@ class Plugin {
 
         $html = '<div style="margin-top:0.5rem;">';
         $html .= '<h3 style="margin-bottom:0.5rem;">🩺 DNA-/Gesundheitstests</h3>';
-        $html .= '<table style="width:100%;border-collapse:collapse;">';
+        $html .= '<div class="tabelle-scroll"><table style="width:100%;border-collapse:collapse;">';
         $html .= '<thead><tr style="text-align:left;border-bottom:2px solid var(--border-color);">'
             . '<th style="padding:0.4rem;">Test/Untersuchung</th><th style="padding:0.4rem;">Ergebnis</th>'
             . '<th style="padding:0.4rem;">Ausgestellt von</th><th style="padding:0.4rem;">Datum</th>'
@@ -127,7 +127,7 @@ class Plugin {
             $html .= '</td></tr>';
         }
 
-        $html .= '</tbody></table></div>';
+        $html .= '</tbody></table></div></div>';
 
         $sections[] = $html;
         return $sections;
@@ -188,7 +188,7 @@ class Plugin {
         $html = '<h3 style="margin-top:0;">🩺 Gesundheitstests</h3>';
 
         if ($rows) {
-            $html .= '<table style="width:100%;border-collapse:collapse;margin-bottom:1rem;">';
+            $html .= '<div class="tabelle-scroll"><table style="width:100%;border-collapse:collapse;margin-bottom:1rem;">';
             $html .= '<thead><tr style="text-align:left;border-bottom:2px solid var(--border-color);">'
                 . '<th style="padding:0.4rem;">Test/Untersuchung</th><th style="padding:0.4rem;">Ergebnis</th>'
                 . '<th style="padding:0.4rem;">Ausgestellt von</th><th style="padding:0.4rem;">Datum</th>'
@@ -223,7 +223,7 @@ class Plugin {
                     . '</form></td>';
                 $html .= '</tr>';
             }
-            $html .= '</tbody></table>';
+            $html .= '</tbody></table></div>';
         } else {
             $html .= '<p style="color:var(--text-muted);">Für dieses Pferd ist noch kein Gesundheitstest erfasst.</p>';
         }
@@ -242,7 +242,7 @@ class Plugin {
         $html .= '<form method="POST" action="/plugin/gesundheitstests/verwaltung/store" enctype="multipart/form-data">';
         $html .= '<input type="hidden" name="csrf_token" value="' . $esc($csrfToken) . '">';
         $html .= '<input type="hidden" name="horse_id" value="' . $horseId . '">';
-        $html .= '<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">';
+        $html .= '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;">';
         $html .= '<div class="form-group"><label for="gt_test_type">Test-/Untersuchungsart</label>'
             . '<input type="text" name="test_type" id="gt_test_type" class="form-control" maxlength="100" required'
             . ' placeholder="z. B. DNA-Abstammungstest, Röntgen, Gesundheitszeugnis"></div>';

@@ -753,7 +753,7 @@ class SucheController extends BaseController {
 
         $html = '<p class="zucht-hinweis">' . (int) $gesamt . ' Kontakte gefunden.</p>';
 
-        $html .= '<table class="zucht-tabelle"><thead><tr>';
+        $html .= '<div class="tabelle-scroll"><table class="zucht-tabelle"><thead><tr>';
         $html .= '<th scope="col">Name</th><th scope="col">Ort</th>';
         $html .= '<th scope="col">Bundesland / Kanton</th><th scope="col">Land</th>';
         $html .= '<th scope="col">Mitgliedsstatus</th>';
@@ -790,7 +790,7 @@ class SucheController extends BaseController {
             $html .= '</tr>';
         }
 
-        return $html . '</tbody></table>';
+        return $html . '</tbody></table></div>';
     }
 
     private function blaetterleiste(Suchanfrage $anfrage, int $seite, int $seitenzahl): string {

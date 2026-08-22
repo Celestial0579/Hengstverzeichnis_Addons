@@ -170,7 +170,7 @@ class MerklisteController extends BaseController {
         // Addon-spezifisch bleibt allein die Geometrie der Merklisten-Zeilen
         // (Thumbnail-Raster) - Farben ausschließlich über Theme-Variablen.
         $content = '<style>
-            .merkliste-row{display:flex;gap:1rem;padding:1rem 0;border-bottom:1px solid var(--border-color);align-items:center;}
+            .merkliste-row{display:flex;flex-wrap:wrap;gap:1rem;padding:1rem 0;border-bottom:1px solid var(--border-color);align-items:center;}
             .merkliste-row img{width:80px;height:80px;object-fit:cover;border-radius:var(--border-radius, 6px);}
             .merkliste-row h2{margin:0 0 0.3rem 0;font-size:1.05rem;}
             #leer{color:var(--text-muted);}

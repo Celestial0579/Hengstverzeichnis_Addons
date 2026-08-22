@@ -127,7 +127,7 @@ class ExportController extends BaseController {
         // Theme-Umschalter, Markenfarben und style.css kommen zentral vom
         // Layout. Hier bleibt nur addon-spezifische Geometrie (Formular-Raster).
         $content = '<style>';
-        $content .= '.katalog-export-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}';
+        $content .= '.katalog-export-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;}';
         $content .= '</style>';
 
         $content .= '<div class="card">';

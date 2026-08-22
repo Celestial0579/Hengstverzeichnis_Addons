@@ -260,9 +260,9 @@ class VergleichController extends BaseController {
         return <<<CSS
 <style>
     .meta { color: var(--text-muted); }
-    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .row { display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem; }
 
-    .comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
+    .comparison { display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:2rem; }
     .pedigree-col h2 { font-size: 1.1rem; }
     .pedigree { overflow-x: auto; }
     .node { display: flex; align-items: center; }

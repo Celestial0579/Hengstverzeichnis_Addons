@@ -300,7 +300,7 @@ class Plugin {
         $html .= '<form method="POST" action="/plugin/verkaufsboerse/verwaltung/store">';
         $html .= '<input type="hidden" name="csrf_token" value="' . $esc($csrfToken) . '">';
         $html .= '<input type="hidden" name="horse_id" value="' . $horseId . '">';
-        $html .= '<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">';
+        $html .= '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;">';
         $html .= '<div class="form-group"><label for="vb_price">Preis (€, leer = auf Anfrage)</label>'
             . '<input type="number" step="0.01" min="0" name="price" id="vb_price" class="form-control"'
             . ' value="' . ($listing && $listing['price'] !== null ? $esc($listing['price']) : '') . '"></div>';
@@ -445,7 +445,7 @@ class ListeController extends BaseController {
         // Inserats-Zeilen (Thumbnail-Raster) - Farben ausschließlich über
         // Theme-Variablen.
         $content = '<style>
-            .verkaufsboerse-listing{display:flex;gap:1rem;padding:1rem 0;border-bottom:1px solid var(--border-color);align-items:center;}
+            .verkaufsboerse-listing{display:flex;flex-wrap:wrap;gap:1rem;padding:1rem 0;border-bottom:1px solid var(--border-color);align-items:center;}
             .verkaufsboerse-listing img{width:100px;height:100px;object-fit:cover;border-radius:var(--border-radius, 6px);}
             .verkaufsboerse-listing h2{margin:0 0 0.3rem 0;font-size:1.1rem;}
             .verkaufsboerse-preis{font-weight:bold;color:var(--warning-fg);}

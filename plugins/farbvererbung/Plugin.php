@@ -390,7 +390,7 @@ class RechnerController extends BaseController {
         $content .= '</form>';
 
         if ($result !== null) {
-            $content .= '<div class="farbvererbung-result"><strong>Voraussichtliche Fohlenfarbe:</strong><table>';
+            $content .= '<div class="farbvererbung-result"><strong>Voraussichtliche Fohlenfarbe:</strong><div class="tabelle-scroll"><table>';
             foreach (self::sortResult($result) as $key => $prob) {
                 $percent = number_format($prob * 100, 2, ',', '.');
                 $width = max(0, min(100, $prob * 100));
@@ -400,7 +400,7 @@ class RechnerController extends BaseController {
                 $content .= '<td><div class="farbvererbung-bar" style="width:' . number_format($width, 2, '.', '') . '%"></div></td>';
                 $content .= '</tr>';
             }
-            $content .= '</table>';
+            $content .= '</table></div>';
             $content .= '<p class="farbvererbung-muted">Vereinfachtes Modell: unbekannte Anlageträger-Genotypen werden je Locus '
                 . 'als gleich wahrscheinlich angenommen. Das Dun-(Falb-)Gen gilt bei der Rasse als fest '
                 . 'vorhanden. Werte sind Schätzungen, kein Ersatz für einen Gentest.</p>';
@@ -409,7 +409,7 @@ class RechnerController extends BaseController {
 
         $content .= '<details style="margin-top:1.5rem;"><summary>Farben im Register (zum Nachschlagen)</summary>';
 
-        $content .= '<table style="margin-top:0.5rem;">';
+        $content .= '<div class="tabelle-scroll"><table style="margin-top:0.5rem;">';
         foreach ($horses as $h) {
             $key = FjordColor::keyFromText($h['color'] ?? '');
             $mapped = $key !== null ? FjordColor::label($key) : '—';
@@ -418,7 +418,7 @@ class RechnerController extends BaseController {
                 . '<td>' . htmlspecialchars((string) ($h['color'] ?? ''), ENT_QUOTES, 'UTF-8') . '</td>'
                 . '<td class="farbvererbung-muted">' . htmlspecialchars($mapped, ENT_QUOTES, 'UTF-8') . '</td></tr>';
         }
-        $content .= '</table>';
+        $content .= '</table></div>';
         if ($registerTruncated) {
             $content .= '<p class="farbvererbung-muted">Aus Platzgründen nur die ersten '
                 . self::REGISTER_LIMIT . ' Pferde (alphabetisch) mit eingetragener Farbe - '

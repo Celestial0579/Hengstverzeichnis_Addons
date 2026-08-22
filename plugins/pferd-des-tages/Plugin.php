@@ -1190,7 +1190,7 @@ class VerwaltungController extends BaseController {
         if ($zeilen === []) {
             $html .= '<p style="color:var(--text-muted);">Kein Pferd ausgenommen.</p>';
         } else {
-            $html .= '<table style="width:100%;border-collapse:collapse;"><thead>'
+            $html .= '<div class="tabelle-scroll"><table style="width:100%;border-collapse:collapse;"><thead>'
                 . '<tr style="text-align:left;border-bottom:2px solid var(--border-color);">'
                 . '<th style="padding:0.4rem;">Pferd</th><th style="padding:0.4rem;">Grund</th>'
                 . '<th style="padding:0.4rem;"></th></tr></thead><tbody>';
@@ -1210,7 +1210,7 @@ class VerwaltungController extends BaseController {
                     . '<button type="submit" class="btn btn-secondary">Wieder zulassen</button></form></td>';
                 $html .= '</tr>';
             }
-            $html .= '</tbody></table>';
+            $html .= '</tbody></table></div>';
         }
 
         $html .= '<h3>Pferd ausnehmen</h3>';
@@ -1251,7 +1251,7 @@ class VerwaltungController extends BaseController {
         if ($zeilen === []) {
             $html .= '<p style="color:var(--text-muted);">Noch keine Wahl getroffen.</p>';
         } else {
-            $html .= '<table style="width:100%;border-collapse:collapse;"><thead>'
+            $html .= '<div class="tabelle-scroll"><table style="width:100%;border-collapse:collapse;"><thead>'
                 . '<tr style="text-align:left;border-bottom:2px solid var(--border-color);">'
                 . '<th style="padding:0.4rem;">Datum</th><th style="padding:0.4rem;">Pferd</th>'
                 . '<th style="padding:0.4rem;">Art</th><th style="padding:0.4rem;"></th></tr></thead><tbody>';
@@ -1279,7 +1279,7 @@ class VerwaltungController extends BaseController {
                     . '<button type="submit" class="btn btn-secondary">Aufheben</button></form></td>';
                 $html .= '</tr>';
             }
-            $html .= '</tbody></table>';
+            $html .= '</tbody></table></div>';
         }
 
         $html .= '<h3>Vorgabe setzen</h3>';
