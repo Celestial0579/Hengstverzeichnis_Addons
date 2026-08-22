@@ -1,7 +1,7 @@
 {
     "slug": "zucht-suche",
     "name": "Zucht-Suche",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "core_compatibility": ">=0.8.0-beta.1",
     "core_supported_max": "0.9",
     "description": "Öffentliche Einstiegsseite 'Zucht': Kontakte nach Rolle (Züchter über contacts.is_breeder, Deckstation/Besitzer/Halter über die Zuordnungen veröffentlichter Pferde), Name, Ort, Bundesland/Kanton, Land suchen, mit den Pferdezahlen je Kontakt und Verlinkung auf /kontakt.",
