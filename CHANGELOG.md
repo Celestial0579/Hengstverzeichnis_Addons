@@ -6,6 +6,44 @@ sich an [Keep a Changelog](https://keepachangelog.com/de/1.1.0/); die
 Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 (siehe [docs/releasing.md](docs/releasing.md)).
 
+## [Unreleased]
+
+### Neu
+
+- **`mitglieder-konten`** (Addons#131): legt Benutzerkonten für
+  Verbandsmitglieder aus einer CiviCRM-Instanz an. Benutzername =
+  Mitgliedschafts-ID, Erstpasswort erzeugt, Zuordnung zu einer reinen
+  Lesegruppe. Hat ein Mitglied kein eigenes Postfach, gehen die Zugangsdaten
+  **gesammelt** an das Verwaltungsteam.
+
+  **Es gleicht keine Daten ab.** Kein Mitgliedsstatus, keine Anschrift, nichts
+  zurück nach CiviCRM. CiviCRM beantwortet zwei Fragen: wer bekommt ein Konto,
+  unter welcher Nummer. Der Zugang kann deshalb auch nur lesen.
+
+  Drei Dinge, die den Unterschied machen:
+
+  - **Vorschau statt Automatik.** Auf der Erprobungsinstanz stehen 1.496
+    Mitglieder; ein Lauf, der ungefragt 1.496 Konten anlegt und 1.496 Mails
+    verschickt, ist nicht rückholbar. Die Vorschau zeigt je Zeile, was
+    geschähe — anlegbar, hat schon ein Konto, oder der Hinderungsgrund. Je
+    Durchgang höchstens 100 Konten.
+  - **Keine stille Zweitanlage.** Die Zuordnung Mitgliedschafts-ID →
+    Benutzer-ID hat die Mitgliedschafts-ID als Primärschlüssel; ein zweiter
+    Lauf legt nichts noch einmal an und setzt kein Passwort zurück.
+  - **Endet die Mitgliedschaft, wird gesperrt — nie gelöscht.** Und ist
+    CiviCRM nicht erreichbar, sperrt der Lauf **nichts**: „konnte nicht
+    prüfen" und „geprüft, läuft nicht mehr" sind verschiedene Aussagen. Ohne
+    diese Trennung räumte ein Netzausfall über Nacht den ganzen Bestand ab.
+
+  Der API-Schlüssel liegt verschlüsselt (AES-256-GCM, wie das TOTP-Secret im
+  Kern) und wird nie wieder angezeigt. Das Konto legt der Kern an
+  (`App\Service\UserProvisioning`, Framework#384), nicht das Addon.
+
+### Geändert
+
+- `composer.lock` auf Kern `44fbed2` (`v0.9.0-beta.3`) — das neue Addon setzt
+  `UserProvisioning` voraus.
+
 ## [0.9.0-beta.2] – 2026-08-22
 
 Anschluss an **Framework v0.9.0-beta.2** (Anmelde-Block: Anmeldung über den
