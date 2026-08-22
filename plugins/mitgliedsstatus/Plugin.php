@@ -1311,7 +1311,7 @@ class VerwaltungController extends BaseController {
         $html .= '<p style="color:var(--text-muted);font-size:0.9em;">Diese Wortlaute standen im Freitextfeld des '
             . 'Kerns und liessen sich nicht ohne Raten auf die Werteliste abbilden. Die Zuordnung gilt jeweils für '
             . 'alle Kontakte mit exakt diesem Wortlaut; der Wortlaut selbst bleibt als Herkunftsnachweis erhalten.</p>';
-        $html .= '<table style="width:100%;border-collapse:collapse;">';
+        $html .= '<div class="tabelle-scroll"><table style="width:100%;border-collapse:collapse;">';
 
         foreach ($gruppen as $gruppe) {
             $wortlaut = (string) $gruppe['altwert'];
@@ -1335,7 +1335,7 @@ class VerwaltungController extends BaseController {
             $html .= '</select><button type="submit" class="btn">Zuordnen</button></form></td></tr>';
         }
 
-        $html .= '</table></div>';
+        $html .= '</table></div></div>';
 
         return $html;
     }

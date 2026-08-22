@@ -488,14 +488,14 @@ class StatistikController extends BaseController {
         $html .= $this->renderCountTable($stationDistribution, 'station', 'Deckstation');
 
         $html .= '<h3>Wachstum der Datenbank über Zeit</h3>';
-        $html .= '<table><thead><tr><th>Jahr</th><th>Neu angelegte Pferde</th></tr></thead><tbody>';
+        $html .= '<div class="tabelle-scroll"><table><thead><tr><th>Jahr</th><th>Neu angelegte Pferde</th></tr></thead><tbody>';
         foreach ($growthByYear as $row) {
             $html .= '<tr><td>' . htmlspecialchars((string) $row['yr'], ENT_QUOTES, 'UTF-8') . '</td><td>' . (int) $row['total'] . '</td></tr>';
         }
         if (empty($growthByYear)) {
             $html .= '<tr><td colspan="2">Keine Daten vorhanden.</td></tr>';
         }
-        $html .= '</tbody></table>';
+        $html .= '</tbody></table></div>';
 
         $html .= '<h3>Top-Blutlinien: meistgenutzte Väter</h3>';
         $html .= $this->renderCountTable($topSires, 'display_name', 'Vater');
@@ -524,7 +524,7 @@ class StatistikController extends BaseController {
 
         $html = '<h2>Aufrufe</h2>';
         $html .= '<p>Meistaufgerufene Pferde-Profile der öffentlichen Detailseite. Gezählt wird jeder Aufruf, auch der von Bots; eine Deduplizierung über Sitzung oder IP gibt es bewusst nicht (keine personenbezogene Speicherung).</p>';
-        $html .= '<table><thead><tr><th>#</th><th>Pferd</th><th>Geburtsjahr</th><th>Aufrufe</th></tr></thead><tbody>';
+        $html .= '<div class="tabelle-scroll"><table><thead><tr><th>#</th><th>Pferd</th><th>Geburtsjahr</th><th>Aufrufe</th></tr></thead><tbody>';
 
         $rank = 1;
         foreach ($rows as $row) {
@@ -540,7 +540,7 @@ class StatistikController extends BaseController {
             $html .= '<tr><td colspan="4">Noch keine Pferde vorhanden.</td></tr>';
         }
 
-        $html .= '</tbody></table>';
+        $html .= '</tbody></table></div>';
         return $html;
     }
 
@@ -576,14 +576,14 @@ class StatistikController extends BaseController {
      * @param array<int, array<string, mixed>> $rows
      */
     private function renderCountTable(array $rows, string $labelKey, string $labelHeading): string {
-        $html = '<table><thead><tr><th>' . htmlspecialchars($labelHeading, ENT_QUOTES, 'UTF-8') . '</th><th>Anzahl</th></tr></thead><tbody>';
+        $html = '<div class="tabelle-scroll"><table><thead><tr><th>' . htmlspecialchars($labelHeading, ENT_QUOTES, 'UTF-8') . '</th><th>Anzahl</th></tr></thead><tbody>';
         foreach ($rows as $row) {
             $html .= '<tr><td>' . htmlspecialchars((string) $row[$labelKey], ENT_QUOTES, 'UTF-8') . '</td><td>' . (int) $row['total'] . '</td></tr>';
         }
         if (empty($rows)) {
             $html .= '<tr><td colspan="2">Keine Daten vorhanden.</td></tr>';
         }
-        $html .= '</tbody></table>';
+        $html .= '</tbody></table></div>';
         return $html;
     }
 }

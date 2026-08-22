@@ -249,7 +249,7 @@ class GeneratorController extends BaseController {
         $h = static fn(string $s): string => htmlspecialchars($s, ENT_QUOTES);
 
         $out = '<style>';
-        $out .= '.ew-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}';
+        $out .= '.ew-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;}';
         // Keine eigene Schriftart: <textarea> rendert ohnehin dicktengleich, und
         // das Theme kennt keine Mono-Variable - eine eigene brächte den
         // Dark-Mode-/Markenabgleich durcheinander (siehe PluginThemingLintTest).
@@ -257,7 +257,10 @@ class GeneratorController extends BaseController {
         $out .= '.ew-hinweis{border-left:4px solid var(--border-color);padding:.75rem 1rem;margin:1rem 0;}';
         $out .= '.ew-warn{border-left-color:var(--warning-fg);}';
         $out .= '.ew-ok{border-left-color:var(--success-fg);}';
-        $out .= '@media (max-width:700px){.ew-grid{grid-template-columns:1fr;}}';
+        // Kein eigener Umbruchpunkt mehr (Addons#129): Das Raster oben ist
+        // auf repeat(auto-fit, minmax(...)) umgestellt und bricht von selbst
+        // um. Ein zweiter Satz Umbruchpunkte neben dem des Kerns waere genau
+        // die Doppelung, die dieses Issue beendet.
         $out .= '</style>';
 
         $out .= '<div class="card">';

@@ -157,7 +157,7 @@ class Plugin {
                 $html .= '<form method="POST" action="/plugin/titel-praemierungen/auszeichnungen/update" style="margin:0;">';
                 $html .= '<input type="hidden" name="csrf_token" value="' . $esc($csrfToken) . '">';
                 $html .= '<input type="hidden" name="id" value="' . $id . '">';
-                $html .= '<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">';
+                $html .= '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;">';
                 $html .= '<div class="form-group"><label for="tp_art_' . $id . '">Art</label>'
                     . '<select name="art" id="tp_art_' . $id . '" class="form-control" required>';
                 foreach (Plugin::ART_LABELS as $value => $label) {
@@ -197,7 +197,7 @@ class Plugin {
         $html .= '<form method="POST" action="/plugin/titel-praemierungen/auszeichnungen/store">';
         $html .= '<input type="hidden" name="csrf_token" value="' . $esc($csrfToken) . '">';
         $html .= '<input type="hidden" name="horse_id" value="' . $horseId . '">';
-        $html .= '<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">';
+        $html .= '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;">';
         $html .= '<div class="form-group"><label for="tp_art">Art</label>'
             . '<select name="art" id="tp_art" class="form-control" required>';
         foreach (Plugin::ART_LABELS as $value => $label) {
@@ -246,7 +246,7 @@ class Plugin {
 
         $html = '<div style="margin-top:0.5rem;">';
         $html .= '<h3 style="margin-bottom:0.5rem;">🏅 Titel &amp; Prämierungen</h3>';
-        $html .= '<table style="width:100%;border-collapse:collapse;">';
+        $html .= '<div class="tabelle-scroll"><table style="width:100%;border-collapse:collapse;">';
         $html .= '<thead><tr style="text-align:left;border-bottom:2px solid var(--border-color);">'
             . '<th style="padding:0.4rem;">Art</th><th style="padding:0.4rem;">Bezeichnung</th>'
             . '<th style="padding:0.4rem;">Jahr</th></tr></thead><tbody>';
@@ -264,7 +264,7 @@ class Plugin {
             }
         }
 
-        $html .= '</tbody></table></div>';
+        $html .= '</tbody></table></div></div>';
 
         $sections[] = $html;
         return $sections;

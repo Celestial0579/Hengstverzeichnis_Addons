@@ -566,7 +566,7 @@ class EmpfehlungController extends BaseController {
                 $content .= '<p class="muted">Für „' . $baseName . '" gibt es derzeit keine passenden Partner im Register.</p>';
             } else {
                 $content .= '<h2>Empfehlungen für „' . $baseName . '"</h2>';
-                $content .= '<table><thead><tr><th>#</th><th>Partner</th><th>Jahrgang</th>'
+                $content .= '<div class="tabelle-scroll"><table><thead><tr><th>#</th><th>Partner</th><th>Jahrgang</th>'
                     . '<th class="num">Fohlen-COI</th></tr></thead><tbody>';
                 $rank = 0;
                 foreach (array_slice($ranking, 0, $limit) as $row) {
@@ -587,7 +587,7 @@ class EmpfehlungController extends BaseController {
                     $content .= '<td class="num"><strong>' . $percent . ' %</strong></td>';
                     $content .= '</tr>';
                 }
-                $content .= '</tbody></table>';
+                $content .= '</tbody></table></div>';
                 if ($totalCandidates > count($ranking)) {
                     // Deckelungs-Hinweis (#69): Es wurde bewusst nicht der
                     // gesamte Bestand berechnet.

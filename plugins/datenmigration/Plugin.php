@@ -1346,14 +1346,14 @@ class MigrationController extends BaseController {
                 . $e(implode(', ', array_map([Exportauswahl::class, 'label'], $auswahl))) . '.</p>';
         }
 
-        $content .= '<table class="table"><tr><th></th><th>Archiv (Quelle)</th><th>Diese Instanz (Ziel)</th></tr>'
+        $content .= '<div class="tabelle-scroll"><table class="table"><tr><th></th><th>Archiv (Quelle)</th><th>Diese Instanz (Ziel)</th></tr>'
             . '<tr><td>Seite</td><td>' . $e($manifest['site_name'] ?? '?') . '</td><td>' . $e($local['site_name']) . '</td></tr>'
             . '<tr><td>Kern-Version</td><td>' . $e($manifest['core_version'] ?? '?') . '</td><td>' . $e($local['core_version']) . '</td></tr>'
             . '<tr><td>Erstellt</td><td>' . $e($manifest['created_at'] ?? '?') . '</td><td>-</td></tr>'
             . '<tr><td>Umfang</td><td>' . ($vollstaendig ? 'Vollarchiv' : 'Teilarchiv') . '</td><td>-</td></tr>'
-            . '<tr><td>Upload-Dateien</td><td>' . $e($manifest['uploads_count'] ?? '?') . '</td><td>-</td></tr></table>';
+            . '<tr><td>Upload-Dateien</td><td>' . $e($manifest['uploads_count'] ?? '?') . '</td><td>-</td></tr></table></div>';
 
-        $content .= '<h2>Datenbestand (Zeilen je Tabelle)</h2><table class="table">'
+        $content .= '<h2>Datenbestand (Zeilen je Tabelle)</h2><div class="tabelle-scroll"><table class="table">'
             . '<tr><th>Tabelle</th><th>Quelle</th><th>Ziel</th><th>Was geschieht</th></tr>';
         $tables = array_unique(array_merge(array_keys($manifest['tables'] ?? []), array_keys($local['tables'])));
         sort($tables);
@@ -1367,7 +1367,7 @@ class MigrationController extends BaseController {
             $content .= '<tr><td><code>' . $e($t) . '</code></td><td>' . $e($manifest['tables'][$t] ?? '-')
                 . '</td><td>' . $e($local['tables'][$t] ?? '-') . '</td><td>' . $wirkung . '</td></tr>';
         }
-        $content .= '</table>';
+        $content .= '</table></div>';
 
         if (!$vollstaendig) {
             foreach ($this->importRisiken($imArchiv, $local) as $r) {
