@@ -8,6 +8,37 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+### Neu
+
+- **Zehn Sprach-Addons** (`sprache-cs`, `sprache-da`, `sprache-fi`,
+  `sprache-fr`, `sprache-it`, `sprache-lb`, `sprache-nb`, `sprache-nl`,
+  `sprache-pl`, `sprache-sv`) — Framework#344. Der Kern bringt seit
+  `v0.9.0-beta.4` nur noch Deutsch und Englisch mit; jede weitere Sprache ist
+  ein eigenes Addon.
+
+  **Wer nicht auf Deutsch oder Englisch läuft, braucht ab dann das passende
+  Addon.** Der Kern sagt es von sich aus: Der Umschalter bietet keine Sprache
+  mehr an, die auf Deutsch zurückfiele, und Dashboard wie Systemeinstellungen
+  nennen die fehlende Sprache samt Addon-Slug.
+
+  Jedes Addon bringt **eine Datei** mit (`lang/core/<code>.php`) und sonst
+  nichts — keine Hooks, keine Routen, keine Berechtigungen, keine Tabellen.
+  Den Anzeigenamen liefert der Kern.
+
+  `tests/Unit/SprachAddonVollstaendigkeitTest.php` prüft jede Sprache gegen den
+  Schlüsselsatz des Kerns: fehlende Schlüssel, leere Werte und verlorene
+  Platzhalter. Ohne diese Prüfung verrottete eine Übersetzung unbemerkt —
+  fehlende Schlüssel fallen zur Laufzeit still auf Deutsch zurück, und eine
+  gemischtsprachige Seite sieht nicht nach einem Fehler aus.
+
+### Geändert
+
+- `PluginManifestTest` lässt für Sprach-Addons ausdrücklich zu, dass sie weder
+  `register()` noch `routes()` haben — und verlangt umgekehrt, dass sie es
+  **nicht** tun. Ein leeres `register()` nur zur Beruhigung des Tests wäre
+  schlimmer als die Ausnahme: Es sagt „hier passiert etwas", wo nichts
+  passiert.
+
 ### Entfernt
 
 - **Das Addon `galerie` gibt es nicht mehr** (Addons#116, Framework#339). Der

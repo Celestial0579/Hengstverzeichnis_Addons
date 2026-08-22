@@ -1,0 +1,11 @@
+{
+    "slug": "sprache-da",
+    "name": "Sprache: Dansk",
+    "version": "1.0.0",
+    "core_compatibility": ">=0.9.0-beta.4",
+    "core_supported_max": "0.9",
+    "description": "Ergänzt die Oberfläche um Dänisch (Dansk). Der Kern bringt seit v0.9.0 nur noch Deutsch und Englisch mit; jede weitere Sprache ist ein eigenes Addon. Keine Berechtigungen, keine Routen, keine Tabellen - nur eine Sprachdatei.",
+    "author": "Hengstverzeichnis_Addons",
+    "hooks": [],
+    "entry": "Plugin.php"
+}

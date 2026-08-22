@@ -141,6 +141,27 @@ class PluginManifestTest extends TestCase {
             "'{$fqcn}' darf keine verpflichtenden Konstruktor-Parameter haben - PluginManager instanziiert ohne Argumente."
         );
 
+        // Ein SPRACH-ADDON ist die eine begruendete Ausnahme (Framework#344).
+        //
+        // Es bringt eine Sprache mit und sonst nichts: keine Hooks, keine
+        // Routen, keine Berechtigungen. Der Kern erkennt sein Verzeichnis
+        // `lang/core/` von selbst - es taete also durchaus etwas Sichtbares,
+        // nur eben nicht ueber eine dieser beiden Methoden. Ein leeres
+        // register() nur zur Beruhigung dieses Tests waere schlimmer als die
+        // Ausnahme: Es sagt "hier passiert etwas", wo nichts passiert.
+        //
+        // Die Ausnahme haengt nicht am Namen, sondern am Inhalt: Nur wer
+        // wirklich eine Sprachdatei mitbringt, faellt darunter.
+        $sprachdateien = glob(self::PLUGINS_DIR . "/{$slug}/lang/core/*.php") ?: [];
+        if ($sprachdateien !== []) {
+            $this->assertFalse(
+                $reflection->hasMethod('register') || $reflection->hasMethod('routes'),
+                "'{$fqcn}' ist ein Sprach-Addon (lang/core/) und sollte NICHTS weiter tun - "
+                . 'weder Hooks noch Routen. Wer mehr will, baut ein zweites Addon.'
+            );
+            return;
+        }
+
         $this->assertTrue(
             $reflection->hasMethod('register') || $reflection->hasMethod('routes'),
             "'{$fqcn}' implementiert weder register() noch routes() - mindestens eines sollte etwas Sichtbares tun."
