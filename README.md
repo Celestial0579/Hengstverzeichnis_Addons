@@ -58,6 +58,7 @@ Danach unter **Admin → Plugins verwalten** (`/admin/plugins`) aktivieren.
   Erscheint nur, wenn die verknüpfte Deckstation veröffentlicht und ihre
   E-Mail-Adresse damit öffentlich sichtbar ist.
   (Uploads plus YouTube/Vimeo-Links) mit eigener Verwaltungsseite.
+- [`sprache-cs`](plugins/sprache-cs/README.md), [`sprache-da`](plugins/sprache-da/README.md), [`sprache-fi`](plugins/sprache-fi/README.md), [`sprache-fr`](plugins/sprache-fr/README.md), [`sprache-it`](plugins/sprache-it/README.md), [`sprache-lb`](plugins/sprache-lb/README.md), [`sprache-nb`](plugins/sprache-nb/README.md), [`sprache-nl`](plugins/sprache-nl/README.md), [`sprache-pl`](plugins/sprache-pl/README.md), [`sprache-sv`](plugins/sprache-sv/README.md) - je eine Oberflächensprache (Framework#344)
 - [`gesundheitstests`](plugins/gesundheitstests/README.md) - verwaltet
   Gesundheits-/Gentest-Befunde je Pferd; Dokumente liegen außerhalb des
   Webroots, öffentlich wird nur, was ausdrücklich freigegeben ist.
