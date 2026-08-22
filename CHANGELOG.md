@@ -8,6 +8,27 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+### Geändert
+
+- **`katalog-export` exportiert ein Geburtsdatum nur noch, wenn es
+  tagesgenau ist** (#156, Framework#379). Steht in
+  `horses.birth_date_precision` der Wert `year`, sind Monat und Tag
+  Platzhalter — in dieser Branche der 1. Januar, im Altbestand bei knapp der
+  Hälfte aller Pferde.
+
+  Der Kern zeigt in dem Fall nur noch das Jahr. Diese Datei wird per E-Mail
+  weitergereicht und in eine Tabellenkalkulation geladen; dort stand der Tag
+  dann als Tatsache, und zwar weiter weg von jeder Korrektur als die Seite,
+  von der er stammt.
+
+  Die Zelle bleibt **leer** statt das Jahr zu wiederholen: Genau so sieht die
+  Form aus, die der CSV-Import des Kerns als „nur das Jahr bekannt" annimmt
+  (leeres `birth_date`, gefülltes `birth_year`). Die Datei lässt sich damit
+  ohne Zeilenfehler zurückspielen.
+
+  `katalog-export` 1.2.0 → **1.3.0** und verlangt jetzt Kern `>=0.9.0` — ohne
+  die Spalte gibt es die Unterscheidung nicht.
+
 ## [0.9.0] – 2026-08-22
 
 Der geprüfte Gesamtstand zur Framework-Linie **0.9**. Dieser Abschnitt fasst
