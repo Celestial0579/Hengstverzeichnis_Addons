@@ -2,7 +2,7 @@
 
 Öffentliche Einstiegsseite **Zucht** (`/plugin/zucht-suche`), unter der sich
 die **Kontakte** des Verzeichnisses suchen lassen — nach Rolle, Name, Ort,
-Bundesland/Kanton, Land und Mitgliedsstatus.
+Bundesland/Kanton und Land.
 
 Bis dahin führte der Weg zu einem Kontakt immer über ein Pferd: Wer wissen
 wollte, welche Züchter es in einer Region gibt, hatte keinen Einstieg, obwohl
@@ -73,17 +73,23 @@ gelöschte** Pferde und stehen nur mit `horses.view` zur Verfügung — siehe
 - **Trefferliste**: `contacts WHERE is_published = 1 AND deleted_at IS NULL`,
   dazu die Bedingung des Rollenfilters. 50 Treffer je Seite (`?seite=…`); die
   Blätter-Links tragen die eingestellten Filter mit.
-- **Filter**: Name und Ort als Teilstringsuche, Rolle, Bundesland/Kanton, Land
-  und Mitgliedsstatus als Auswahllisten. Alle Werte gehen als **gebundene
+- **Filter**: Name und Ort als Teilstringsuche, Rolle, Bundesland/Kanton und
+  Land als Auswahllisten. Alle Werte gehen als **gebundene
   Parameter** in die Abfrage; `%` und `_` im Suchtext werden maskiert, damit
   sie als Zeichen gesucht und nicht als LIKE-Platzhalter ausgewertet werden.
   Die Auswahllisten zeigen den Bestand der ganzen Kontaktliste, unabhängig vom
   Rollenfilter — eine je Rolle gefilterte Auswahl zöge die abgeleiteten Rollen
   in jede Liste hinein, für einen Gewinn, den die Trefferliste ohnehin sofort
   zeigt.
-- **Mitgliedsstatus** gilt seit #336 für **jeden** Kontakt. Bis 0.7 gab es die
-  Spalte nur auf `persons`; der Filter war deshalb an den Züchter-Reiter
-  gebunden und wurde sonst verworfen.
+- **Den Filter „Mitgliedsstatus" gibt es seit v0.9.0 nicht mehr.** Er ist mit
+  Framework#349 ersatzlos entfallen, zusammen mit dem Feld im Kern: Freitext
+  ohne Vokabular, bedingungslos öffentlich — und „X ist kein Mitglied" ist eine
+  Aussage über einen Menschen. Die Angabe führt jetzt das Addon
+  `mitgliedsstatus` mit fester Werteliste und Freigabe **je Kontakt**
+  (Addons#132); eine Trefferliste, die ungefragt danach filtert und die Werte
+  in einer Spalte ausgibt, würde genau diese Freigabe umgehen. Ein altes
+  Lesezeichen mit `?mitglied=…` schadet nicht: Der Parameter wird nicht mehr
+  gelesen, die Suche liefert die Treffer ohne diese Einschränkung.
 - **Treffer** verlinken auf `/kontakt?id=`. `/person?id=` und `/station?id=`
   bestehen nur noch als dauerhafte Weiterleitung für Altbestände (aufgelöst
   über `contact_id_map`) — die Trefferliste kennt die neue Kennung und nimmt
@@ -131,7 +137,7 @@ Seit die Trennung `persons`/`breeding_stations` weggefallen ist, ist
 sich deshalb an die strengere der beiden alten Regeln (siehe
 `docs/kontaktliste-umstellung.md` im Kern) und fragt ausschließlich die
 immer-öffentlichen Spalten ab: `id`, `name`, `city`, `state`, `country`,
-`membership_status`, `is_breeder`.
+`is_breeder`.
 
 **E-Mail, Telefon, Mobil, Straße, Hausnummer, Anschrift, Ansprechpartner und
 `contact_info` werden nicht einmal abgefragt** — kein `SELECT *`, aus demselben
@@ -210,7 +216,7 @@ Millisekunden.
 
 `tests/Functional/ZuchtSuchePluginTest.php` spielt den Lebenszyklus gegen eine
 echte Instanz durch: aktivieren, Rollenfilter „Züchter" und „Deckstation",
-Orts- und Mitgliedsfilter, Verlinkung auf `/kontakt?id=`, der Verweis auf der
+Ortsfilter, Verlinkung auf `/kontakt?id=`, der Verweis auf der
 Kontaktseite **genau einmal** (die Doppelregistrierung aus #122), keine
 Kontaktdaten und keine PLZ in der Trefferliste, 404 ohne `contacts.view`,
 Rückfall auf „(alle)" ohne `horses.view`, und das Verschwinden von Route und

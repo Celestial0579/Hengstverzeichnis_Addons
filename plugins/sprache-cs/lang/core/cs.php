@@ -154,7 +154,6 @@ return [
     'station.horses_heading' => '🐴 Koně této připouštěcí stanice',
     'station.no_horses' => 'V rejstříku nejsou momentálně vedeni žádní koně této připouštěcí stanice.',
     'field.location' => 'Místo',
-    'field.membership_status' => 'Členský status',
     'person.is_breeder' => 'Chovatel',
     'person.not_found' => 'Požadovaná osoba neexistuje nebo byla z adresáře odstraněna.',
     'person.horses_heading' => '🐴 Koně této osoby',

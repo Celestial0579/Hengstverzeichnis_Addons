@@ -154,7 +154,6 @@ return [
     'station.horses_heading' => '🐴 Konie tej stacji ogierów',
     'station.no_horses' => 'Obecnie w rejestrze nie ma koni tej stacji ogierów.',
     'field.location' => 'Miejscowość',
-    'field.membership_status' => 'Status członkowski',
     'person.is_breeder' => 'Hodowca',
     'person.not_found' => 'Żądana osoba nie istnieje lub została usunięta z katalogu.',
     'person.horses_heading' => '🐴 Konie tej osoby',

@@ -229,7 +229,6 @@ final class Suchanfrage {
         public readonly string $ort,
         public readonly string $bundesland,
         public readonly string $land,
-        public readonly string $mitglied,
         public readonly int $seite,
     ) {}
 
@@ -245,17 +244,24 @@ final class Suchanfrage {
             $rolle = self::ROLLE_ALLE;
         }
 
-        // Der Mitgliedsstatus wird NICHT mehr an eine Rolle gebunden (#122):
-        // Bis 0.7 gab es die Spalte nur auf `persons`, also nur im
-        // Züchter-Reiter. Seit #336 ist sie ein Feld der gemeinsamen
-        // Kontaktliste und gilt für jeden Kontakt.
+        // Den Filter "Mitgliedsstatus" gab es hier bis v0.8. Er ist mit
+        // Framework#349 ERSATZLOS entfallen, zusammen mit dem Feld im Kern:
+        // Es war Freitext ohne Vokabular und bedingungslos öffentlich, und
+        // "X ist kein Mitglied" ist eine Aussage über einen Menschen. Die
+        // Angabe führt jetzt das Addon `mitgliedsstatus` mit fester
+        // Werteliste und Freigabe JE KONTAKT (Addons#132) - eine
+        // Trefferliste, die ungefragt danach filtert und die Werte in einer
+        // Spalte ausgibt, würde genau diese Freigabe umgehen.
+        //
+        // Ein alter Lesezeichen-Link mit `?mitglied=…` schadet nicht: Der
+        // Parameter wird nicht mehr gelesen, die Suche liefert dann die
+        // Treffer ohne diese Einschränkung.
         return new self(
             $rolle,
             self::text($eingabe['name'] ?? ''),
             self::text($eingabe['ort'] ?? ''),
             self::text($eingabe['bundesland'] ?? ''),
             self::text($eingabe['land'] ?? ''),
-            self::text($eingabe['mitglied'] ?? ''),
             self::seite($eingabe['seite'] ?? 1),
         );
     }
@@ -313,7 +319,6 @@ final class Suchanfrage {
             'ort' => $this->ort,
             'bundesland' => $this->bundesland,
             'land' => $this->land,
-            'mitglied' => $this->mitglied,
         ] as $schluessel => $wert) {
             if ($wert !== '') {
                 $query[$schluessel] = $wert;
@@ -347,7 +352,7 @@ final class Suchanfrage {
  * sich deshalb an die strengere der beiden alten Regeln (siehe
  * docs/kontaktliste-umstellung.md im Kern). Abgefragt werden ausschließlich
  * die immer-öffentlichen Spalten: id, name, city, state, country,
- * membership_status, is_breeder. E-Mail, Telefon, Mobil, Straße, Hausnummer,
+ * is_breeder. E-Mail, Telefon, Mobil, Straße, Hausnummer,
  * Anschrift, Ansprechpartner und contact_info kommen gar nicht erst an.
  *
  * Ausdrücklich AUCH NICHT die Postleitzahl: Die alte Stationsliste zeigte sie
@@ -377,7 +382,6 @@ class SucheController extends BaseController {
      */
     private const SQL_BUNDESLAENDER = "SELECT DISTINCT state FROM contacts WHERE is_published = 1 AND deleted_at IS NULL AND state IS NOT NULL AND state <> '' ORDER BY state ASC LIMIT 500";
     private const SQL_LAENDER = "SELECT DISTINCT country FROM contacts WHERE is_published = 1 AND deleted_at IS NULL AND country IS NOT NULL AND country <> '' ORDER BY country ASC LIMIT 500";
-    private const SQL_MITGLIEDSSTATUS = "SELECT DISTINCT membership_status FROM contacts WHERE is_published = 1 AND deleted_at IS NULL AND membership_status IS NOT NULL AND membership_status <> '' ORDER BY membership_status ASC LIMIT 500";
 
     /** Beschriftung der Rollen-Auswahl, zugleich die Reihenfolge im Formular. */
     private const ROLLEN_BESCHRIFTUNG = [
@@ -464,11 +468,6 @@ class SucheController extends BaseController {
             $wo[] = 'c.country = :land';
             $werte['land'] = $anfrage->land;
         }
-        if ($anfrage->mitglied !== '') {
-            $wo[] = 'c.membership_status = :mitglied';
-            $werte['mitglied'] = $anfrage->mitglied;
-        }
-
         return [implode(' AND ', $wo), $werte];
     }
 
@@ -540,7 +539,7 @@ class SucheController extends BaseController {
         // (docs/kontaktliste-umstellung.md, Lehre aus #293). Hier stehen
         // ausschließlich Spalten aus der Gruppe "öffentlich immer"; was nicht
         // dasteht, kann später niemand versehentlich ausgeben.
-        $sql = 'SELECT c.id, c.name, c.city, c.state, c.country, c.membership_status, c.is_breeder'
+        $sql = 'SELECT c.id, c.name, c.city, c.state, c.country, c.is_breeder'
             . ' FROM contacts c'
             . ' WHERE ' . $bedingung
             . ' ORDER BY c.name ASC, c.id ASC LIMIT :limit OFFSET :offset';
@@ -728,13 +727,6 @@ class SucheController extends BaseController {
             $this->werteliste(self::SQL_LAENDER),
             $anfrage->land
         );
-        // Gilt seit #336 für jeden Kontakt, nicht mehr nur für Personen.
-        $html .= self::auswahlfeld(
-            'mitglied',
-            'Mitgliedsstatus',
-            $this->werteliste(self::SQL_MITGLIEDSSTATUS),
-            $anfrage->mitglied
-        );
 
         $html .= '</div>';
         $html .= '<p><button type="submit" class="btn">Suchen</button> '
@@ -756,7 +748,6 @@ class SucheController extends BaseController {
         $html .= '<div class="tabelle-scroll"><table class="zucht-tabelle"><thead><tr>';
         $html .= '<th scope="col">Name</th><th scope="col">Ort</th>';
         $html .= '<th scope="col">Bundesland / Kanton</th><th scope="col">Land</th>';
-        $html .= '<th scope="col">Mitgliedsstatus</th>';
         if ($pferdezahlen !== null) {
             $html .= '<th scope="col">Pferde</th><th scope="col">Als Deckstation</th>';
         }
@@ -782,7 +773,6 @@ class SucheController extends BaseController {
             $html .= '<td>' . self::sicherOderStrich($zeile['city'] ?? '') . '</td>';
             $html .= '<td>' . self::sicherOderStrich($zeile['state'] ?? '') . '</td>';
             $html .= '<td>' . self::sicherOderStrich($zeile['country'] ?? '') . '</td>';
-            $html .= '<td>' . self::sicherOderStrich($zeile['membership_status'] ?? '') . '</td>';
             if ($pferdezahlen !== null) {
                 $html .= '<td>' . (int) ($pferdezahlen['zuordnung'][$id] ?? 0) . '</td>';
                 $html .= '<td>' . (int) ($pferdezahlen['station'][$id] ?? 0) . '</td>';

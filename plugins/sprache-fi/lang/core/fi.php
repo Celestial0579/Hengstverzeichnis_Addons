@@ -154,7 +154,6 @@ return [
     'station.horses_heading' => '🐴 Tämän oriaseman hevoset',
     'station.no_horses' => 'Tämän oriaseman hevosia ei ole tällä hetkellä rekisterissä.',
     'field.location' => 'Paikkakunta',
-    'field.membership_status' => 'Jäsenyystila',
     'person.is_breeder' => 'Kasvattaja',
     'person.not_found' => 'Pyydettyä henkilöä ei ole tai hänet on poistettu hakemistosta.',
     'person.horses_heading' => '🐴 Tämän henkilön hevoset',

@@ -154,7 +154,6 @@ return [
     'station.horses_heading' => '🐴 Heste på denne hingstestation',
     'station.no_horses' => 'Der er i øjeblikket ingen heste fra denne hingstestation i registret.',
     'field.location' => 'Sted',
-    'field.membership_status' => 'Medlemsstatus',
     'person.is_breeder' => 'Opdrætter',
     'person.not_found' => 'Den ønskede person findes ikke eller er fjernet fra fortegnelsen.',
     'person.horses_heading' => '🐴 Denne persons heste',

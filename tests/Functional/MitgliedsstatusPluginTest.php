@@ -58,9 +58,9 @@ class MitgliedsstatusPluginTest extends FunctionalTestCase {
         //    Freitextfeld des Kerns. Genau das ist die Ausgangslage, für die
         //    dieses Addon gebaut ist - ein Bestand, den jemand über Jahre
         //    unterschiedlich gepflegt hat.
-        $klar = $this->createContact($admin, "MSKlar-{$unique}", ['membership_status' => 'Mitglied']);
-        $variante = $this->createContact($admin, "MSVariante-{$unique}", ['membership_status' => 'nicht-mitglied']);
-        $unklar = $this->createContact($admin, "MSUnklar-{$unique}", ['membership_status' => 'Nichtmitglied NO']);
+        $klar = $this->kontaktMitBestandswert($admin, "MSKlar-{$unique}", 'Mitglied');
+        $variante = $this->kontaktMitBestandswert($admin, "MSVariante-{$unique}", 'nicht-mitglied');
+        $unklar = $this->kontaktMitBestandswert($admin, "MSUnklar-{$unique}", 'Nichtmitglied NO');
 
         $this->aktivieren($admin, true);
 
@@ -322,12 +322,12 @@ class MitgliedsstatusPluginTest extends FunctionalTestCase {
 
         // Ein Kontakt, der NACH der Übernahme entsteht - er hat deshalb keine
         // Zeile im Addon, obwohl das Freitextfeld des Kerns befüllt ist.
-        $spaet = $this->createContact($admin, "MSSpaet-{$unique}", ['membership_status' => 'Mitglied']);
+        $spaet = $this->kontaktMitBestandswert($admin, "MSSpaet-{$unique}", 'Mitglied');
         $this->assertNull($this->zeile($spaet), 'Vorbedingung: für diesen Kontakt gibt es noch keine Zeile.');
 
         // Und ein Kontakt mit einem unklaren Wortlaut, den ein Mensch von Hand
         // entscheidet.
-        $entschieden = $this->createContact($admin, "MSEntschieden-{$unique}", ['membership_status' => 'Nichtmitglied NO']);
+        $entschieden = $this->kontaktMitBestandswert($admin, "MSEntschieden-{$unique}", 'Nichtmitglied NO');
         $this->statusSpeichern($admin, $entschieden, 'nichtmitglied', false);
         $this->assertZeile($entschieden, 'nichtmitglied', false, '', false);
 
@@ -373,6 +373,28 @@ class MitgliedsstatusPluginTest extends FunctionalTestCase {
 
     private function db(): PDO {
         return Database::getInstance();
+    }
+
+    /**
+     * Ein Kontakt mit einem BESTANDSWERT im Freitextfeld des Kerns - die
+     * Ausgangslage, für die dieses Addon gebaut ist.
+     *
+     * Der Wert geht direkt in die Spalte, nicht durch das Formular. Seit
+     * Framework#349 nimmt der Kern `membership_status` nicht mehr entgegen:
+     * Ein POST mit dem Feld läuft durch, die Spalte bleibt NULL, und die
+     * Übernahme fände nichts vor. Genau so sieht aber eine Installation aus,
+     * die von v0.8 kommt - der Wert steht in der Tabelle, weil ihn jemand vor
+     * dem Update eingetragen hat, und die Spalte bleibt bis zum Release nach
+     * v0.9.0 stehen, damit diese Übernahme sie noch lesen kann.
+     */
+    private function kontaktMitBestandswert(HttpClient $admin, string $name, string $wert): int {
+        $id = $this->createContact($admin, $name);
+
+        $this->db()->prepare('UPDATE contacts SET membership_status = ? WHERE id = ?')
+            ->execute([$wert, $id]);
+        $this->assertSame($wert, $this->kernFreitext($id), "Bestandswert fuer '{$name}' wurde nicht gesetzt.");
+
+        return $id;
     }
 
     private function aktivieren(HttpClient $admin, bool $an): void {
