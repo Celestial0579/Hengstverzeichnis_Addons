@@ -8,6 +8,19 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+## [0.9.0-beta.5] – 2026-08-23
+
+> **Warum Beta und nicht 0.9.0.** Ein `v0.9.0` war am 22.08. kurzzeitig
+> getaggt und ist zurückgezogen worden — die Freigabe war nicht abgesprochen
+> (Framework#402). Null Downloads, keine Instanz betroffen.
+
+Der geprüfte Gesamtstand zur Framework-Linie **0.9**. Dieser Abschnitt fasst
+auch zusammen, was zwischendurch als `v0.9.0-beta.3` und `v0.9.0-beta.4`
+herausging — für beide wurde seinerzeit kein eigener Abschnitt angelegt.
+
+> **Setzt Kern `v0.9.0` voraus**, wo die Addons an den neuen
+> Erweiterungspunkten hängen. Alle Manifeste tragen `core_supported_max: 0.9`.
+
 ### Geändert
 
 - **`katalog-export` exportiert ein Geburtsdatum nur noch, wenn es
@@ -28,15 +41,6 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
   `katalog-export` 1.2.0 → **1.3.0** und verlangt jetzt Kern `>=0.9.0` — ohne
   die Spalte gibt es die Unterscheidung nicht.
-
-## [0.9.0] – 2026-08-22
-
-Der geprüfte Gesamtstand zur Framework-Linie **0.9**. Dieser Abschnitt fasst
-auch zusammen, was zwischendurch als `v0.9.0-beta.3` und `v0.9.0-beta.4`
-herausging — für beide wurde seinerzeit kein eigener Abschnitt angelegt.
-
-> **Setzt Kern `v0.9.0` voraus**, wo die Addons an den neuen
-> Erweiterungspunkten hängen. Alle Manifeste tragen `core_supported_max: 0.9`.
 
 ### Geändert
 
