@@ -8,6 +8,25 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+### Tests
+
+- **Pferd des Tages: der Rückzugsfilter im Abrufpfad** (#159). Eine
+  getroffene Tageswahl bleibt festgehalten; dass ein danach zurückgezogenes
+  Pferd trotzdem verschwindet, leistet allein die Sichtbarkeitsbedingung im
+  LEFT JOIN von `gespeichert()`. Das Addon hängt an keinem Hook, der beim
+  Depublizieren oder Löschen anspringen würde, und der Fremdschlüssel räumt
+  nur beim endgültigen Löschen auf — ein Pferd im Papierkorb behält seine
+  Wahl-Zeile.
+
+  Vom Befund war die eine Hälfte bereits abgedeckt: Der Lebenszyklus-Test
+  prüft das Depublizieren, allerdings nur gegen eine redaktionelle Vorgabe.
+  Neu geprüft werden jetzt der **Papierkorb** — streicht man
+  `AND h.deleted_at IS NULL`, blieb die gesamte Suite bisher grün — und die
+  **automatisch getroffene** Tageswahl. Dazu, dass die Wahl-Zeile den Rückzug
+  überlebt und nach dem Wiederherstellen dasselbe Pferd zurückkommt: Ein
+  zweiter Kandidat dient als Zeuge, damit eine unbemerkte Neuwahl auffällt
+  statt den Test grün zu lassen.
+
 ## [0.9.0-beta.5] – 2026-08-23
 
 > **Warum Beta und nicht 0.9.0.** Ein `v0.9.0` war am 22.08. kurzzeitig
