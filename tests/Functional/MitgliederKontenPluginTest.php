@@ -32,16 +32,41 @@ class MitgliederKontenPluginTest extends FunctionalTestCase {
      * der Kern bindet sie beim Booten des Plugins per require_once ein. Dieser
      * Test ruft sie zusaetzlich DIREKT auf (mit einer Attrappe des
      * CiviCRM-Zugangs), und dafuer muessen sie auch im PHPUnit-Prozess da
-     * sein. Geladen wird die Fassung, die tests/bootstrap.php nach
-     * vendor/.../plugins kopiert hat - also genau die, die auch der
-     * Subprozess sieht.
+     * sein.
+     *
+     * GELADEN WIRD DIE REPO-FASSUNG, NICHT DIE VENDORIERTE KOPIE (#160).
+     * Inhaltlich sind beide gleich - tests/bootstrap.php spiegelt plugins/
+     * vor jedem Lauf nach vendor/.../plugins, und zwar Datei fuer Datei. Fuer
+     * `require_once` sind es aber ZWEI Pfade und damit zwei Ladevorgaenge
+     * derselben Klasse.
+     *
+     * Das ist nicht theoretisch: tests/Manifest/PluginManifestTest laedt die
+     * Entry-Datei JEDES Plugins aus plugins/ (loadPluginClass()), und
+     * Plugin.php bindet CiviApi.php per __DIR__ ein - also aus dem
+     * Repo-Verzeichnis. Wurde hier anschliessend die vendorierte Fassung
+     * verlangt, loeste ihr eigenes __DIR__ auf den anderen Pfad auf, und PHP
+     * brach mit "Cannot redeclare Plugin\MitgliederKonten\CiviApi" ab.
+     *
+     * In der CI fiel das nie auf, weil tests.yml die drei Suiten in DREI
+     * getrennten Prozessen faehrt. `composer test` faehrt sie in EINEM - und
+     * genau so ruft framework-update.yml sie auf. Der woechentliche Lauf
+     * gegen Framework-main stand deshalb seit dem 25.08. still und meldete
+     * "Addons brechen gegen Framework-main", obwohl gar nichts geprueft
+     * worden war.
      */
     public static function setUpBeforeClass(): void {
         parent::setUpBeforeClass();
 
-        $eintrag = FRAMEWORK_VENDOR_DIR . '/plugins/' . self::SLUG . '/Plugin.php';
-        self::assertFileExists($eintrag, 'Das Addon wurde nicht in die Framework-Instanz kopiert.');
+        $eintrag = __DIR__ . '/../../plugins/' . self::SLUG . '/Plugin.php';
+        self::assertFileExists($eintrag, "Entry-Datei des Addons '" . self::SLUG . "' fehlt.");
         require_once $eintrag;
+
+        /* Die Kopie muss trotzdem dasein - der `php -S`-Subprozess laedt sie,
+           und ohne sie waere jede Zusicherung ueber HTTP gegenstandslos. */
+        self::assertFileExists(
+            FRAMEWORK_VENDOR_DIR . '/plugins/' . self::SLUG . '/Plugin.php',
+            'Das Addon wurde nicht in die Framework-Instanz kopiert.'
+        );
     }
 
     /** @var array<int, string> Benutzernamen, die wieder weg muessen. */

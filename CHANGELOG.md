@@ -8,6 +8,36 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+### Behoben
+
+- **Der wöchentliche Lauf gegen Framework-main stand still** (#160). Seit dem
+  25.08. meldete er „Addons brechen gegen den aktuellen Framework-main" und
+  liess `composer.lock` unangetastet. Tatsächlich war kein einziger Test gegen
+  den neuen Kern gelaufen: `composer test` brach vorher mit
+  `Cannot redeclare class Plugin\MitgliederKonten\CiviApi` ab.
+
+  Ursache waren zwei Ladewege für dieselbe Klasse. `tests/bootstrap.php`
+  spiegelt `plugins/` vor jedem Lauf nach `vendor/…/framework/plugins/`; die
+  Dateien sind danach inhaltlich gleich, für `require_once` aber zwei Pfade.
+  `PluginManifestTest` lädt die Entry-Datei jedes Plugins aus `plugins/`,
+  `MitgliederKontenPluginTest` lud sie anschliessend aus der Kopie.
+
+  **Gesehen hat es niemand, weil die CI die drei Suiten in drei getrennten
+  Prozessen fuhr** — dort begegnen sich die beiden Ladewege nie. `composer
+  test` fährt sie in einem, und genau so ruft `framework-update.yml` sie auf.
+  Die CI meldete grün, während der Lauf, auf den es ankam, gar nicht erst
+  startete.
+
+  Behoben an drei Stellen: der Test lädt die Repo-Fassung wie jeder andere;
+  ein Wächter in der Manifest-Suite lässt kein Laden aus dem vendorierten
+  `plugins/`-Verzeichnis mehr durch (und nennt Datei und Zeile); und die CI
+  fährt jetzt denselben Ein-Prozess-Aufruf wie der wöchentliche Lauf.
+
+- **`composer.lock` auf den aktuellen Framework-Stand gehoben**
+  (`56a61ca` → `b15c434`). Die Suite ist dagegen vollständig grün: 929 Tests,
+  5.276 Zusicherungen, 26 übersprungen. Die Addons brachen also nie gegen
+  Framework-main — der Befund in #160 war die Suite selbst.
+
 ### Tests
 
 - **Pferd des Tages: der Rückzugsfilter im Abrufpfad** (#159). Eine
