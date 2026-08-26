@@ -367,6 +367,155 @@ class PferdDesTagesPluginTest extends FunctionalTestCase {
      *
      * @param array<string, string> $felder
      */
+    /**
+     * AD#159: Der Rückzugsfilter im ABRUFPFAD - beide Hälften.
+     *
+     * `gespeichert()` trägt die Sichtbarkeitsbedingung
+     * (`h.is_published = 1 AND h.deleted_at IS NULL`) bewusst in der
+     * ON-Klausel eines LEFT JOIN: Die Wahl bleibt festgehalten, das Pferd
+     * verschwindet trotzdem. Nötig ist das, weil die Wahl-Zeile eigenständig
+     * ist - das Addon hängt an keinem Hook, der beim Depublizieren oder
+     * Löschen anspringen würde, und der Fremdschlüssel räumt nur beim
+     * ENDGÜLTIGEN Löschen auf. Ein Pferd im Papierkorb behält seine Zeile.
+     *
+     * WAS DER LEBENSZYKLUS-TEST DAVON SCHON ABDECKT: das Depublizieren, und
+     * das auch nur gegen eine redaktionelle VORGABE (`fest = 1`). Ungeprüft
+     * blieben bisher die zweite Hälfte der Bedingung - der Papierkorb - und
+     * die automatisch getroffene Tageswahl (`fest = 0`). Streicht man heute
+     * `AND h.deleted_at IS NULL`, bleibt die gesamte Suite grün, und ein
+     * Pferd aus dem Papierkorb steht bis Mitternacht auf der öffentlichen
+     * Startseite.
+     *
+     * DER ZWEITE KANDIDAT IST DER ZEUGE. Liefe nach dem Wegnehmen doch eine
+     * Neuwahl an, stünde ER im Kasten - und der Test fällt, statt aus dem
+     * falschen Grund grün zu sein. Mit nur einem Pferd wäre "Kasten weg"
+     * mehrdeutig.
+     */
+    public function testDieFestgehalteneTageswahlZiehtSichZurueck(): void {
+        $admin = $this->authenticatedClient();
+        $this->pluginAktivieren($admin);
+
+        /* Von der eigenen Verwaltungsseite: bricht hart ab, wenn das Addon
+           nicht aktiv ist (404, kein Formular) - statt später mit leerem Token
+           in einem 403 zu landen, das wie eine Abweisung aussieht. */
+        $csrf = $this->csrfTokenFrom($admin, self::SEITE);
+
+        $unique = uniqid();
+        $farbe = "PdTRueckzug-{$unique}";
+        $nameA = "PdTRueckzugAlpha-{$unique}";
+        $nameB = "PdTRueckzugBeta-{$unique}";
+
+        $idA = $this->createHorse($admin, $nameA, ['color' => $farbe, 'birth_year' => '2015']);
+        $idB = $this->createHorse($admin, $nameB, ['color' => $farbe, 'birth_year' => '2016']);
+        $this->assertGreaterThan(0, $idB);
+
+        $this->kriterienSetzen($admin, $csrf, ['farbe' => $farbe]);
+        $this->neuWaehlen($admin, $csrf);
+
+        $heute = date('Y-m-d');
+
+        // 1. Der Anwendungsweg schreibt die Zeile selbst: Der erste
+        //    Gast-Aufruf trifft die Wahl - automatisch, nicht als Vorgabe.
+        $vorher = $this->newClient()->get('/');
+        $this->assertSame(200, $vorher->statusCode);
+        $kasten = $this->kasten($vorher->body);
+        $this->assertNotNull($kasten, 'Ohne einen sichtbaren Kasten prüft der Rest dieses Tests nichts.');
+        $gewaehlt = $this->welchesPferd($kasten, [$nameA => $idA, $nameB => $idB]);
+        $zeuge = $gewaehlt['name'] === $nameA ? $nameB : $nameA;
+        $this->assertSame($gewaehlt['id'], $this->wahlZeile($heute),
+            'Die Tageswahl muss festgehalten sein - sonst prüft der Test die Kandidatensuche '
+            . 'statt des Abrufpfads.');
+
+        // 2. Depublizieren, gegen die AUTOMATISCHE Wahl.
+        $this->veroeffentlichung($admin, $gewaehlt['id'], false);
+        $ohne = $this->newClient()->get('/');
+        $this->assertSame(200, $ohne->statusCode, 'Ein 500er sähe aus wie ein verschwundener Kasten.');
+        $this->assertNull($this->kasten($ohne->body),
+            'Ein depubliziertes Tagespferd muss den Kasten ganz verschwinden lassen.');
+        $this->assertStringNotContainsString($gewaehlt['name'], $ohne->body,
+            'Der Name des zurückgezogenen Pferdes gehört in keine öffentliche Antwort.');
+        $this->assertSame($gewaehlt['id'], $this->wahlZeile($heute),
+            'Die Wahl-Zeile bleibt stehen - der Rückzug ist ein Anzeige-, kein Schreibvorgang.');
+
+        // 3. Wieder veröffentlichen: DASSELBE Pferd kommt zurück. Wäre
+        //    zwischendurch neu gewählt worden, stünde hier der Zeuge.
+        $this->veroeffentlichung($admin, $gewaehlt['id'], true);
+        $zurueck = (string)$this->kasten($this->newClient()->get('/')->body);
+        $this->assertStringContainsString($gewaehlt['name'], $zurueck);
+        $this->assertStringNotContainsString($zeuge, $zurueck,
+            'Der Rückzug darf die festgehaltene Wahl nicht durch eine neue ersetzen.');
+
+        // 4. Papierkorb - die zweite Hälfte der Bedingung, bisher nirgends
+        //    geprüft. Soft-Delete: die Wahl-Zeile überlebt.
+        $this->inDenPapierkorb($admin, $gewaehlt['id']);
+        $this->assertSame($gewaehlt['id'], $this->wahlZeile($heute),
+            'Der Papierkorb ist ein Soft-Delete - die Wahl-Zeile muss stehen bleiben, sonst '
+            . 'prüft der Schritt darunter eine gar nicht mehr vorhandene Wahl.');
+
+        $papierkorb = $this->newClient()->get('/');
+        $this->assertSame(200, $papierkorb->statusCode);
+        $this->assertNull($this->kasten($papierkorb->body),
+            'Ein Pferd im Papierkorb darf nicht bis Mitternacht auf der Startseite stehen.');
+        $this->assertStringNotContainsString($gewaehlt['name'], $papierkorb->body);
+
+        // 5. Zurückholen: wieder dasselbe Pferd.
+        $this->ausDemPapierkorb($admin, $gewaehlt['id']);
+        $nachher = (string)$this->kasten($this->newClient()->get('/')->body);
+        $this->assertStringContainsString($gewaehlt['name'], $nachher);
+        $this->assertStringNotContainsString($zeuge, $nachher);
+
+        /* 6. Aufräumen. Die Datenbank ist über die ganze Suite geteilt und das
+              Addon bleibt aktiv - ohne diesen Schritt stünde dieses Pferd in
+              jeder späteren Testklasse auf der Startseite. Kriterien auf eine
+              Farbe, die es nicht gibt, dann die heutige Zeile neu wählen. */
+        $this->kriterienSetzen($admin, $csrf, ['farbe' => "PdTNiemals-{$unique}"]);
+        $this->neuWaehlen($admin, $csrf);
+        $this->assertNull($this->kasten($this->newClient()->get('/')->body),
+            'Dieser Lauf darf keiner späteren Testklasse ein Pferd des Tages hinterlassen.');
+    }
+
+    /** Idempotent - der Lebenszyklus-Test lässt das Addon aktiv zurück. */
+    private function pluginAktivieren(HttpClient $admin): void {
+        $admin->post('/admin/plugins/toggle', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'slug' => self::SLUG,
+            'enable' => '1',
+        ]);
+        $this->assertSame(200, $admin->get('/admin')->statusCode);
+    }
+
+    /** Was steht heute in der Wahl-Tabelle? `null`, wenn nichts (oder NULL). */
+    private function wahlZeile(string $datum): ?int {
+        $stmt = \App\Database::getInstance()->prepare(
+            'SELECT horse_id FROM `plugin_pferd_des_tages_wahl` WHERE datum = ?'
+        );
+        $stmt->execute([$datum]);
+        $wert = $stmt->fetchColumn();
+
+        return $wert === false || $wert === null ? null : (int)$wert;
+    }
+
+    private function inDenPapierkorb(HttpClient $admin, int $horseId): void {
+        $liste = $admin->get('/admin/horses');
+        $antwort = $admin->post('/admin/horses/delete', [
+            'csrf_token' => $liste->formField('csrf_token') ?? '',
+            'id' => (string)$horseId,
+        ]);
+        $this->assertSame('/admin/horses?success=deleted', $antwort->location(),
+            "Papierkorb-Verschieben fehlgeschlagen, Body: {$antwort->body}");
+    }
+
+    private function ausDemPapierkorb(HttpClient $admin, int $horseId): void {
+        $trash = $admin->get('/admin/trash');
+        $antwort = $admin->post('/admin/trash/restore', [
+            'csrf_token' => $trash->formField('csrf_token') ?? '',
+            'type' => 'horse',
+            'id' => (string)$horseId,
+        ]);
+        $this->assertSame('/admin/trash?success=restored', $antwort->location(),
+            "Wiederherstellen fehlgeschlagen, Body: {$antwort->body}");
+    }
+
     private function kriterienSetzen(HttpClient $admin, string $csrf, array $felder): void {
         $antwort = $admin->post(self::SEITE . '/kriterien', array_merge([
             'csrf_token' => $csrf,
