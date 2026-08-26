@@ -122,7 +122,26 @@ jobs:
             FLUSH PRIVILEGES;
           "
 
-      - name: Run Functional tests
+      # ALLE SUITEN IN EINEM PROZESS - und genau das ist der Punkt (#160).
+      #
+      # Bis hierher lief `composer test:functional`, also nur eine Suite. Der
+      # Manifest-Job daneben fuhr Manifest und Unit in einem ZWEITEN Prozess.
+      # Drei Suiten, zwei Prozesse, und dazwischen eine Fehlerklasse, die
+      # keiner von beiden sehen konnte: Laedt eine Suite eine Plugin-Datei aus
+      # plugins/ und eine andere dieselbe Klasse aus der vendorierten Kopie,
+      # bricht PHP mit "Cannot redeclare class" ab - aber nur, wenn sie sich im
+      # selben Prozess begegnen.
+      #
+      # `framework-update.yml` ruft `composer test` auf und faehrt sie deshalb
+      # zusammen. Der woechentliche Lauf gegen Framework-main stand daran ab
+      # dem 25.08. still und meldete "Addons brechen gegen Framework-main",
+      # obwohl kein einziger Test gegen den neuen Kern gelaufen war - waehrend
+      # diese CI gruen meldete.
+      #
+      # Seither ist es derselbe Aufruf wie dort. Die zusaetzlichen Manifest-
+      # und Unit-Tests kosten hier wenige Sekunden; sie laufen im anderen Job
+      # weiterhin einzeln, weil dessen Name ein Pflicht-Check ist.
+      - name: Run full suite (single process)
         env:
           DB_HOST: 127.0.0.1
           DB_PORT: "3306"
@@ -135,4 +154,4 @@ jobs:
           ADMIN_USERNAME: e2eaddonadmin
           ADMIN_EMAIL: e2e-addon-admin@example.com
           ADMIN_PASSWORD: FunctionalTest123!
-        run: composer test:functional
+        run: composer test
