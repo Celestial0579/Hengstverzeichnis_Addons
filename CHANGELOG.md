@@ -8,6 +8,18 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+### Behoben
+
+- **Die Composer-Zeitgrenze vorsorglich angehoben** (Framework#424). Composer
+  bricht Kindprozesse nach 300 Sekunden ab. Im Framework hat die Suite diese
+  Grenze erreicht und einen nächtlichen Lauf als „gescheitert" gemeldet, ohne
+  dass ein Test fehlgeschlagen wäre.
+
+  Hier zählt die Grenze seit #160 stärker: Die CI fährt jetzt `composer test`,
+  also alle drei Suiten in **einem** Prozess — die 300 Sekunden gelten damit
+  für den gesamten Lauf statt je Suite. `config.process-timeout` steht
+  deshalb auch hier auf 1800.
+
 ## [0.9.0] – 2026-08-27
 
 **Der Addon-Stand zur Kern-Freigabe v0.9.0.** Alle 36 Addons sind gegen den
