@@ -8,7 +8,40 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+## [0.9.0] – 2026-08-27
+
+**Der Addon-Stand zur Kern-Freigabe v0.9.0.** Alle 36 Addons sind gegen den
+freigegebenen Kern geprüft; keines brauchte eine Anpassung seiner
+Kompatibilitätsgrenzen — `core_supported_max` steht überall bereits auf `0.9`.
+
+> **Warum dieses Release nötig ist, auch ohne neue Funktion:** Der
+> Addon-Katalog des Kerns überspringt Entwürfe und Vorabversionen
+> bedingungslos und verlangt ein Tag der Form `vX.Y.Z`. Für die Kern-Linie 0.9
+> gab es bisher nur Vorabversionen — die automatische Addon-Phase eines
+> Kern-Updates hätte damit auf jeder Installation verweigert. Zu jeder
+> Kern-Freigabe ohne Suffix gehört ein Addons-Release ohne Suffix.
+
+### Angepasst an den Kern
+
+- **Die Hook-Aliasse `person.*` und `station.*` sind im Kern entfallen**
+  (Framework#347). Kein Addon dieses Repos hat sie je registriert — betroffen
+  waren nur Beschreibungstexte: Das Lehrbeispiel `beispiel-erweiterungspunkte`
+  führte die acht Aliasse in seiner Ausnahmeliste, und `zucht-suche`
+  begründete in seiner README, warum es sie bewusst nicht registriert. Beides
+  ist nachgezogen.
+
+  Die Ausnahmeliste des Lehrbeispiels ist damit **leer** — und das ist der
+  gute Zustand: Es belegt jetzt jeden Erweiterungspunkt, den der Kern hat.
+  Der Abdeckungstest sichert das ausdrücklich zu, auch für den leeren Fall;
+  sonst liefe er ohne eine einzige Prüfung durch.
+
 ### Behoben
+
+- **Der Abdeckungstest führte eine Kern-Stelle, die es nicht mehr gibt.** Er
+  kennt eine Liste von Aufrufen, deren Hook-Name erst zur Laufzeit entsteht —
+  dort stand die Methode, die jedes Kontakt-Ereignis dreifach auslöste. Sie
+  ist mit dem Kern-Umbau verschwunden. Der Test hat das selbst gemeldet und
+  den Eintrag verlangt; genau dafür ist die Gegenrichtung dieser Prüfung da.
 
 - **Der wöchentliche Lauf gegen Framework-main stand still** (#160). Seit dem
   25.08. meldete er „Addons brechen gegen den aktuellen Framework-main" und
@@ -37,6 +70,20 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   (`56a61ca` → `b15c434`). Die Suite ist dagegen vollständig grün: 929 Tests,
   5.276 Zusicherungen, 26 übersprungen. Die Addons brachen also nie gegen
   Framework-main — der Befund in #160 war die Suite selbst.
+
+### Dokumentation
+
+- **Das README verschwieg sieben von 36 Addons** und schleppte einen Satzrest
+  eines gelöschten Eintrags mit. Nachgetragen sind `titel-praemierungen`,
+  `pferd-des-tages`, `plausibilitaetspruefung`, `mitgliedsstatus`,
+  `mitglieder-konten`, `embed-widget` und `datenmigration`.
+
+- **`docs/releasing.md` behauptete, das Framework falle auf den Branch-Stand
+  zurück**, solange zu einer Kern-Linie kein Release existiert. Das stimmt
+  seit Framework#212 nicht mehr: Die automatischen Addon-Updates verweigern
+  dann, statt einem veränderlichen HEAD zu folgen — nur der Store-Install als
+  bewusste Admin-Aktion darf das. Die falsche Zusage war genau der Grund,
+  warum eine fehlende Release-Marke leicht als harmlos durchgeht.
 
 ### Tests
 

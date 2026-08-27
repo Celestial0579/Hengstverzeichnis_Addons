@@ -57,7 +57,38 @@ Danach unter **Admin → Plugins verwalten** (`/admin/plugins`) aktivieren.
   der Pferde-Detailseite, sendet direkt an die hinterlegte Deckstation.
   Erscheint nur, wenn die verknüpfte Deckstation veröffentlicht und ihre
   E-Mail-Adresse damit öffentlich sichtbar ist.
-  (Uploads plus YouTube/Vimeo-Links) mit eigener Verwaltungsseite.
+- [`titel-praemierungen`](plugins/titel-praemierungen/README.md) - erfasst
+  Titel, Prämierungen und sportliche Erfolge strukturiert je Pferd (Art,
+  Bezeichnung, Jahr, Kommentar) und zeigt sie auf der öffentlichen Detailseite.
+- [`pferd-des-tages`](plugins/pferd-des-tages/README.md) - hebt auf der
+  Startseite täglich ein veröffentlichtes Pferd hervor. Die Wahl wird je
+  Kalendertag genau einmal getroffen und steht für alle Besucher gleich; die
+  Grundmenge ist einstellbar, einzelne Pferde lassen sich ausnehmen oder
+  redaktionell vorgeben.
+- [`plausibilitaetspruefung`](plugins/plausibilitaetspruefung/README.md) -
+  prüft den Bestand auf Widersprüche (Elternteil jünger als das Fohlen,
+  Vater = Mutter, Zeitraum nach dem Todesjahr, fehlende Lebensnummer).
+  Blockierende Funde verhindern die Veröffentlichung; geprüfte Einzelfälle
+  lassen sich mit Begründung abhaken.
+- [`mitgliedsstatus`](plugins/mitgliedsstatus/README.md) - führt
+  Mitglied/Nichtmitglied je Kontakt als eigenes Feld mit fester Werteliste,
+  nachdem der Kern das Freitextfeld entfernt hat (Framework#349). Übernimmt
+  Bestandswerte bei der Installation und schaltet die öffentliche Anzeige je
+  Kontakt frei (Vorgabe: nicht öffentlich).
+- [`mitglieder-konten`](plugins/mitglieder-konten/README.md) - legt
+  Benutzerkonten für Verbandsmitglieder aus einer CiviCRM-Instanz an; endet
+  eine Mitgliedschaft, sperrt der tägliche Lauf das Konto. CiviCRM ist
+  ausschliesslich die Quelle dafür, WER ein Konto bekommt - kein
+  Datenabgleich darüber hinaus.
+- [`embed-widget`](plugins/embed-widget/README.md) - erzeugt einen fertigen
+  iframe-Schnipsel, mit dem sich der öffentliche Katalog - optional
+  vorgefiltert - auf einer fremden Website einbetten lässt, und prüft dabei,
+  ob die Domain-Freigabe des Kerns das überhaupt zulässt.
+- [`datenmigration`](plugins/datenmigration/README.md) - Umzug einer Instanz
+  auf eine andere: Export von Datenbank, Uploads und Manifest als ein Archiv
+  mit Auswahl, was mitgeht (Konten und Zugangsdaten bleiben per Vorgabe
+  zurück), und geprüfter Import auf der Zielinstanz mit Versionsabgleich,
+  Vorschau und Sicherungs-Dump vor dem Anwenden.
 - [`sprache-cs`](plugins/sprache-cs/README.md), [`sprache-da`](plugins/sprache-da/README.md), [`sprache-fi`](plugins/sprache-fi/README.md), [`sprache-fr`](plugins/sprache-fr/README.md), [`sprache-it`](plugins/sprache-it/README.md), [`sprache-lb`](plugins/sprache-lb/README.md), [`sprache-nb`](plugins/sprache-nb/README.md), [`sprache-nl`](plugins/sprache-nl/README.md), [`sprache-pl`](plugins/sprache-pl/README.md), [`sprache-sv`](plugins/sprache-sv/README.md) - je eine Oberflächensprache (Framework#344)
 - [`gesundheitstests`](plugins/gesundheitstests/README.md) - verwaltet
   Gesundheits-/Gentest-Befunde je Pferd; Dokumente liegen außerhalb des

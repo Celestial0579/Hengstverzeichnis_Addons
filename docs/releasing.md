@@ -18,8 +18,19 @@ offizielle Repo den **besten Release-Tag zur laufenden Kern-Linie** statt
 des `main`-HEAD (Framework#197). Ein halb fertiger Zwischenstand auf `main`
 kann damit nie auf einer Produktivinstanz landen - und die Frage „welcher
 Addons-Stand passt zu Framework X.Y?" hat genau eine benannte, getestete
-Antwort. Solange zu einer Kern-Linie (noch) kein Release existiert, fällt
-das Framework auf den Branch-Stand zurück.
+Antwort.
+
+**Solange zu einer Kern-Linie kein Release OHNE Vorabsuffix existiert, gibt es
+für sie keinen Addon-Katalog.** Der Kern überspringt Entwürfe und
+Vorabversionen bedingungslos (`GithubAddonRepository::selectBestReleaseTagForCoreLine()`)
+und verlangt ein Tag der Form `vX.Y.Z`. Findet er keines, verweigern die
+automatischen Addon-Updates — sie fallen ausdrücklich **nicht** auf den
+Branch-Stand zurück, denn ein veränderlicher HEAD ist keine geprüfte Fassung
+(Framework#212). Nur der Store-Install als bewusste Admin-Aktion darf das.
+
+Praktische Folge: Zu jeder Kern-Freigabe ohne Suffix gehört ein Addons-Release
+ohne Suffix. Fehlt es, laufen die installierten Addons zwar weiter, werden aber
+nie nachgezogen, und im Update-Protokoll steht je Addon eine Fehlerzeile.
 
 ## Ablauf eines Releases
 

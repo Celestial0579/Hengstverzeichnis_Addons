@@ -175,11 +175,12 @@ Züchter und Stationen stoßen:
 
 Registriert wird ausdrücklich **nur** `contact.detail_sections`, nicht
 zusätzlich die alten Namen `person.detail_sections` und
-`station.detail_sections`. Der Kern feuert die beiden seit 0.8 als Alias
-hinterher, kaskadierend auf demselben Ergebnis — wer wie dieses Addon bis 0.7
-beide Paare registriert hatte, bekam seinen Abschnitt seither **zweimal** auf
-derselben Seite, denn es gibt nur noch eine Detailseite. Die Aliasse entfallen
-in 0.9.0 ohnehin.
+`station.detail_sections`. Der Kern feuerte die beiden in der 0.8-Linie als
+Alias hinterher, kaskadierend auf demselben Ergebnis — wer wie dieses Addon
+bis 0.7 beide Paare registriert hatte, bekam seinen Abschnitt seither
+**zweimal** auf derselben Seite, denn es gibt nur noch eine Detailseite.
+**Mit Kern-v0.9.0 sind die Aliasse entfallen**, ein Addon, das noch an ihnen
+hängt, wird nicht mehr gerufen.
 
 Eine **Dashboard-Kachel gibt es bewusst nicht** (#115). Der Menüpunkt wird im
 Kern für jede View aufgebaut, steht also auch im Adminbereich in der
