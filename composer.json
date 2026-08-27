@@ -28,6 +28,17 @@
         "test:functional": "phpunit --testsuite Functional"
     },
     "config": {
-        "sort-packages": true
+        "sort-packages": true,
+        "_process-timeout": [
+            "Composer bricht einen Kindprozess nach 300 Sekunden ab. Seit",
+            "Framework#424 steht der Wert auch dort ausdruecklich - dieselbe",
+            "Begruendung gilt hier, und zwar seit #160 staerker: Die CI faehrt",
+            "jetzt `composer test`, also ALLE drei Suiten in EINEM Prozess.",
+            "Die Grenze zaehlt damit fuer den gesamten Lauf, nicht mehr je",
+            "Suite. Auf einem Host ohne CI-Hardware waere das sonst irgendwann",
+            "ein Abbruch ohne einen einzigen fehlgeschlagenen Test - gemeldet",
+            "als 'Suite gescheitert'."
+        ],
+        "process-timeout": 1800
     }
 }
