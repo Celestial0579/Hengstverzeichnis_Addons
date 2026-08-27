@@ -64,16 +64,16 @@ class BeispielErweiterungspunkteAbdeckungTest extends TestCase {
      * genauso auffaellt wie eine neue - nicht nur eine zusaetzliche Datei.
      */
     private const DYNAMISCHE_AUFRUFE = [
-        // ContactController::doContactAction() loest jedes Kontakt-Ereignis
-        // dreimal aus: contact.*, person.*, station.*. Die beiden alten
-        // Praefixe sind Aliasse aus der 0.7-Linie und entfallen in v0.9.0.
-        'Controllers/ContactController.php' => [
-            'ausdruck' => '$prefix.$event',
-            'hooks' => [
-                'contact.after_save', 'person.after_save', 'station.after_save',
-                'contact.deleted', 'person.deleted', 'station.deleted',
-            ],
-        ],
+        // LEER seit Kern-v0.9.0. Hier stand ContactController::doContactAction(),
+        // das jedes Kontakt-Ereignis dreimal ausloeste: contact.*, person.*,
+        // station.*. Die beiden alten Praefixe waren Aliasse aus der 0.7-Linie
+        // und sind mit v0.9.0 entfallen (Kern-#347) - die Methode faechert
+        // nicht mehr, sie ruft 'contact.' . $event direkt.
+        //
+        // Der Eintrag musste weg, und der Test hat das selbst verlangt: Er
+        // bricht ab, sobald eine hier eingetragene Stelle keinen dynamischen
+        // Hook mehr ausloest. Sonst behauptete er Hooks, die es nicht mehr
+        // gibt - und deckte damit zu, dass die Addon-Doku sie noch nennt.
     ];
 
     /**
@@ -156,6 +156,15 @@ class BeispielErweiterungspunkteAbdeckungTest extends TestCase {
 
     /** Jede Ausnahme traegt eine Begruendung - ein nackter Eintrag waere ein Freibrief. */
     public function testJedeAusnahmeIstBegruendet(): void {
+        /* Die Liste DARF leer sein - seit Kern-v0.9.0 ist sie es, weil das
+           Beispiel jeden Erweiterungspunkt belegt. Ohne diese Zusicherung
+           liefe der Test dann ohne eine einzige Pruefung durch und PHPUnit
+           meldete ihn als "risky": gruen, aber ohne Aussage. */
+        $this->assertIsArray(
+            Plugin::BEWUSST_NICHT_ABGEDECKT,
+            'BEWUSST_NICHT_ABGEDECKT muss eine Liste sein - leer ist erlaubt und der beste Fall.'
+        );
+
         foreach (Plugin::BEWUSST_NICHT_ABGEDECKT as $hook => $grund) {
             $this->assertIsString($hook, 'BEWUSST_NICHT_ABGEDECKT ist nach Hook-Namen indiziert.');
             $this->assertGreaterThan(

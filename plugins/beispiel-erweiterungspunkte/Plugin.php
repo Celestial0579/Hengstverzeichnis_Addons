@@ -113,9 +113,10 @@ class Plugin {
         // schon weg - wer sie noch braucht, liest sie in before_delete.
         'horse.deleted' => 'onHorseDeleted',
         // Nach Anlegen/Aendern eines Kontakts (Kern-#347). FALLE: der Kern
-        // feuert zusaetzlich die alten Namen person.after_save und
-        // station.after_save. Wer die auch registriert, zaehlt jede Aenderung
-        // dreimal - siehe BEWUSST_NICHT_ABGEDECKT.
+        // feuerte bis v0.8 zusaetzlich die alten Namen person.after_save und
+        // station.after_save. Die sind mit Kern-v0.9.0 entfallen (Kern-#347);
+        // wer sie noch registriert, wird nicht mehr gerufen und muss auf
+        // contact.after_save umstellen.
         'contact.after_save' => 'onContactAfterSave',
         // Beim Verschieben eines Kontakts in den Papierkorb. FALLE: der Name
         // sagt "deleted", gemeint ist der Papierkorb - die Lage ist die von
@@ -206,17 +207,16 @@ class Plugin {
      * Eine Ausnahmeliste ohne Begruendung waere ein Freibrief; deshalb steht
      * der Grund im Wert und der Test besteht darauf, dass er nicht leer ist.
      *
+     * LEER SEIT KERN-v0.9.0 - und das ist der gute Zustand: Das Beispiel
+     * belegt jeden Erweiterungspunkt, den der Kern hat. Hier standen zuletzt
+     * die acht Aliasse `person.` und `station.`, die der Kern bis v0.8 zusaetzlich
+     * feuerte; sie waren ausgenommen, weil ein Addon, das sie neben ihren
+     * contact.*-Gegenstuecken registriert, jedes Ereignis doppelt bekaeme.
+     * Mit Kern-#347 sind sie entfallen, damit auch der Grund fuer die Ausnahme.
+     *
      * @var array<string, string>
      */
     public const BEWUSST_NICHT_ABGEDECKT = [
-        'person.detail_sections' => 'Alias von contact.detail_sections, feuert seit v0.8 zusaetzlich und kaskadierend auf demselben Ergebnis. Wer beide registriert, bekommt seinen Abschnitt doppelt auf derselben Seite - seit Kern-#336 gibt es nur noch einen Datensatz. Entfaellt in v0.9.0.',
-        'station.detail_sections' => 'Alias von contact.detail_sections, siehe person.detail_sections.',
-        'person.edit_sections' => 'Alias von contact.edit_sections, kaskadierend - doppelte Registrierung ergaebe zwei Formulare im selben Bearbeitungsdialog. Entfaellt in v0.9.0.',
-        'station.edit_sections' => 'Alias von contact.edit_sections, siehe person.edit_sections.',
-        'person.after_save' => 'Alias von contact.after_save - der Kern feuert alle drei Namen mit denselben Argumenten. Wer sie zusaetzlich registriert, zaehlt jede Aenderung dreifach. Entfaellt in v0.9.0.',
-        'station.after_save' => 'Alias von contact.after_save, siehe person.after_save.',
-        'person.deleted' => 'Alias von contact.deleted, siehe person.after_save. Entfaellt in v0.9.0.',
-        'station.deleted' => 'Alias von contact.deleted, siehe person.after_save.',
     ];
 
     /**
@@ -401,11 +401,12 @@ class Plugin {
     /**
      * Kontakt angelegt oder geaendert (Kern-#347).
      *
-     * NUR contact.after_save ist registriert. Der Kern feuert zusaetzlich
-     * person.after_save und station.after_save mit denselben Argumenten, damit
-     * Addons aus der 0.7-Linie weiterlaufen. Seit persons und
-     * breeding_stations eine Tabelle sind, bekaeme ein Addon, das alle drei
-     * registriert, jede Aenderung dreimal - siehe BEWUSST_NICHT_ABGEDECKT.
+     * NUR contact.after_save gibt es noch. Der Kern feuerte bis v0.8
+     * zusaetzlich person.after_save und station.after_save mit denselben
+     * Argumenten, damit Addons aus der 0.7-Linie weiterliefen; wer alle drei
+     * registrierte, bekam jede Aenderung dreimal, seit persons und
+     * breeding_stations eine Tabelle sind. Mit Kern-v0.9.0 sind die beiden
+     * Aliasse entfallen (Kern-#347).
      *
      * @param array<string, mixed> $postData
      */
