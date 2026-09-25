@@ -183,18 +183,11 @@ class ZuchtSuchePluginTest extends FunctionalTestCase {
         $this->assertStringNotContainsString($zuechterName, $daneben->body);
 
         // 6. Der Mitgliedsfilter ist mit Framework#349 ersatzlos entfallen -
-        //    und zwar wirksam, nicht nur im Formular. Die SPALTE
-        //    `contacts.membership_status` gibt es bis zum Release nach v0.9.0
-        //    noch, ein Bestandswert steht also weiter drin. Geprüft wird
-        //    deshalb beides: Ein alter Lesezeichen-Link darf die Trefferliste
-        //    nicht mehr einschränken, und der Wert darf nicht in ihr
-        //    auftauchen.
-        //
-        //    Der Wert wird direkt in die Tabelle geschrieben: Das
-        //    Kontaktformular des Kerns nimmt das Feld seit #349 nicht mehr an.
+        //    und zwar wirksam, nicht nur im Formular: Ein alter
+        //    Lesezeichen-Link darf die Trefferliste nicht mehr einschränken.
+        //    Die Spalte `contacts.membership_status` gibt es seit
+        //    Framework#395 nicht mehr.
         $altwert = "Mitgliedsmarker-{$unique}";
-        \App\Database::getInstance()->prepare('UPDATE contacts SET membership_status = ? WHERE id = ?')
-            ->execute([$altwert, $zuechterId]);
 
         $mitglieder = $visitor->get(self::SEITE . '?mitglied=' . urlencode($altwert));
         $this->assertStringContainsString($zuechterName, $mitglieder->body);
@@ -202,11 +195,6 @@ class ZuchtSuchePluginTest extends FunctionalTestCase {
             $keinZuechterName,
             $mitglieder->body,
             'Ein alter ?mitglied=-Parameter darf die Trefferliste nicht mehr einschränken (Framework#349).'
-        );
-        $this->assertStringNotContainsString(
-            $altwert,
-            $mitglieder->body,
-            'Ein Bestandswert aus membership_status darf in der Trefferliste nicht mehr erscheinen.'
         );
 
         // 7. Verlinkung auf die EINE Kontaktseite des Kerns. /person?id= und

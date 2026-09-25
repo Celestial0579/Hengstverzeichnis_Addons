@@ -93,12 +93,11 @@ class ZuchtSucheSuchanfrageTest extends TestCase {
      * Der Filter „Mitgliedsstatus" ist mit Framework#349 ersatzlos entfallen.
      *
      * Er wird nicht nur nicht mehr angeboten - er darf auch nicht mehr WIRKEN.
-     * Ein Lesezeichen aus v0.8 trägt `?mitglied=…` weiterhin in der Adresse,
-     * und die Spalte `contacts.membership_status` gibt es bis zum Release
-     * nach v0.9.0 noch. Bliebe die Auswertung stehen, filterte die
-     * öffentliche Suche weiter nach einem Merkmal, dessen Freigabe jetzt beim
-     * Addon `mitgliedsstatus` liegt - unsichtbar, weil das Formular den Filter
-     * nicht mehr zeigt.
+     * Ein Lesezeichen aus v0.8 trägt `?mitglied=…` weiterhin in der Adresse.
+     * Bliebe die Auswertung stehen, filterte die öffentliche Suche nach einem
+     * Merkmal, dessen Spalte es seit Framework#395 nicht mehr gibt und dessen
+     * Freigabe beim Addon `mitgliedsstatus` liegt - unsichtbar, weil das
+     * Formular den Filter nicht mehr zeigt.
      *
      * Der Parameter darf auch nicht in die Blätter-Links zurückwandern:
      * `alsQuery()` baut sie, und was dort steht, überlebt jeden Seitenwechsel.

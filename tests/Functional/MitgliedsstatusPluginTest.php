@@ -50,6 +50,30 @@ class MitgliedsstatusPluginTest extends FunctionalTestCase {
         'contacts' => ['view'],
     ];
 
+    /**
+     * Ob der Kern beim Teststart die Spalte `contacts.membership_status` noch
+     * führt. Seit Framework#395 gibt es sie nicht mehr; die Übernahme prüft
+     * trotzdem den Fall einer Installation, die sie noch hat. tearDown()
+     * stellt den Ausgangszustand wieder her - die Datenbank ist geteilter
+     * Zustand der ganzen Suite.
+     */
+    private bool $kernSpalteVorher = false;
+
+    protected function setUp(): void {
+        parent::setUp();
+        $this->kernSpalteVorher = $this->kernSpalteDa();
+    }
+
+    protected function tearDown(): void {
+        $jetzt = $this->kernSpalteDa();
+        if ($this->kernSpalteVorher && !$jetzt) {
+            $this->db()->exec('ALTER TABLE `contacts` ADD COLUMN `membership_status` VARCHAR(100) NULL DEFAULT NULL');
+        } elseif (!$this->kernSpalteVorher && $jetzt) {
+            $this->db()->exec('ALTER TABLE `contacts` DROP COLUMN `membership_status`');
+        }
+        parent::tearDown();
+    }
+
     public function testFullPluginLifecycle(): void {
         $admin = $this->authenticatedClient();
         $unique = uniqid();
@@ -367,6 +391,40 @@ class MitgliedsstatusPluginTest extends FunctionalTestCase {
         $this->assertNotNull($this->marker(), 'Der zweite Lauf setzt den Marker wieder.');
     }
 
+    /**
+     * Der Kern führt die Spalte nicht mehr (Framework#395). Die Übernahme hat
+     * dann dauerhaft nichts zu tun und MUSS das festhalten - sonst suchte
+     * später jemand nach einer Übernahme, die nie kommen kann. Und der
+     * Knopf für die Freitextspalte darf nicht auf eine fehlende Spalte
+     * schreiben.
+     */
+    public function testOhneKernSpalteSchliesstDieUebernahmeAb(): void {
+        $admin = $this->authenticatedClient();
+
+        $this->aktivieren($admin, true);
+        $this->aktivieren($admin, false);
+        $this->markerLoeschen();
+        if ($this->kernSpalteDa()) {
+            $this->db()->exec('ALTER TABLE `contacts` DROP COLUMN `membership_status`');
+        }
+
+        $this->aktivieren($admin, true);
+
+        $marker = json_decode((string) $this->marker(), true);
+        $this->assertIsArray($marker, 'Auch ohne Spalte muss die Übernahme ihren Marker setzen.');
+        $this->assertSame('keine-spalte', $marker['grund'] ?? null);
+        $this->assertSame(0, $marker['gesamt'] ?? null);
+
+        $antwort = $admin->post(self::VERWALTUNG . '/kern-freitext', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'aktion' => 'leeren',
+        ]);
+        $this->assertSame(self::VERWALTUNG . '?ms=keine-spalte', $antwort->location());
+
+        $seite = $admin->get(self::VERWALTUNG);
+        $this->assertSame(200, $seite->statusCode);
+    }
+
     // ------------------------------------------------------------------
     // Helfer
     // ------------------------------------------------------------------
@@ -380,15 +438,18 @@ class MitgliedsstatusPluginTest extends FunctionalTestCase {
      * Ausgangslage, für die dieses Addon gebaut ist.
      *
      * Der Wert geht direkt in die Spalte, nicht durch das Formular. Seit
-     * Framework#349 nimmt der Kern `membership_status` nicht mehr entgegen:
-     * Ein POST mit dem Feld läuft durch, die Spalte bleibt NULL, und die
-     * Übernahme fände nichts vor. Genau so sieht aber eine Installation aus,
-     * die von v0.8 kommt - der Wert steht in der Tabelle, weil ihn jemand vor
-     * dem Update eingetragen hat, und die Spalte bleibt bis zum Release nach
-     * v0.9.0 stehen, damit diese Übernahme sie noch lesen kann.
+     * Framework#349 nimmt der Kern `membership_status` nicht mehr entgegen,
+     * seit Framework#395 gibt es die Spalte gar nicht mehr. Nachgestellt wird
+     * eine Installation, die sie noch führt - der Wert steht in der Tabelle,
+     * weil ihn jemand vor dem Update eingetragen hat. Fehlt die Spalte, legt
+     * dieser Helfer sie an; tearDown() nimmt sie wieder weg.
      */
     private function kontaktMitBestandswert(HttpClient $admin, string $name, string $wert): int {
         $id = $this->createContact($admin, $name);
+
+        if (!$this->kernSpalteDa()) {
+            $this->db()->exec('ALTER TABLE `contacts` ADD COLUMN `membership_status` VARCHAR(100) NULL DEFAULT NULL');
+        }
 
         $this->db()->prepare('UPDATE contacts SET membership_status = ? WHERE id = ?')
             ->execute([$wert, $id]);
@@ -463,6 +524,11 @@ class MitgliedsstatusPluginTest extends FunctionalTestCase {
     private function markerLoeschen(): void {
         $this->db()->prepare('DELETE FROM settings WHERE setting_key = ?')
             ->execute(['plugin_mitgliedsstatus_uebernahme']);
+    }
+
+    private function kernSpalteDa(): bool {
+        $stmt = $this->db()->query("SHOW COLUMNS FROM `contacts` LIKE 'membership_status'");
+        return $stmt !== false && $stmt->fetch() !== false;
     }
 
     private function kernFreitext(int $kontaktId): ?string {
