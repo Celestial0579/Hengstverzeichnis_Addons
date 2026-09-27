@@ -8,6 +8,29 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+### Sicherheit
+
+- **`mitglieder-konten` (1.0.1): Das Recht „Mitglieder-Konten anlegen“ führt
+  nicht mehr zu Administrator-Konten.** Die Gruppe für neue Konten wurde
+  ungeprüft gespeichert, und die Auswahl bot auch „Administrator“ und jede
+  Gruppe mit Bearbeitungsrechten an. Wer `mitglieder_konten.manage` besaß,
+  etwa eine Geschäftsstelle, konnte so Mitglieder als Administratoren anlegen
+  – auch das eigene Mitgliedskonto. Im Kern legt nur ein Admin Konten an.
+
+  Zulässig sind jetzt nur noch reine Lesegruppen oder „keine“ – dieselbe
+  Regel, nach der der Kern Konten ohne Adresse erlaubt (Framework#348).
+  Geprüft wird beim Speichern (die ganze Eingabe wird verworfen und der
+  Versuch protokolliert), in der Vorschau und unmittelbar vor dem Anlegen.
+
+  **Für Betreiber:** Steht in einer bestehenden Einrichtung eine unzulässige
+  Gruppe, zeigt die Verwaltungsseite statt der Vorschau einen Hinweis; Konten
+  entstehen erst nach Auswahl einer Lesegruppe. Der tägliche Lauf sperrt
+  beendete Mitgliedschaften unverändert und vermerkt die unzulässige Gruppe
+  im Protokoll. Wer das Recht an Nicht-Admins vergeben hatte, sollte prüfen,
+  ob Konten dieses Addons in `admin` oder einer Gruppe mit Schreibrechten
+  stehen, und das Protokoll auf „CiviCRM-Zugang gespeichert“ durch
+  Nicht-Admins durchsehen.
+
 ### Behoben
 
 - **Die Composer-Zeitgrenze vorsorglich angehoben** (Framework#424). Composer

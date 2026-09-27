@@ -34,9 +34,17 @@ ohne Adresse gibt es kein „Passwort vergessen", keine Benachrichtigungen und
 keinen zweiten Faktor per E-Mail. Mitglieder ohne eigenes Postfach sind aber
 genau der Fall, für den dieses Addon gebaut ist.
 
-Gibt die gewählte Gruppe mehr als Lesen, weist die **Vorschau** jedes Mitglied
-ohne Adresse ab — vorher, nicht nach dem dreihundertsten Konto. Die
-Gruppenauswahl auf der Verwaltungsseite markiert solche Gruppen.
+Der zweite Grund ist die Rechtevergabe: Das Recht `mitglieder_konten.manage`
+lässt sich auch an Nicht-Admins geben, etwa an eine Geschäftsstelle. Im Kern
+legt dagegen nur ein Admin Konten an und weist Gruppen zu. Stünde hier jede
+Gruppe zur Wahl, könnte das Addon-Recht Administrator-Konten erzeugen.
+
+Deshalb stehen **nur reine Lesegruppen** zur Auswahl — `Administrator`, `Gast`
+und jede Gruppe mit Bearbeitungs- oder Veröffentlichungsrechten sind
+ausgeschlossen. Der Server prüft das beim Speichern, in der Vorschau und
+unmittelbar vor dem Anlegen. Bekommt eine gewählte Gruppe später
+Schreibrechte, zeigt die Verwaltungsseite statt der Vorschau einen Hinweis,
+und es entsteht kein Konto, bis wieder eine Lesegruppe gewählt ist.
 
 ## Einrichten
 

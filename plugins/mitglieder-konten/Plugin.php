@@ -325,6 +325,66 @@ final class Konfiguration {
  * Abgleich erneut, findet er hier, was es schon gibt, und legt kein zweites
  * Konto an und setzt kein Passwort zurueck.
  */
+final class Zielgruppe {
+
+    public const FEHLER = 'Die Gruppe für neue Konten ist keine reine Lesegruppe oder existiert nicht mehr. '
+                        . 'Bitte unter „CiviCRM-Zugang“ eine Gruppe wählen, die ausschließlich Leserechte hat.';
+
+    private function __construct() {}
+
+    /**
+     * Welche Gruppen neue Konten bekommen duerfen: nur reine Lesegruppen.
+     *
+     * WARUM SERVERSEITIG UND AN MEHREREN STELLEN: Das Recht
+     * `mitglieder_konten.manage` laesst sich an Nicht-Admins vergeben, etwa
+     * an eine Geschaeftsstelle. Im Kern legt dagegen nur ein Admin Konten an
+     * und weist Gruppen zu (UserController: requireAdmin()), und
+     * UserProvisioning filtert bewusst nur `public`. Stuende hier jede Gruppe
+     * zur Wahl, machte das Addon-Recht aus Mitgliedern Administratoren
+     * (Audit H1). Geprueft wird beim Speichern UND beim Anlegen: Eine Gruppe
+     * kann nach dem Speichern Schreibrechte bekommen, und aeltere Fassungen
+     * haben jede Gruppe gespeichert.
+     *
+     * `admin` faellt doppelt heraus - per SQL und ueber EmailRequirement. Ein
+     * Irrtum an dieser Stelle ergaebe ein Vollverwalter-Konto.
+     *
+     * @return array<int, array{id:int, name:string}>
+     */
+    public static function zulaessige(PDO $db): array {
+        $pflicht = EmailRequirement::groupIdsRequiringEmail($db);
+
+        $zeilen = $db->query(
+            "SELECT id, name FROM `groups` WHERE slug NOT IN ('admin', 'public') ORDER BY is_builtin DESC, name ASC"
+        )->fetchAll(PDO::FETCH_ASSOC);
+
+        $erlaubt = [];
+        foreach ($zeilen as $z) {
+            if (in_array((int)$z['id'], $pflicht, true)) {
+                continue;
+            }
+            $erlaubt[] = ['id' => (int)$z['id'], 'name' => (string)$z['name']];
+        }
+
+        return $erlaubt;
+    }
+
+    /** 0 = "keine Gruppe" ist zulaessig. Im Zweifel nein (fail-closed). */
+    public static function istZulaessig(PDO $db, int $gruppeId): bool {
+        if ($gruppeId === 0) {
+            return true;
+        }
+        if ($gruppeId < 0) {
+            return false;
+        }
+
+        try {
+            return in_array($gruppeId, array_column(self::zulaessige($db), 'id'), true);
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+}
+
 final class Zuordnung {
 
     public const TABELLE = 'plugin_mitglieder_konten_zuordnung';
@@ -397,6 +457,12 @@ final class Abgleich {
             return ['zeilen' => [], 'fehler' => 'Der CiviCRM-Zugang ist noch nicht eingerichtet.'];
         }
 
+        // VOR dem Abruf: Bei unzulaessiger Zielgruppe geht keine Anfrage an
+        // CiviCRM heraus, und die Vorschau bietet nichts zum Anlegen an (H1).
+        if (!Zielgruppe::istZulaessig(Database::getInstance(), Konfiguration::gruppeId())) {
+            return ['zeilen' => [], 'fehler' => Zielgruppe::FEHLER];
+        }
+
         try {
             $mitgliedschaften = $client->laufendeMitgliedschaften(Konfiguration::typIds());
         } catch (CiviApiFehler $e) {
@@ -405,8 +471,6 @@ final class Abgleich {
 
         $bekannt = Zuordnung::alle();
         $belegt = self::belegteBenutzernamen();
-        $db = Database::getInstance();
-        $gruppePflichtAdresse = EmailRequirement::groupsRequireEmail($db, [Konfiguration::gruppeId()]);
 
         $zeilen = [];
         foreach ($mitgliedschaften as $m) {
@@ -429,16 +493,11 @@ final class Abgleich {
             } elseif (LoginIdentifier::usernameErrors($benutzername) !== []) {
                 $zeile['zustand'] = 'blockiert';
                 $zeile['grund'] = implode(' ', LoginIdentifier::usernameErrors($benutzername));
-            } elseif ($m['email'] === '' && $gruppePflichtAdresse) {
-                // Die harte Kopplung aus Addons#131: Nach Framework#348 duerfen
-                // Konten ohne Adresse nur Leserechte haben. Ist die Zielgruppe
-                // keine reine Lesegruppe, sind Mitglieder ohne Adresse gar
-                // nicht anlegbar - das gehoert in die Vorschau, nicht in einen
-                // Fehler nach dem 300. Konto.
-                $zeile['zustand'] = 'blockiert';
-                $zeile['grund'] = 'Ohne eigene Adresse, und die Zielgruppe gibt mehr als Leserechte. '
-                                . 'Bitte eine reine Lesegruppe waehlen.';
             }
+            // Mitglieder ohne Adresse brauchen keinen eigenen Zweig mehr: Die
+            // Zielgruppe ist oben bereits auf eine reine Lesegruppe
+            // festgelegt, und genau die verlangt Framework#348 fuer Konten
+            // ohne Adresse. UserProvisioning prueft das beim Anlegen ohnehin.
 
             $zeilen[] = $zeile;
         }
@@ -463,6 +522,17 @@ final class Abgleich {
             return $ergebnis;
         }
 
+        // Eigene Pruefung, unabhaengig von vorschau(): Tiefenverteidigung
+        // gegen H1. Die Gruppe wird genau einmal gelesen und fuer den ganzen
+        // Stapel verwendet - kein Wechsel zwischen Pruefung und Anlage.
+        $db = Database::getInstance();
+        $gruppe = Konfiguration::gruppeId();
+        if (!Zielgruppe::istZulaessig($db, $gruppe)) {
+            $ergebnis['fehler'][] = Zielgruppe::FEHLER;
+            $ergebnis['uebersprungen'] = count($auswahl);
+            return $ergebnis;
+        }
+
         $vorschau = self::vorschau($client);
         if ($vorschau['fehler'] !== null) {
             $ergebnis['fehler'][] = $vorschau['fehler'];
@@ -473,9 +543,6 @@ final class Abgleich {
         foreach ($vorschau['zeilen'] as $zeile) {
             $nachId[(int)$zeile['membership_id']] = $zeile;
         }
-
-        $db = Database::getInstance();
-        $gruppe = Konfiguration::gruppeId();
 
         foreach ($auswahl as $membershipId) {
             $zeile = $nachId[$membershipId] ?? null;
@@ -621,6 +688,23 @@ final class Abgleich {
             return ['geprueft' => 0, 'gesperrt' => 0];
         }
 
+        // Der Lauf legt keine Konten an - er sperrt nur. Eine unzulaessige
+        // Zielgruppe wird deshalb gemeldet, bricht ihn aber NICHT ab: Die
+        // Sperre beendeter Mitgliedschaften ist selbst ein Schutz.
+        $zielgruppe = Konfiguration::gruppeId();
+        if (!Zielgruppe::istZulaessig(Database::getInstance(), $zielgruppe)) {
+            AuditLogger::log(
+                'Mitglieder-Konten: Zielgruppe unzulaessig',
+                'users',
+                sprintf(
+                    'Die gespeicherte Gruppe fuer neue Konten (ID %d) ist keine reine Lesegruppe oder existiert '
+                    . 'nicht mehr. Neue Konten entstehen erst nach Auswahl einer Lesegruppe; die Sperre beendeter '
+                    . 'Mitgliedschaften laeuft unveraendert.',
+                    $zielgruppe
+                )
+            );
+        }
+
         try {
             $laufend = $client->laufendeMitgliedschaften(Konfiguration::typIds());
         } catch (CiviApiFehler $e) {
@@ -715,6 +799,23 @@ class VerwaltungController extends BaseController {
     public function zugang(): void {
         $this->pruefeCsrf();
 
+        // Zuerst die Zielgruppe (H1): Bei einem unzulaessigen Wert wird die
+        // ganze Eingabe verworfen - auch Adresse und Schluessel - und der
+        // Versuch protokolliert.
+        $gruppeRoh = $_POST['gruppe'] ?? '0';
+        $gruppe = is_string($gruppeRoh)
+            ? filter_var($gruppeRoh, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]])
+            : false;
+        if ($gruppe === false || !Zielgruppe::istZulaessig(Database::getInstance(), $gruppe)) {
+            PluginAudit::log(
+                Plugin::SLUG,
+                'Unzulaessige Zielgruppe abgelehnt',
+                'Mitglieder-Konten',
+                'Angefragte Gruppen-ID: ' . (is_string($gruppeRoh) && ctype_digit($gruppeRoh) ? $gruppeRoh : 'ungueltiger Wert')
+            );
+            $this->zurueck('gruppe-unzulaessig');
+        }
+
         $basis = Konfiguration::pruefeBasis(is_string($_POST['basis_url'] ?? null) ? $_POST['basis_url'] : '');
         if ($basis === null) {
             $this->zurueck('url-ungueltig');
@@ -735,7 +836,7 @@ class VerwaltungController extends BaseController {
             Konfiguration::S_URL => $basis,
             Konfiguration::S_KEY => $schluessel,
             Konfiguration::S_TEAM => $team,
-            Konfiguration::S_GRUPPE => (string)(int)($_POST['gruppe'] ?? 0),
+            Konfiguration::S_GRUPPE => (string)$gruppe,
             Konfiguration::S_TYPEN => trim(is_string($_POST['typen'] ?? null) ? $_POST['typen'] : ''),
         ]);
 
@@ -745,7 +846,12 @@ class VerwaltungController extends BaseController {
             Plugin::SLUG,
             'CiviCRM-Zugang gespeichert',
             'Mitglieder-Konten',
-            sprintf('Basis: %s, Schluessel %s', $basis === '' ? '(leer)' : $basis, $schluessel === null ? 'unveraendert' : 'neu gesetzt')
+            sprintf(
+                'Basis: %s, Schluessel %s, Zielgruppe %d',
+                $basis === '' ? '(leer)' : $basis,
+                $schluessel === null ? 'unveraendert' : 'neu gesetzt',
+                $gruppe
+            )
         );
 
         $this->zurueck('gespeichert');
@@ -791,6 +897,7 @@ class VerwaltungController extends BaseController {
             'url-ungueltig' => ['fehler', 'Die Adresse muss mit http:// oder https:// beginnen und darf keinen Pfad und keine Parameter enthalten.'],
             'team-ungueltig' => ['fehler', 'Die Adresse des Verwaltungsteams ist keine gültige E-Mail-Adresse.'],
             'nichts-ausgewaehlt' => ['fehler', 'Es war nichts ausgewählt.'],
+            'gruppe-unzulaessig' => ['fehler', 'Als Gruppe für neue Konten ist nur eine reine Lesegruppe zulässig – nicht „Administrator“ und keine Gruppe mit Bearbeitungs- oder Veröffentlichungsrechten. Es wurde nichts gespeichert.'],
         ];
 
         $html = '';
@@ -830,18 +937,28 @@ class VerwaltungController extends BaseController {
         $typen = htmlspecialchars(implode(', ', Konfiguration::typIds()), ENT_QUOTES, 'UTF-8');
         $schluesselGesetzt = Konfiguration::apiKey() !== '';
 
-        $optionen = '<option value="0">— keine —</option>';
-        foreach ($this->gruppen() as $gruppe) {
-            $gewaehlt = (int)$gruppe['id'] === Konfiguration::gruppeId() ? ' selected' : '';
-            $hinweis = $gruppe['schreibt'] ? ' — gibt mehr als Leserechte!' : '';
+        $db = Database::getInstance();
+        $gespeichert = Konfiguration::gruppeId();
+        $zulaessig = Zielgruppe::zulaessige($db);
+
+        // Altbestand: Eine frueher gespeicherte, jetzt unzulaessige Gruppe
+        // darf nicht still durch "— keine —" ersetzt werden. Der Platzhalter
+        // plus `required` zwingt zu einer bewussten Wahl.
+        $altbestand = $gespeichert !== 0 && !in_array($gespeichert, array_column($zulaessig, 'id'), true);
+        $optionen = $altbestand
+            ? '<option value="" selected>— gespeicherte Gruppe ist nicht zulässig, bitte eine Lesegruppe wählen —</option>'
+            : '';
+        $optionen .= '<option value="0">— keine —</option>';
+        foreach ($zulaessig as $gruppe) {
+            $gewaehlt = $gruppe['id'] === $gespeichert ? ' selected' : '';
             $optionen .= sprintf(
-                '<option value="%d"%s>%s%s</option>',
-                (int)$gruppe['id'],
+                '<option value="%d"%s>%s</option>',
+                $gruppe['id'],
                 $gewaehlt,
-                htmlspecialchars((string)$gruppe['name'], ENT_QUOTES, 'UTF-8'),
-                $hinweis
+                htmlspecialchars($gruppe['name'], ENT_QUOTES, 'UTF-8')
             );
         }
+        $pflicht = $altbestand ? ' required' : '';
 
         return "<div class='card'>
             <h2 style='font-size:1.15rem;margin-top:0;'>CiviCRM-Zugang</h2>
@@ -859,10 +976,10 @@ class VerwaltungController extends BaseController {
                 <small style='color:var(--text-muted);'>Wird verschlüsselt gespeichert und nie wieder angezeigt.</small>
 
                 <label for='gruppe' style='display:block;font-weight:bold;margin-top:0.8rem;'>Gruppe für neue Konten</label>
-                <select id='gruppe' name='gruppe' style='width:100%;padding:0.5rem;'>{$optionen}</select>
+                <select id='gruppe' name='gruppe' style='width:100%;padding:0.5rem;'{$pflicht}>{$optionen}</select>
                 <small style='color:var(--text-muted);'>
-                    Muss eine reine <em>Lese</em>-Gruppe sein: Mitglieder ohne eigene E-Mail-Adresse
-                    lassen sich nur so anlegen (Framework#348).
+                    Zur Auswahl stehen nur reine <em>Lese</em>-Gruppen. Administratoren und Gruppen mit
+                    Bearbeitungs- oder Veröffentlichungsrechten sind ausgeschlossen (Framework#348).
                 </small>
 
                 <label for='team_email' style='display:block;font-weight:bold;margin-top:0.8rem;'>Adresse des Verwaltungsteams</label>
@@ -951,25 +1068,6 @@ class VerwaltungController extends BaseController {
                 <button type='submit' class='btn' style='margin-top:1rem;'>Ausgewählte Konten anlegen</button>
             </form>
         </div>";
-    }
-
-    /** @return array<int, array{id:int, name:string, schreibt:bool}> */
-    private function gruppen(): array {
-        $db = Database::getInstance();
-        $pflicht = EmailRequirement::groupIdsRequiringEmail($db);
-
-        $zeilen = $db->query(
-            "SELECT id, name FROM `groups` WHERE slug NOT IN ('public') ORDER BY is_builtin DESC, name ASC"
-        )->fetchAll(PDO::FETCH_ASSOC);
-
-        return array_map(
-            static fn(array $z): array => [
-                'id' => (int)$z['id'],
-                'name' => (string)$z['name'],
-                'schreibt' => in_array((int)$z['id'], $pflicht, true),
-            ],
-            $zeilen
-        );
     }
 
     private function pruefeCsrf(): void {
