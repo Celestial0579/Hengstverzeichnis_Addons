@@ -46,7 +46,8 @@ class SprachAddonVollstaendigkeitTest extends TestCase {
      * @var array<string, string>
      */
     private const VORAB_SCHLUESSEL = [
-        'auth.login_captcha_required' => 'Framework, Rate-Limits (Audit M7): kontoweite Bremse der Anmeldung',
+        // Derzeit leer: `auth.login_captcha_required` (Rate-Limits, Audit M7)
+        // kennt der Kern seit dem Pin auf 003b901 selbst.
     ];
 
     /** @return array<string, mixed> */
