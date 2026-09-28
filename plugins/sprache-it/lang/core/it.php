@@ -246,6 +246,7 @@ return [
     'auth.login_button' => 'Accedi',
     'auth.rate_limited_login' => 'Troppi tentativi di accesso falliti. Riprova tra 15 minuti.',
     'auth.invalid_credentials' => 'Credenziali non valide.',
+    'auth.login_captcha_required' => 'Dopo numerosi tentativi di accesso falliti è necessario un ulteriore controllo di sicurezza. Completalo qui sotto e accedi di nuovo.',
     'auth.email_not_verified' => 'Conferma prima il tuo indirizzo e-mail tramite il link che ti abbiamo inviato al momento della registrazione.',
     'auth.email_verified_success' => '✓ Indirizzo e-mail confermato. Ora puoi accedere.',
     'auth.register_link' => 'Non hai ancora un account? Registrati ora',

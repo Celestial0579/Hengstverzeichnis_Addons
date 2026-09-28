@@ -246,6 +246,7 @@ return [
     'auth.login_button' => 'Logga in',
     'auth.rate_limited_login' => 'För många misslyckade inloggningsförsök. Försök igen om 15 minuter.',
     'auth.invalid_credentials' => 'Ogiltiga inloggningsuppgifter.',
+    'auth.login_captcha_required' => 'Efter många misslyckade inloggningsförsök krävs dessutom en säkerhetskontroll. Fyll i den nedan och logga in igen.',
     'auth.email_not_verified' => 'Bekräfta först din e-postadress via länken som vi skickade till dig vid registreringen.',
     'auth.email_verified_success' => '✓ E-postadressen har bekräftats. Du kan nu logga in.',
     'auth.register_link' => 'Inget konto ännu? Registrera dig nu',

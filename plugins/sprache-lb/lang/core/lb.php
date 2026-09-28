@@ -253,6 +253,7 @@ return [
     'auth.login_button' => 'Umellen',
     'auth.rate_limited_login' => 'Ze vill feelgeschloen Umeldungsversich. Probéiert w.e.g. an 15 Minutten nach eng Kéier.',
     'auth.invalid_credentials' => 'Ongülteg Zougangsdonnéeën.',
+    'auth.login_captcha_required' => 'No ville feelgeschloenen Umeldungsversich ass zousätzlech eng Sécherheetsofro néideg. Beäntwert se w.e.g. hei ënnen a mellt Iech nach eng Kéier un.',
     'auth.email_not_verified' => 'Bestätegt w.e.g. fir d\'éischt Är E-Mail-Adress iwwer de Link, dee mir Iech bei der Registréierung geschéckt hunn.',
     'auth.email_verified_success' => '✓ E-Mail-Adress bestätegt. Dir kënnt Iech elo umellen.',
     'auth.register_link' => 'Nach kee Kont? Elo registréieren',

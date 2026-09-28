@@ -246,6 +246,7 @@ return [
     'auth.login_button' => 'Zaloguj się',
     'auth.rate_limited_login' => 'Zbyt wiele nieudanych prób logowania. Prosimy spróbować ponownie za 15 minut.',
     'auth.invalid_credentials' => 'Nieprawidłowe dane logowania.',
+    'auth.login_captcha_required' => 'Po wielu nieudanych próbach logowania wymagana jest dodatkowa kontrola bezpieczeństwa. Prosimy ją wypełnić poniżej i zalogować się ponownie.',
     'auth.email_not_verified' => 'Prosimy najpierw potwierdzić adres e-mail za pomocą linku, który wysłaliśmy podczas rejestracji.',
     'auth.email_verified_success' => '✓ Adres e-mail potwierdzony. Można się teraz zalogować.',
     'auth.register_link' => 'Nie masz jeszcze konta? Zarejestruj się',

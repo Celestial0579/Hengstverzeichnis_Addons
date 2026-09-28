@@ -28,6 +28,27 @@ class SprachAddonVollstaendigkeitTest extends TestCase {
 
     private const PLUGINS_DIR = __DIR__ . '/../../plugins';
 
+    /**
+     * Schlüssel, die der Kern erst mit seinem NÄCHSTEN Stand bringt und die
+     * die Sprach-Addons schon vorab mitliefern - Schlüssel => Herkunft.
+     *
+     * WARUM ES DIESE LISTE GIBT. Der Test hält jede Sprache exakt auf dem Satz
+     * des gepinnten Kerns, auch nach oben. Ein neuer Kern-Schlüssel liesse
+     * sich so erst im Pin-PR nachtragen, und bis dahin wäre die neue
+     * Meldung in zehn Sprachen deutsch. Die Übersetzung darf deshalb vorab
+     * kommen - aber nur für Schlüssel, die hier ausdrücklich stehen, und nur
+     * in ALLEN Sprachen zugleich. Ein Tippfehler bleibt damit überzählig und
+     * fällt weiter auf.
+     *
+     * Sobald der gepinnte Kern einen Schlüssel kennt, gehört er hier
+     * gestrichen - testVorabSchluesselSindNochNichtImKern() erinnert daran.
+     *
+     * @var array<string, string>
+     */
+    private const VORAB_SCHLUESSEL = [
+        'auth.login_captcha_required' => 'Framework, Rate-Limits (Audit M7): kontoweite Bremse der Anmeldung',
+    ];
+
     /** @return array<string, mixed> */
     private static function kernSchluessel(): array {
         $datei = \FRAMEWORK_VENDOR_DIR . '/lang/de.php';
@@ -73,7 +94,7 @@ class SprachAddonVollstaendigkeitTest extends TestCase {
         sort($eigen);
 
         $fehlend = array_values(array_diff($kern, $eigen));
-        $ueberzaehlig = array_values(array_diff($eigen, $kern));
+        $ueberzaehlig = array_values(array_diff($eigen, $kern, array_keys(self::VORAB_SCHLUESSEL)));
 
         $this->assertSame(
             [],
@@ -86,6 +107,35 @@ class SprachAddonVollstaendigkeitTest extends TestCase {
             $ueberzaehlig,
             "{$slug}: Diese Schlüssel kennt der Kern nicht (mehr) - übrig geblieben oder vertippt: "
             . implode(', ', array_slice($ueberzaehlig, 0, 15)) . (count($ueberzaehlig) > 15 ? ' …' : '')
+        );
+    }
+
+    /** Vorab gelieferte Schlüssel stehen in jeder Sprache, nicht nur in einigen. */
+    #[DataProvider('sprachAddonProvider')]
+    public function testVorabSchluesselSindUeberallUebersetzt(string $slug): void {
+        $fehlend = array_values(array_diff(
+            array_keys(self::VORAB_SCHLUESSEL),
+            array_keys($this->sprachtabelle($slug))
+        ));
+
+        $this->assertSame([], $fehlend, "{$slug}: vorab angekündigte Schlüssel fehlen: " . implode(', ', $fehlend));
+    }
+
+    /**
+     * Kennt der gepinnte Kern einen Vorab-Schlüssel schon, gilt für ihn die
+     * normale Regel - die Ausnahme oben muss dann weg.
+     */
+    public function testVorabSchluesselSindNochNichtImKern(): void {
+        $schonImKern = array_values(array_intersect(
+            array_keys(self::VORAB_SCHLUESSEL),
+            array_keys(self::kernSchluessel())
+        ));
+
+        $this->assertSame(
+            [],
+            $schonImKern,
+            'Diese Schlüssel kennt der Kern inzwischen - bitte aus VORAB_SCHLUESSEL streichen: '
+            . implode(', ', $schonImKern)
         );
     }
 

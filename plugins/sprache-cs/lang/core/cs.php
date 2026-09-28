@@ -246,6 +246,7 @@ return [
     'auth.login_button' => 'Přihlásit se',
     'auth.rate_limited_login' => 'Příliš mnoho neúspěšných pokusů o přihlášení. Zkuste to prosím znovu za 15 minut.',
     'auth.invalid_credentials' => 'Neplatné přihlašovací údaje.',
+    'auth.login_captcha_required' => 'Po mnoha neúspěšných pokusech o přihlášení je navíc nutná bezpečnostní kontrola. Vyplňte ji prosím níže a přihlaste se znovu.',
     'auth.email_not_verified' => 'Nejprve prosím potvrďte svou e-mailovou adresu pomocí odkazu, který jsme vám zaslali při registraci.',
     'auth.email_verified_success' => '✓ E-mailová adresa byla potvrzena. Nyní se můžete přihlásit.',
     'auth.register_link' => 'Ještě nemáte účet? Zaregistrujte se',
