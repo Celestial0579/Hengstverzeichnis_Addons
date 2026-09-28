@@ -262,13 +262,18 @@ class KontaktanfragePluginTest extends FunctionalTestCase {
      * zu umgehen: Der IP-Zaehler bremst den einzelnen Absender, der
      * Empfaenger-Zaehler die Belaestigung ueber wechselnde Anschluesse.
      *
-     * DIE SPAM-AUFGABE WIRD HIER ABSICHTLICH NICHT GELOEST (Addons#136). Das
-     * ist genau der Fall, der zaehlt: ein Bot, der die Antwort raet. Er muss
-     * trotzdem am Mengenzaehler haengenbleiben - sonst koennte er die knapp
-     * zwanzig moeglichen Antworten der eingebauten Rechenaufgabe
-     * durchprobieren, bis eine passt, und die Aufgabe waere Zierde. Wer die
-     * CAPTCHA-Pruefung vor die Buchung zieht, macht diesen Test rot: Die
-     * sechste Anfrage kaeme dann durch.
+     * BEIM IP-ZAEHLER WIRD DIE SPAM-AUFGABE ABSICHTLICH NICHT GELOEST
+     * (Addons#136). Das ist genau der Fall, der zaehlt: ein Bot, der die
+     * Antwort raet. Er muss trotzdem am IP-Zaehler haengenbleiben - sonst
+     * koennte er die knapp zwanzig moeglichen Antworten der eingebauten
+     * Rechenaufgabe durchprobieren, bis eine passt, und die Aufgabe waere
+     * Zierde. Wer die CAPTCHA-Pruefung vor die Buchung des IP-Zaehlers zieht,
+     * macht diesen Test rot: Die sechste Anfrage kaeme dann durch.
+     *
+     * Der Empfaenger-Zaehler zaehlt dagegen nur ANGENOMMENE Anfragen (Audit
+     * M4) und wird deshalb mit geloester Aufgabe geprueft. Damit der Test
+     * nicht zehnmal MIN_SOLVE_SECONDS wartet, werden die ersten neun
+     * Buchungen direkt in login_attempts geschrieben.
      */
     public function testRateLimitGreiftJeIpUndJeEmpfaenger(): void {
         $admin = $this->authenticatedClient();
@@ -349,26 +354,35 @@ class KontaktanfragePluginTest extends FunctionalTestCase {
             'Eine abgewiesene Anfrage darf nicht gespeichert werden'
         );
 
+        // Die fuenf ungeloesten Versuche aus (b) haben den Empfaenger-Zaehler
+        // nicht beruehrt - er zaehlt nur angenommene Anfragen (Audit M4).
+        $this->assertSame(
+            0,
+            $this->rateLimitStand('kontaktanfrage-ziel'),
+            'Versuche ohne geloeste Aufgabe duerfen den Empfaenger-Zaehler nicht buchen'
+        );
+
         // (c) Empfaenger-Limit: unabhaengig von der IP. Der IP-Zaehler wird
         //     zwischendurch geleert - das ist genau der Angreifer, der ueber
         //     wechselnde Anschluesse kommt, nur ohne dass der Test dafuer
-        //     einen zweiten Anschluss braeuchte.
+        //     einen zweiten Anschluss braeuchte. Neun angenommene Anfragen
+        //     stehen schon im Zaehler, die zehnte geht noch durch.
         $this->leereRateLimitZaehler('kontaktanfrage-ip');
-        for ($i = 6; $i <= 10; $i++) {
-            $antwort = $this->sendeAnfrage($besucher, $kontaktId, [
-                'grund' => 'kaufinteresse',
-                'name' => "Absender-{$i}-{$unique}",
-                'email' => "absender-{$i}-{$unique}@example.test",
-            ]);
-            $this->assertNotSame(
-                $zuvieleZiel,
-                $antwort->location(),
-                "Anfrage {$i} an dasselbe Ziel darf noch nicht am Limit scheitern"
-            );
-            $this->leereRateLimitZaehler('kontaktanfrage-ip');
-        }
+        $this->fuelleZaehler("kontakt:{$kontaktId}", 'kontaktanfrage-ziel', 9);
 
-        $elfte = $this->sendeAnfrage($besucher, $kontaktId, [
+        $vorher = $this->anzahlAnfragen();
+        $zehnte = $this->sendeAnfrageMitAufgabe($besucher, $kontaktId, [
+            'grund' => 'kaufinteresse',
+            'name' => "Absender-10-{$unique}",
+            'email' => "absender-10-{$unique}@example.test",
+        ]);
+        $this->assertNotSame($zuvieleZiel, $zehnte->location(), 'Die zehnte Anfrage an dasselbe Ziel darf noch nicht am Limit scheitern');
+        $this->assertNotSame($captchaZiel, $zehnte->location(), 'Die Aufgabe war geloest');
+        $this->assertSame($vorher + 1, $this->anzahlAnfragen(), 'Die zehnte Anfrage muss gespeichert werden');
+        $this->assertSame(10, $this->rateLimitStand('kontaktanfrage-ziel'), 'Die angenommene Anfrage bucht den Empfaenger-Zaehler');
+
+        $this->leereRateLimitZaehler('kontaktanfrage-ip');
+        $elfte = $this->sendeAnfrageMitAufgabe($besucher, $kontaktId, [
             'grund' => 'kaufinteresse',
             'name' => "Absender-11-{$unique}",
             'email' => "absender-11-{$unique}@example.test",
@@ -378,6 +392,7 @@ class KontaktanfragePluginTest extends FunctionalTestCase {
             $elfte->location(),
             'Bei frischem IP-Zaehler muss das Empfaenger-Limit greifen - sonst zaehlen beide Sperren dasselbe'
         );
+        $this->assertSame($vorher + 1, $this->anzahlAnfragen(), 'Die elfte Anfrage darf nicht gespeichert werden');
 
         // (d) Die Abweisung steht im Protokoll - seit Kern-#352 unter der
         //     Kategorie des Addons, nicht unter einer frei gewaehlten.
@@ -390,6 +405,144 @@ class KontaktanfragePluginTest extends FunctionalTestCase {
 
         $this->leereRateLimitZaehler('kontaktanfrage-ip');
         $this->leereRateLimitZaehler('kontaktanfrage-ziel');
+    }
+
+    /**
+     * Audit M4: Versuche ohne geloeste Aufgabe sperren keinen Kontakt.
+     *
+     * Bis 1.1.1 buchte das Addon den Empfaenger-Zaehler VOR der Aufgabe.
+     * Zehn Anfragen mit falscher Antwort - ueber wechselnde Anschluesse,
+     * hier durch Leeren des IP-Zaehlers nachgestellt - sperrten das Formular
+     * eines Kontakts fuer 24 Stunden, ohne dass eine Anfrage ankam. Auf dem
+     * alten Code endet die elfte Anfrage auf "zuviele", und die geloeste
+     * Anfrage am Ende wird nicht gespeichert.
+     *
+     * Dazu die Zielpruefung: Eine geloeste Anfrage an einen unveroeffentlichten
+     * Kontakt meldet "erfolg" und bucht ebenfalls nichts.
+     */
+    public function testUngeloesteAufgabeSperrtEmpfaengerNicht(): void {
+        $admin = $this->authenticatedClient();
+        $unique = uniqid();
+        $kontaktId = $this->bereiteZielVor($admin, "KAUngeloest-{$unique}", $unique);
+        $besucher = $this->newClient();
+
+        $this->leereRateLimitZaehler('kontaktanfrage-ip');
+        $this->leereRateLimitZaehler('kontaktanfrage-ziel');
+
+        try {
+            for ($i = 1; $i <= 12; $i++) {
+                $antwort = $this->sendeAnfrage($besucher, $kontaktId, [
+                    'grund' => 'kaufinteresse',
+                    'name' => "Rater-{$i}-{$unique}",
+                    'email' => "rater-{$i}-{$unique}@example.test",
+                    'captcha' => '99',
+                ]);
+                $this->assertSame(
+                    "/kontakt?id={$kontaktId}&kontaktanfrage=captcha",
+                    $antwort->location(),
+                    "Versuch {$i} mit falscher Antwort muss an der Aufgabe scheitern, nicht am Limit"
+                );
+                $this->leereRateLimitZaehler('kontaktanfrage-ip');
+            }
+            $this->assertSame(
+                0,
+                $this->rateLimitStand('kontaktanfrage-ziel'),
+                'Falsche Antworten duerfen den Empfaenger-Zaehler nicht buchen (Audit M4)'
+            );
+
+            $vorher = $this->anzahlAnfragen();
+            $geloest = $this->sendeAnfrageMitAufgabe($besucher, $kontaktId, [
+                'grund' => 'kaufinteresse',
+                'name' => "Mensch-{$unique}",
+                'email' => "mensch-{$unique}@example.test",
+            ]);
+            $this->assertSame(
+                "/kontakt?id={$kontaktId}&kontaktanfrage=fehler",
+                $geloest->location(),
+                'Die geloeste Anfrage muss bis zum (hier scheiternden) Versand kommen'
+            );
+            $this->assertSame($vorher + 1, $this->anzahlAnfragen(), 'Die geloeste Anfrage muss gespeichert werden');
+            $this->assertSame(1, $this->rateLimitStand('kontaktanfrage-ziel'));
+
+            // Unveroeffentlichtes Ziel: still "erfolg", keine Buchung. Die
+            // Aufgabe wird auf der Seite des veroeffentlichten Kontakts
+            // geholt - die Seite des unveroeffentlichten liefert 404.
+            $verborgenId = $this->createContact($admin, "KAVerborgen-{$unique}", [
+                'email' => "verborgen-{$unique}@example.test",
+            ]);
+            Database::getInstance()->prepare('UPDATE contacts SET is_published = 0 WHERE id = ?')->execute([$verborgenId]);
+            $this->leereRateLimitZaehler('kontaktanfrage-ip');
+            $this->leereRateLimitZaehler('kontaktanfrage-ziel');
+
+            $vorher = $this->anzahlAnfragen();
+            $verborgen = $this->sendeAnfrageMitAufgabe($besucher, $verborgenId, [
+                'grund' => 'kaufinteresse',
+                'name' => "Mensch-2-{$unique}",
+                'email' => "mensch-2-{$unique}@example.test",
+            ], $kontaktId);
+            $this->assertSame("/kontakt?id={$verborgenId}&kontaktanfrage=erfolg", $verborgen->location());
+            $this->assertSame($vorher, $this->anzahlAnfragen(), 'An einen unveroeffentlichten Kontakt wird nichts gespeichert');
+            $this->assertSame(0, $this->rateLimitStand('kontaktanfrage-ziel'), 'Ein verworfenes Ziel bucht keinen Empfaenger-Zaehler');
+        } finally {
+            $this->leereRateLimitZaehler('kontaktanfrage-ip');
+            $this->leereRateLimitZaehler('kontaktanfrage-ziel');
+        }
+    }
+
+    /**
+     * Audit N2: Ohne contacts.view der Gast-Gruppe zeigt die Kontaktseite 404,
+     * das Formular erscheint also nicht. Ein direkter POST darf dann auch
+     * nichts speichern - und meldet trotzdem "erfolg" (nicht "captcha"),
+     * damit die Rueckmeldung kein Signal ist. Die Pruefung steht vor der
+     * Aufgabe: Die Aufgabe wird hier bewusst NICHT geloest.
+     */
+    public function testOhneContactsViewWirdNichtsGespeichert(): void {
+        $admin = $this->authenticatedClient();
+        $unique = uniqid();
+        $kontaktId = $this->bereiteZielVor($admin, "KAOhneRecht-{$unique}", $unique);
+        $db = Database::getInstance();
+        $gast = (int) $db->query("SELECT id FROM `groups` WHERE slug = 'public'")->fetchColumn();
+        $this->assertGreaterThan(0, $gast, 'Gast-Gruppe nicht gefunden');
+
+        $this->leereRateLimitZaehler('kontaktanfrage-ip');
+        $this->leereRateLimitZaehler('kontaktanfrage-ziel');
+
+        try {
+            $db->prepare("DELETE FROM `group_permissions` WHERE group_id = ? AND module = 'contacts' AND action = 'view'")
+                ->execute([$gast]);
+
+            $besucher = $this->newClient();
+            $this->assertSame(404, $besucher->get("/kontakt?id={$kontaktId}")->statusCode);
+
+            $dsgvo = $besucher->get('/dsgvo');
+            $vorher = $this->anzahlAnfragen();
+            $antwort = $besucher->post('/plugin/kontaktanfrage/senden', [
+                'csrf_token' => $dsgvo->formField('csrf_token') ?? '',
+                'kontakt_id' => (string) $kontaktId,
+                'grund' => 'kaufinteresse',
+                'name' => "OhneRecht-{$unique}",
+                'email' => "ohne-recht-{$unique}@example.test",
+            ]);
+            $this->assertSame("/kontakt?id={$kontaktId}&kontaktanfrage=erfolg", $antwort->location());
+            $this->assertSame($vorher, $this->anzahlAnfragen(), 'Ohne contacts.view darf nichts gespeichert werden');
+            $this->assertSame(0, $this->rateLimitStand('kontaktanfrage-ziel'));
+
+            $stmt = $db->prepare(
+                "SELECT COUNT(*) FROM audit_logs WHERE action = 'Kontaktanfrage eingegangen' AND details LIKE ?"
+            );
+            $stmt->execute(["Kontakt #{$kontaktId} - %"]);
+            $this->assertSame(0, (int) $stmt->fetchColumn(), 'Ohne contacts.view gibt es keinen Eingangs-Eintrag');
+        } finally {
+            $db->prepare("INSERT IGNORE INTO `group_permissions` (group_id, module, action) VALUES (?, 'contacts', 'view')")
+                ->execute([$gast]);
+            $this->leereRateLimitZaehler('kontaktanfrage-ip');
+            $this->leereRateLimitZaehler('kontaktanfrage-ziel');
+        }
+
+        // Gegenprobe: Mit dem Recht erscheint das Formular wieder.
+        $wieder = $this->newClient()->get("/kontakt?id={$kontaktId}");
+        $this->assertSame(200, $wieder->statusCode);
+        $this->assertStringContainsString('action="/plugin/kontaktanfrage/senden"', $wieder->body);
     }
 
     /**
@@ -680,6 +833,42 @@ class KontaktanfragePluginTest extends FunctionalTestCase {
         return (int)$stmt->fetchColumn();
     }
 
+    /** Schreibt $anzahl Buchungen eines Zaehlers direkt, statt sie abzuwarten. */
+    private function fuelleZaehler(string $bezeichner, string $typ, int $anzahl): void {
+        $stmt = \App\Database::getInstance()
+            ->prepare('INSERT INTO login_attempts (identifier, type, created_at) VALUES (?, ?, NOW())');
+        for ($i = 0; $i < $anzahl; $i++) {
+            $stmt->execute([$bezeichner, $typ]);
+        }
+    }
+
+    /**
+     * Aktiviert das Addon, legt einen veroeffentlichten Kontakt an und setzt
+     * eine Team-Adresse - die Voraussetzung dafuer, dass das Formular
+     * erscheint und eine Anfrage angenommen wird.
+     */
+    private function bereiteZielVor(HttpClient $admin, string $name, string $unique): int {
+        $admin->post('/admin/plugins/toggle', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'slug' => self::SLUG,
+            'enable' => '1',
+        ]);
+        $kontaktId = $this->createContact($admin, $name, [
+            'email' => "ziel-{$unique}@example.test",
+        ]);
+        $verwaltung = $admin->get(self::VERWALTUNG);
+        $this->assertSame(
+            self::VERWALTUNG . '?ka=gespeichert',
+            $admin->post('/plugin/kontaktanfrage/verwaltung/einstellungen', [
+                'csrf_token' => $verwaltung->formField('csrf_token') ?? '',
+                'team_email' => "team-{$unique}@example.test",
+                'zusatz_gruende' => '',
+                'aufbewahrung_tage' => '180',
+            ])->location()
+        );
+        return $kontaktId;
+    }
+
     private function anzahlAnfragen(): int {
         return (int)\App\Database::getInstance()
             ->query('SELECT COUNT(*) FROM `plugin_kontaktanfrage_requests`')
@@ -708,8 +897,10 @@ class KontaktanfragePluginTest extends FunctionalTestCase {
      *
      * @param array<string, string> $felder
      */
-    private function sendeAnfrageMitAufgabe(HttpClient $client, int $kontaktId, array $felder): HttpResponse {
-        $seite = $client->get("/kontakt?id={$kontaktId}");
+    private function sendeAnfrageMitAufgabe(HttpClient $client, int $kontaktId, array $felder, ?int $seitenId = null): HttpResponse {
+        // $seitenId: Aufgabe und Token von der Seite eines ANDEREN Kontakts
+        // holen - fuer Ziele, deren eigene Seite kein Formular zeigt.
+        $seite = $client->get('/kontakt?id=' . ($seitenId ?? $kontaktId));
         $antwort = $this->loeseAufgabe($seite);
         sleep(Captcha::MIN_SOLVE_SECONDS);
 

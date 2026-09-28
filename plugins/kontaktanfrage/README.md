@@ -66,8 +66,11 @@ später umbenannter Grund lesbar bleibt.
 
 ## Missbrauchsschutz
 
-Ein offenes Kontaktformular ist binnen Tagen ein Spam-Ziel, deshalb fünf
-Hürden statt einer:
+Ein offenes Kontaktformular ist binnen Tagen ein Spam-Ziel, deshalb mehrere
+Hürden statt einer. Sie greifen in dieser Reihenfolge (dieselbe wie in
+`deckanfrage` und `verkaufsboerse`): CSRF, Honeypot, Zähler je IP,
+Leserecht, Spam-Aufgabe, Eingabeprüfung, Zielprüfung, Zähler je Empfänger,
+Speichern.
 
 - **CSRF-Token** (`\App\Router::generateCsrfToken()`/`verifyCsrfToken()`) als
   erste Prüfung jedes schreibenden Endpunkts.
@@ -77,12 +80,22 @@ Hürden statt einer:
   `App\Security\RateLimiter`. Zwei Zähler, weil sie zwei verschiedene
   Missbräuche treffen: Der IP-Zähler bremst den einzelnen Absender, der
   Empfänger-Zähler verhindert, dass ein Kontakt über wechselnde Anschlüsse
-  zugemüllt wird. Einer allein wäre jeweils leicht zu umgehen.
+  zugemüllt wird. Einer allein wäre jeweils leicht zu umgehen. Der IP-Zähler
+  zählt **jeden Versuch** und steht vor der Spam-Aufgabe. Der
+  Empfänger-Zähler zählt nur **angenommene** Anfragen, also erst nach
+  gelöster Aufgabe, gültiger Eingabe und Zielprüfung. Vor 1.1.2 sperrten
+  zehn Versuche mit falscher Antwort das Formular eines Kontakts für einen
+  Tag, ohne dass eine Anfrage ankam (Audit M4).
+- **Leserecht `contacts.view`**: Ohne dieses Recht zeigt die Kontaktseite des
+  Kerns 404, das Formular erscheint also nicht. Ein direkter POST speichert
+  dann ebenfalls nichts und meldet trotzdem „erfolg“ (Audit N2). Angemeldete
+  Benutzer werden über ihre Gruppen geprüft, Administratoren immer
+  zugelassen - dieselbe Regel wie auf der Detailseite.
 - **Spam-Aufgabe** über den CAPTCHA-Unterbau des Kerns. Das Addon meldet sein
   Formular mit `captchaContexts()` als Kontext `kontaktanfrage` an
   (Kern-#351); welcher Anbieter greift, wählt der Betreiber unter den
   Systemeinstellungen je Formular, ohne Wahl gilt die eingebaute
-  Rechenaufgabe. Geprüft wird **nach** der Buchung der Mengenzähler, und das
+  Rechenaufgabe. Geprüft wird **nach** der Buchung des IP-Zählers, und das
   ist Absicht: Zählte ein falscher Versuch nicht, könnte ein Bot die knapp
   zwanzig möglichen Antworten der Rechenaufgabe durchprobieren, bis eine
   passt. Erst die Begrenzung der Rateversuche macht die Aufgabe wirksam - der
@@ -96,9 +109,10 @@ Hürden statt einer:
 
 Dazu die Regel, die für jede öffentliche Route dieses Repos gilt: **kein
 Existenz-Orakel.** Fehlender, unveröffentlichter oder abgeschalteter
-Datensatz führt zur selben Rückmeldung wie eine erfolgreiche Anfrage - der
-Rückgabestatus verrät nicht, welche IDs es gibt und wer Anfragen abgeschaltet
-hat.
+Datensatz sowie fehlendes `contacts.view` führen zur selben Rückmeldung wie
+eine erfolgreiche Anfrage - der Rückgabestatus verrät nicht, welche IDs es
+gibt und wer Anfragen abgeschaltet hat. Keiner dieser Fälle bucht den
+Empfänger-Zähler.
 
 Jede Anfrage, jede Weiterleitung, jede Änderung der Einstellungen und jedes
 Setzen/Aufheben eines Opt-outs steht im Audit-Log, ebenso eine wegen

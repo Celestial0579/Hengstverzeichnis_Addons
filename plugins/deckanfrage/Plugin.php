@@ -52,6 +52,17 @@ class Plugin {
     /** Der `type` der eigenen Zeilen in der Kern-Tabelle `login_attempts`. */
     public const RATE_LIMIT_TYPE = self::SLUG;
 
+    /**
+     * Längengrenzen der drei Freitextfelder (Audit N24). Name und Adresse
+     * folgen den Spalten VARCHAR(150) in `plugin_deckanfrage_requests`. Die
+     * Nachricht ist auf 5000 Zeichen begrenzt: Das reicht für jede Anfrage,
+     * hält die Mail an die Deckstation klein und bleibt mit höchstens
+     * 20 000 Byte (utf8mb4) sicher unter der TEXT-Grenze von 65 535 Byte.
+     */
+    public const NAME_MAX = 150;
+    public const EMAIL_MAX = 150;
+    public const NACHRICHT_MAX = 5000;
+
     public function register(HookManager $hooks): void {
         // Kein ensureTable() mehr: Die Tabelle legt install() an, das der
         // PluginManager bei Aktivierung und nach jedem Addon-Update genau
@@ -228,11 +239,11 @@ class Plugin {
             . '</div>';
 
         $html .= '<label style="display:block;margin-top:0.5rem;font-size:0.9em;">Ihr Name<br>'
-            . '<input type="text" name="requester_name" required style="width:100%;padding:0.4rem;margin-top:0.2rem;"></label>';
+            . '<input type="text" name="requester_name" required maxlength="' . self::NAME_MAX . '" style="width:100%;padding:0.4rem;margin-top:0.2rem;"></label>';
         $html .= '<label style="display:block;margin-top:0.5rem;font-size:0.9em;">Ihre E-Mail-Adresse<br>'
-            . '<input type="email" name="requester_email" required style="width:100%;padding:0.4rem;margin-top:0.2rem;"></label>';
+            . '<input type="email" name="requester_email" required maxlength="' . self::EMAIL_MAX . '" style="width:100%;padding:0.4rem;margin-top:0.2rem;"></label>';
         $html .= '<label style="display:block;margin-top:0.5rem;font-size:0.9em;">Nachricht<br>'
-            . '<textarea name="message" required rows="4" style="width:100%;padding:0.4rem;margin-top:0.2rem;"></textarea></label>';
+            . '<textarea name="message" required rows="4" maxlength="' . self::NACHRICHT_MAX . '" style="width:100%;padding:0.4rem;margin-top:0.2rem;"></textarea></label>';
 
         // Spam-Schutz des Kerns (Framework#351). `renderField()` liefert das
         // Fragment des Anbieters, den der Betreiber für DIESES Formular
@@ -271,18 +282,31 @@ class Plugin {
  * Kern-Formulare, Honeypot, IP-basiertes Rate-Limiting und seit Framework#351
  * die Sicherheitsfrage des Kerns gegen Spam.
  *
- * Die Reihenfolge der Hürden ist nicht beliebig: erst CSRF, dann Honeypot
- * (ein Bot soll gar nicht erst weiterkommen), dann das Rate-Limit, dann die
- * Sicherheitsfrage - und erst danach irgendetwas, das vom angefragten Pferd
- * abhängt. Alles, was vor der Pferde-Abfrage liegt, kann über seinen
- * Rückgabestatus nichts über die Existenz eines Pferdes verraten.
+ * Die Reihenfolge der Hürden ist nicht beliebig (dieselbe wie in
+ * kontaktanfrage und verkaufsboerse):
+ *
+ *  1. CSRF
+ *  2. Honeypot - ein Bot soll gar nicht erst weiterkommen (still "erfolg")
+ *  3. Rate-Limit je IP, prüfen und buchen
+ *  4. Leserechte horses.view und contacts.view (still "erfolg")
+ *  5. Sicherheitsfrage
+ *  6. Eingabeprüfung mit Längengrenzen und UTF-8-Prüfung ("fehler")
+ *  7. Pferd und Deckstation auflösen (still "erfolg")
+ *  8. Speichern und Versand
+ *
+ * Erst ab Schritt 7 hängt etwas vom angefragten Pferd ab. Alles davor kann
+ * über seinen Rückgabestatus nichts über die Existenz eines Pferdes verraten.
  */
 class AnfrageController extends BaseController {
 
     public function submit(): void {
-        $horseId = !empty($_POST['horse_id']) ? (int) $_POST['horse_id'] : null;
+        $rohId = $_POST['horse_id'] ?? null;
+        $horseId = is_string($rohId) && (int) $rohId > 0 ? (int) $rohId : null;
 
-        if (!Router::verifyCsrfToken($_POST['csrf_token'] ?? '')) {
+        // Nur Zeichenketten weiterreichen: Router::verifyCsrfToken(?string)
+        // wirft bei einem Array-Parameter (csrf_token[]=x) einen TypeError,
+        // und aus dem abgewiesenen Formular würde HTTP 500.
+        if (!Router::verifyCsrfToken(is_string($_POST['csrf_token'] ?? null) ? $_POST['csrf_token'] : '')) {
             $this->renderForbidden('CSRF-Sicherheits-Token ungültig oder abgelaufen.');
         }
 
@@ -300,6 +324,25 @@ class AnfrageController extends BaseController {
         }
         RateLimiter::recordAttempt($ip, Plugin::RATE_LIMIT_TYPE);
 
+        // Die Rechte der Gast-Gruppe zaehlen genauso mit wie in
+        // PublicController::horseDetail(): Ohne `horses.view` liefert die
+        // Detailseite 404, ohne `contacts.view` nullt sie alle station_*-Felder
+        // (Rechte-Modul seit #336 `contacts`, frueher `breeding_stations`).
+        // In beiden Faellen erscheint kein Formular - und in beiden Faellen
+        // darf ein Direkt-POST nichts versenden.
+        //
+        // Die Pruefung steht VOR der Sicherheitsfrage (Audit N24): Ein POST
+        // ohne Recht soll gar nicht erst verarbeitet werden, und die
+        // Rueckmeldung ist dieselbe wie beim Honeypot. Sie steht HINTER dem
+        // IP-Zaehler, damit auch solche POSTs begrenzt bleiben. Das Recht
+        // haengt an der Gruppe, nicht am Pferd - "erfolg" verraet also nichts
+        // ueber einzelne IDs. Captcha::clear(), damit keine ausgegebene
+        // Aufgabe in der Sitzung liegen bleibt.
+        if (!$this->hasPermission('horses', 'view') || !$this->hasPermission('contacts', 'view')) {
+            Captcha::clear();
+            $this->redirectBack($horseId, 'erfolg');
+        }
+
         // Sicherheitsfrage VOR jeder Verarbeitung und vor der Pferde-Abfrage
         // (Framework#351): Sie darf nichts darüber verraten, ob das Pferd
         // existiert, veröffentlicht ist oder eine erreichbare Station hat -
@@ -312,13 +355,11 @@ class AnfrageController extends BaseController {
             $this->redirectBack($horseId, 'captcha');
         }
 
-        $requesterName = trim($_POST['requester_name'] ?? '');
-        $requesterEmail = trim($_POST['requester_email'] ?? '');
-        $message = trim($_POST['message'] ?? '');
-
-        if (!$horseId || $requesterName === '' || $message === '' || !filter_var($requesterEmail, FILTER_VALIDATE_EMAIL)) {
+        $eingabe = $this->eingabeGueltig($_POST);
+        if ($horseId === null || $eingabe === null) {
             $this->redirectBack($horseId, 'fehler');
         }
+        [$requesterName, $requesterEmail, $message] = $eingabe;
 
         $db = Database::getInstance();
         // Diese Abfrage bestimmt den EMPFÄNGER einer E-Mail, die Name,
@@ -361,16 +402,6 @@ class AnfrageController extends BaseController {
         );
         $stmt->execute([$horseId]);
         $horse = $stmt->fetch();
-
-        // Die Rechte der Gast-Gruppe zaehlen genauso mit wie in
-        // PublicController::horseDetail(): Ohne `horses.view` liefert die
-        // Detailseite 404, ohne `contacts.view` nullt sie alle station_*-Felder
-        // (Rechte-Modul seit #336 `contacts`, frueher `breeding_stations`).
-        // In beiden Faellen erscheint kein Formular - und in beiden Faellen
-        // darf ein Direkt-POST nichts versenden.
-        if (!$this->hasPermission('horses', 'view') || !$this->hasPermission('contacts', 'view')) {
-            $this->redirectBack($horseId, 'erfolg');
-        }
 
         // Nicht auffindbares/unveröffentlichtes Pferd: stillschweigend verwerfen
         // und wie beim Honeypot "erfolg" melden - der Redirect-Status darf kein
@@ -444,7 +475,65 @@ class AnfrageController extends BaseController {
         $this->redirectBack($horseId, $sent ? 'erfolg' : 'fehler');
     }
 
-    private function redirectBack(?int $horseId, string $status): void {
+    /**
+     * Prüft die drei Freitextfelder und liefert sie bereinigt zurück, bei
+     * einem Verstoß null (Audit N24).
+     *
+     * Ohne diese Grenzen scheiterte eine überlange Eingabe erst am INSERT:
+     * Unter STRICT_TRANS_TABLES wirft MariaDB/MySQL bei „Data too long“ bzw.
+     * bei ungültigem UTF-8 („Incorrect string value“) eine PDOException - der
+     * Besucher sah HTTP 500, und die Anfrage war verloren.
+     *
+     * - Nur Zeichenketten; ein Array-Parameter führte sonst zu einem TypeError
+     *   in trim().
+     * - Gültiges UTF-8 in allen drei Feldern.
+     * - Name: nicht leer, höchstens NAME_MAX Zeichen, ohne Zeilenumbruch.
+     * - E-Mail: CR/LF wird VOR dem Trimmen abgelehnt - trim() würde einen
+     *   angehängten Umbruch sonst „reparieren“, und eine Adresse mit Umbruch
+     *   ist der Anlauf, eine Kopfzeile einzuschleusen. Danach höchstens
+     *   EMAIL_MAX Byte und FILTER_VALIDATE_EMAIL.
+     * - Nachricht: nicht leer, höchstens NACHRICHT_MAX Zeichen.
+     *
+     * Eine eigene Methode statt eines gemeinsamen Helfers: Addons importieren
+     * einander nicht, verkaufsboerse hat deshalb ihre eigene Fassung.
+     *
+     * @param array<string, mixed> $post
+     * @return array{0: string, 1: string, 2: string}|null
+     */
+    private function eingabeGueltig(array $post): ?array {
+        $rohName = $post['requester_name'] ?? '';
+        $rohEmail = $post['requester_email'] ?? '';
+        $rohNachricht = $post['message'] ?? '';
+        if (!is_string($rohName) || !is_string($rohEmail) || !is_string($rohNachricht)) {
+            return null;
+        }
+        if (!mb_check_encoding($rohName, 'UTF-8') || !mb_check_encoding($rohEmail, 'UTF-8')
+            || !mb_check_encoding($rohNachricht, 'UTF-8')) {
+            return null;
+        }
+
+        $name = trim($rohName);
+        if ($name === '' || mb_strlen($name, 'UTF-8') > Plugin::NAME_MAX || preg_match('/[\r\n]/', $name) === 1) {
+            return null;
+        }
+
+        if (preg_match('/[\r\n]/', $rohEmail) === 1) {
+            return null;
+        }
+        $email = trim($rohEmail);
+        if (strlen($email) > Plugin::EMAIL_MAX || filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+            return null;
+        }
+
+        $nachricht = trim($rohNachricht);
+        if ($nachricht === '' || mb_strlen($nachricht, 'UTF-8') > Plugin::NACHRICHT_MAX) {
+            return null;
+        }
+
+        return [$name, $email, $nachricht];
+    }
+
+    private function redirectBack(?int $horseId, string $status): never {
         header('Location: /horse?id=' . (int) $horseId . '&deckanfrage=' . $status);
         exit;
     }

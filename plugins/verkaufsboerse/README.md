@@ -57,14 +57,60 @@ funktionierender Mailversand konfiguriert sein.
   `horse.detail_sections`). Ziel des Formulars ist die POST-Route
   `/plugin/verkaufsboerse/kontakt`.
 
-Schutz gegen Missbrauch des Kontaktformulars: CSRF-Prüfung, unsichtbares
-Honeypot-Feld sowie IP-basiertes Rate-Limiting (max. 5 Anfragen/Stunde,
-eigener `type`-Wert), analog zum `deckanfrage`-Addon - dort auch die
-Einschränkung zum fehlenden `Reply-To`-Header von
-`App\Service\Mailer::send()` dokumentiert (gilt hier identisch). Anders als
-`deckanfrage` protokolliert die Verkaufsbörse eingehende Anfragen **nicht**
-in einer Tabelle - es gibt nur den Mailversand. Inserate liegen in
-`plugin_verkaufsboerse_listings`.
+## Spam-Schutz des Kontaktformulars
+
+Das Formular schickt Name, Adresse und Nachricht eines Dritten an die
+Kontakt-E-Mail des Inserats. Die Hürden greifen in dieser Reihenfolge
+(dieselbe wie in `kontaktanfrage` und `deckanfrage`):
+
+1. **CSRF-Prüfung.** Ein manipuliertes Feld (Array) führt seit 1.3.0 zu 403
+   statt zu HTTP 500.
+2. **Honeypot** mit dem Feldnamen des Kerns (`website`,
+   `App\Security\Captcha::HONEYPOT_FIELD`, geprüft mit
+   `Captcha::honeypotTripped()`). Bis 1.2.0 hieß das Feld `webseite`; der
+   alte Name wird noch eine Version lang ausgewertet. Ein Treffer meldet
+   scheinbar Erfolg und bucht keinen Zähler.
+3. **Zähler je IP**: höchstens 5 Anfragen je Stunde (`login_attempts`, Typ
+   `verkaufsboerse`).
+4. **Leserecht `horses.view`** der Gast-Gruppe (seit 1.3.0, Audit N4). Ohne
+   das Recht zeigen Börse und Pferdeseite 404, ein Direkt-POST versendet dann
+   nichts und meldet trotzdem „erfolg“. `contacts.view` spielt keine Rolle:
+   Der Empfänger ist die Kontakt-E-Mail des Inserats, kein Kontakt-Datensatz.
+5. **Sicherheitsfrage: folgt mit Kern-Captcha je Kontext.** Der gepinnte
+   Kern hält die eingebaute Rechenaufgabe in einem einzigen Session-Slot mit
+   fester DOM-ID `captcha`, `captcha-altcha` die seine ebenso. Auf einer
+   Hengstseite mit Deckanfrage-Formular (`deckanfrage`) überschriebe eine
+   zweite Aufgabe die erste, und eines der beiden Formulare wäre nicht mehr
+   absendbar. Das Formular meldet deshalb noch keinen Captcha-Kontext an;
+   das folgt, sobald der Kern Aufgaben je Kontext ablegt und
+   `captcha-altcha` nachgezogen ist.
+6. **Eingabeprüfung** (seit 1.3.0): Name und E-Mail-Adresse höchstens 150
+   Zeichen, Nachricht höchstens 5000 Zeichen, gültiges UTF-8, kein
+   Zeilenumbruch in Name und Adresse (bei der Adresse vor dem Trimmen
+   geprüft). Das Formular setzt dieselben Grenzen als `maxlength`. Ein
+   Verstoß führt zu `?verkaufsanfrage=fehler`.
+7. **Kein Existenz-Orakel**: Kein aktives Inserat, abgelaufenes Inserat oder
+   unveröffentlichtes Pferd melden seit 1.3.0 „erfolg“ statt „fehler“ -
+   ohne Versand. Der Status verrät nicht mehr, zu welchem Pferd ein Inserat
+   läuft.
+8. **Zähler je Inserat** (seit 1.3.0): höchstens 10 Anfragen je Inserat in
+   24 Stunden (`login_attempts`, Typ `verkaufsinserat`, Bezeichner
+   `inserat:<horse_id>`). Er zählt nur Anfragen, die alle Prüfungen davor
+   bestanden haben; darüber meldet das Formular „fehler“. Der IP-Zähler
+   allein ließe sich über wechselnde Anschlüsse umgehen.
+
+Die Einschränkung zum fehlenden `Reply-To`-Header von
+`App\Service\Mailer::send()` ist beim `deckanfrage`-Addon dokumentiert und
+gilt hier identisch. Anders als `deckanfrage` protokolliert die Verkaufsbörse
+eingehende Anfragen **nicht** in einer Tabelle - es gibt nur den Mailversand.
+Inserate liegen in `plugin_verkaufsboerse_listings`.
+
+## Deinstallation (Framework #338)
+
+`uninstall()` entfernt seit 1.3.0 die Zähler des Kontaktformulars aus der
+Kern-Tabelle `login_attempts` (Typen `verkaufsboerse` und
+`verkaufsinserat`; der IP-Zähler enthält IP-Adressen). Die Inserate bleiben
+stehen: Die `plugin.json` deklariert kein `owns`.
 
 Schema-Anlage: über den `install()`-Hook des PluginManagers (einmal bei
 Aktivierung bzw. nach einem Addon-Update); auf älteren Kernen ohne diesen

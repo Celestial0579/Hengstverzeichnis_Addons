@@ -620,6 +620,147 @@ class DeckanfragePluginTest extends FunctionalTestCase {
     }
 
     /**
+     * Audit N24: Überlange Eingaben und ungültiges UTF-8 enden auf "fehler"
+     * statt auf HTTP 500.
+     *
+     * Bis 1.2.0 prüfte der Controller keine Längen. Ein Name über 150
+     * Zeichen, eine lange E-Mail-Adresse oder ungültiges UTF-8 scheiterte
+     * erst am INSERT: Unter STRICT_TRANS_TABLES wirft die Datenbank eine
+     * PDOException, der Besucher sah eine Fehlerseite, und die Anfrage war
+     * verloren. Jeder Fall löst die Aufgabe, damit er wirklich bis zur
+     * Eingabeprüfung kommt.
+     */
+    public function testUeberlangeEingabenFuehrenZuFehlerStatt500(): void {
+        self::rateLimitZuruecksetzen();
+        $admin = $this->authenticatedClient();
+        $admin->post('/admin/plugins/toggle', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'slug' => self::SLUG,
+            'enable' => '1',
+        ]);
+
+        $unique = uniqid();
+        $stationId = $this->createStationContact($admin, "LaengenStation-{$unique}", [
+            'email' => "laengen-station-{$unique}@example.test",
+        ]);
+        $horseId = $this->createHorse($admin, "LaengenHengst-{$unique}", [
+            'status' => 'active',
+            'persons' => [['role' => 'owner', 'station_contact_id' => (string) $stationId]],
+        ]);
+
+        $visitor = $this->newClient();
+        $seite = $visitor->get("/horse?id={$horseId}");
+        $this->assertStringContainsString('name="requester_name" required maxlength="150"', $seite->body);
+        $this->assertStringContainsString('name="requester_email" required maxlength="150"', $seite->body);
+        $this->assertStringContainsString('name="message" required rows="4" maxlength="5000"', $seite->body);
+
+        // Gültige Adresse mit 155 Zeichen: jedes Label unter 63 Zeichen.
+        $langeAdresse = str_repeat('x', 40) . '@' . str_repeat('a', 50) . '.' . str_repeat('b', 50) . '.example.test';
+        $this->assertNotFalse(filter_var($langeAdresse, FILTER_VALIDATE_EMAIL), 'Die Testadresse selbst muss gültig sein');
+        $this->assertGreaterThan(150, strlen($langeAdresse));
+
+        $gueltig = [
+            'requester_name' => 'Laengen-Tester',
+            'requester_email' => "laenge-{$unique}@example.test",
+            'message' => 'Steht der Hengst zur Verfügung?',
+        ];
+        $faelle = [
+            '(a) Name mit 151 Zeichen' => ['requester_name' => str_repeat('n', 151)],
+            '(b) E-Mail über 150 Zeichen' => ['requester_email' => $langeAdresse],
+            '(c) Nachricht mit 5001 Zeichen' => ['message' => str_repeat('m', 5001)],
+            '(d) ungültiges UTF-8 im Namen' => ['requester_name' => "Kaputt\xC3\x28"],
+        ];
+
+        foreach ($faelle as $fall => $abweichung) {
+            self::rateLimitZuruecksetzen();
+            $antwort = $visitor->post('/plugin/deckanfrage/anfrage', $this->formularVorbereiten($visitor, $horseId) + $abweichung + $gueltig + [
+                'horse_id' => (string) $horseId,
+            ]);
+            $this->assertSame(302, $antwort->statusCode, "{$fall}: erwartet eine Weiterleitung statt einer Fehlerseite");
+            $this->assertSame("/horse?id={$horseId}&deckanfrage=fehler", $antwort->location(), $fall);
+            $this->assertSame(0, $this->anfragenZuPferd($horseId), "{$fall}: nichts gespeichert");
+        }
+
+        // (e) Genau 150 Zeichen samt Umlauten (300 Byte) gehen durch. Ohne
+        //     SMTP scheitert erst der Versand - gespeichert wird trotzdem.
+        self::rateLimitZuruecksetzen();
+        $antwort = $visitor->post('/plugin/deckanfrage/anfrage', $this->formularVorbereiten($visitor, $horseId) + [
+            'requester_name' => str_repeat('Ä', 150),
+        ] + $gueltig + [
+            'horse_id' => (string) $horseId,
+        ]);
+        $this->assertSame("/horse?id={$horseId}&deckanfrage=fehler", $antwort->location());
+        $this->assertSame(1, $this->anfragenZuPferd($horseId), '(e) Ein Name mit genau 150 Zeichen muss gespeichert werden');
+
+        // CSRF-Feld als Array: 403 statt TypeError und HTTP 500.
+        self::rateLimitZuruecksetzen();
+        $array = $visitor->post('/plugin/deckanfrage/anfrage', [
+            'csrf_token[]' => 'x',
+            'horse_id' => (string) $horseId,
+        ] + $gueltig);
+        $this->assertSame(403, $array->statusCode, 'Ein CSRF-Feld als Array ist ein ungültiges Token, kein Serverfehler');
+        self::rateLimitZuruecksetzen();
+    }
+
+    /**
+     * Audit N24: Die Rechteprüfung steht vor der Sicherheitsfrage. Ohne
+     * horses.view der Gast-Gruppe zeigt die Pferdeseite 404 - ein direkter
+     * POST ohne gelöste Aufgabe meldet dann "erfolg" wie beim Honeypot, nicht
+     * "captcha", und versendet nichts.
+     */
+    public function testOhneHorsesViewVorDerAufgabeErfolg(): void {
+        self::rateLimitZuruecksetzen();
+        $admin = $this->authenticatedClient();
+        $admin->post('/admin/plugins/toggle', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'slug' => self::SLUG,
+            'enable' => '1',
+        ]);
+
+        $unique = uniqid();
+        $stationMail = "rechte-station-{$unique}@example.test";
+        $stationId = $this->createStationContact($admin, "RechteStation-{$unique}", ['email' => $stationMail]);
+        $horseId = $this->createHorse($admin, "RechteHengst-{$unique}", [
+            'status' => 'active',
+            'persons' => [['role' => 'owner', 'station_contact_id' => (string) $stationId]],
+        ]);
+
+        $db = \App\Database::getInstance();
+        $gast = (int) $db->query("SELECT id FROM `groups` WHERE slug = 'public'")->fetchColumn();
+        $this->assertGreaterThan(0, $gast, 'Gast-Gruppe nicht gefunden');
+
+        try {
+            $db->prepare("DELETE FROM `group_permissions` WHERE group_id = ? AND module = 'horses' AND action = 'view'")
+                ->execute([$gast]);
+
+            $visitor = $this->newClient();
+            $this->assertSame(404, $visitor->get("/horse?id={$horseId}")->statusCode);
+
+            $dsgvo = $visitor->get('/dsgvo');
+            $antwort = $visitor->post('/plugin/deckanfrage/anfrage', [
+                'csrf_token' => $dsgvo->formField('csrf_token') ?? '',
+                'horse_id' => (string) $horseId,
+                'requester_name' => 'Ohne Recht',
+                'requester_email' => "ohne-recht-{$unique}@example.test",
+                'message' => 'Direkter POST ohne Leserecht.',
+            ]);
+            $this->assertSame(
+                "/horse?id={$horseId}&deckanfrage=erfolg",
+                $antwort->location(),
+                'Ohne horses.view: still "erfolg" vor der Sicherheitsfrage, nicht "captcha"'
+            );
+            $this->assertSame(0, $this->anfragenZuPferd($horseId));
+            $this->assertNotContains($stationMail, $this->mailEmpfaengerSeitKurzem());
+        } finally {
+            $db->prepare("INSERT IGNORE INTO `group_permissions` (group_id, module, action) VALUES (?, 'horses', 'view')")
+                ->execute([$gast]);
+            self::rateLimitZuruecksetzen();
+        }
+
+        $this->assertSame(200, $this->newClient()->get("/horse?id={$horseId}")->statusCode);
+    }
+
+    /**
      * Die Empfängeradressen aller Versandversuche der letzten zehn Minuten.
      *
      * App\Service\Mailer protokolliert jeden Versuch unter der Kategorie

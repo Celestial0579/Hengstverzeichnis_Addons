@@ -44,6 +44,22 @@ DSGVO-Benachrichtigungen etc. nutzt).
   E-Mail-Adresse und Nachricht des Interessenten liegen dort dauerhaft im
   Klartext; eine Löschroutine bringt das Addon nicht mit - für
   DSGVO-Löschersuchen muss der Betreiber die Tabelle selbst bereinigen.
+- Eingabegrenzen (1.2.1, Audit N24): Name und E-Mail-Adresse höchstens 150
+  Zeichen (passend zu den Spalten `VARCHAR(150)`), die Nachricht höchstens
+  5000 Zeichen. Das Formular setzt `maxlength`, der Server prüft dieselben
+  Grenzen, dazu gültiges UTF-8 und keine Zeilenumbrüche in Name und Adresse.
+  Ein Verstoß führt zu `?deckanfrage=fehler`. Bis 1.2.0 scheiterte eine
+  überlange Eingabe erst am Speichern - mit HTTP 500 und verlorener Anfrage.
+
+Die Hürden greifen in dieser Reihenfolge (dieselbe wie in `kontaktanfrage`
+und `verkaufsboerse`): CSRF, Honeypot, IP-Limit, Leserechte der Gast-Gruppe,
+Sicherheitsfrage, Eingabeprüfung, Pferd und Station, Speichern und Versand.
+Fehlt `horses.view` oder `contacts.view`, meldet der Handler seit 1.2.1 schon
+**vor** der Sicherheitsfrage still „erfolg“ - ein Direkt-POST ohne Recht wird
+gar nicht erst verarbeitet.
+
+Ein Zähler je Deckstation (wie der Empfänger-Zähler von `kontaktanfrage`) ist
+nicht eingebaut; er gehörte an dieselbe Stelle hinter die Stationsprüfung.
 
 Anzeige und Verarbeitung wenden dieselbe Sichtbarkeitsregel an: Auch der
 POST-Handler (`/plugin/deckanfrage/anfrage`) filtert die Deckstation auf
