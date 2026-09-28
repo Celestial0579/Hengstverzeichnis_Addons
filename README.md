@@ -73,8 +73,9 @@ Danach unter **Admin → Plugins verwalten** (`/admin/plugins`) aktivieren.
 - [`mitgliedsstatus`](plugins/mitgliedsstatus/README.md) - führt
   Mitglied/Nichtmitglied je Kontakt als eigenes Feld mit fester Werteliste,
   nachdem der Kern das Freitextfeld entfernt hat (Framework#349). Übernimmt
-  Bestandswerte bei der Installation und schaltet die öffentliche Anzeige je
-  Kontakt frei (Vorgabe: nicht öffentlich).
+  Bestandswerte bei der Installation - beim direkten Sprung aus v0.7 auch aus
+  dem Altbestand `persons_pre_contacts` - und schaltet die öffentliche Anzeige
+  je Kontakt frei (Vorgabe: nicht öffentlich).
 - [`mitglieder-konten`](plugins/mitglieder-konten/README.md) - legt
   Benutzerkonten für Verbandsmitglieder aus einer CiviCRM-Instanz an; endet
   eine Mitgliedschaft, sperrt der tägliche Lauf das Konto. CiviCRM ist

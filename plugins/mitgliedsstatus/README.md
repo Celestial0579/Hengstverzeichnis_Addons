@@ -84,6 +84,16 @@ behauptet, es hätte nichts bedeutet - das ist Raten. Stattdessen landet der
 Wortlaut auf der Verwaltungsseite, gruppiert und gezählt, und **ein Mensch**
 weist allen Kontakten mit genau diesem Wortlaut in einem Zug einen Status zu.
 
+Leerraum am Rand zählt dabei nicht (seit 1.1.0, Audit N32): Übernahme, Liste
+und Zuordnen verwenden dieselbe SQL-Regel (`Status::normiert()`,
+`REGEXP_REPLACE` auf `[[:space:]]` am Rand). `' Nichtmitglied NO'`,
+`'Nichtmitglied NO'` mit Tab oder Zeilenumbruch am Ende und
+`'nichtmitglied no'` erscheinen als **eine** Zeile und werden gemeinsam
+zugeordnet. Der gesicherte Wortlaut (`altwert`) bleibt trotzdem Zeichen für
+Zeichen erhalten, normiert wird nur im Vergleich. Innerer Mehrfach-Leerraum
+wird bewusst nicht zusammengefasst. Werte, die nur aus Leerraum bestehen,
+werden nicht übernommen.
+
 ### Warum sie einen Marker braucht
 
 `install()` läuft bei **jeder** Aktivierung und nach jedem Addon-Update erneut
@@ -100,7 +110,20 @@ beides zurück, ein Erfolg hält beides fest; einen Zwischenstand mit
 übernommenen Daten und fehlendem Marker gibt es nicht.
 
 Der Marker ist die Einstellung `plugin_mitgliedsstatus_uebernahme` und enthält
-zugleich den Bericht (Zeitpunkt, gelesen, zugeordnet, offen).
+zugleich den Bericht als JSON:
+
+| Feld | Bedeutung |
+|---|---|
+| `zeitpunkt` | Zeitpunkt der Übernahme |
+| `gesamt`, `zugeordnet`, `offen` | gelesen, abgebildet, zur Nacharbeit offen |
+| `quelle` | seit 1.1.0: `contacts` oder `persons_pre_contacts` |
+| `bestand` | nur bei `persons_pre_contacts`: schon im Addon gepflegt, unverändert gelassen |
+| `grund` | `keine-spalte`, wenn es nichts zu übernehmen gab |
+
+**Das Format ist Vertrag mit dem Kern.** `App\Service\MitgliedsstatusAltbestand`
+liest `grund` und `quelle`, um Admins auf dem Dashboard auf noch nicht
+übernommene Werte im v0.7-Altbestand hinzuweisen. Wer die Felder oder die
+Regel unten ändert, ändert beide Seiten.
 
 „Konnte nicht" und „war nichts zu tun" sind dabei verschiedene Aussagen: Fehlt
 die Tabelle `contacts` (Kern der 0.7-Linie), wird **kein** Marker gesetzt und
@@ -114,6 +137,31 @@ Addons#132 nennt sie ausdrücklich: **Addon steht und hat übernommen → dann
 entfernt der Kern die Spalte.** Läuft die Übernahme nicht, fallen die
 gepflegten Werte zwischen die beiden Releases; nach dem Kern-Update ist nichts
 mehr da, woraus man sie holen könnte.
+
+**Ausnahme: der direkte Sprung aus v0.7** (seit 1.1.0, Audit N78). Eine
+v0.7-Instanz kann das Addon vor dem Update nicht installieren - ihr Kern kennt
+`contacts` noch nicht. Nach dem Sprung auf einen Kern nach Framework#395 hatte
+`contacts` die Spalte nie; die Werte stehen nur im stillgelegten Altbestand
+`persons_pre_contacts`, unter denselben Kontakt-IDs. Das Addon übernimmt sie
+von dort, auch wenn es **nach** dem Kern-Update installiert wird. Bedingungen:
+
+- `persons_pre_contacts.membership_status` existiert, `contacts.membership_status`
+  nicht, und
+- der Kern hat **keinen** Marker `migration_395_membership_status_faellt`
+  gesetzt. Den setzt der Schritt 395 nur, wenn er die Spalte in `contacts`
+  tatsächlich gelöscht hat - dann lief die Instanz über 0.8/0.9, und der
+  Altbestand ist der womöglich überholte Stand der #336-Umstellung. Er wird in
+  diesem Fall **nicht** übernommen.
+
+Gelesen wird per JOIN auf `contacts`: gelöschte und zusammengeführte Kontakte
+bleiben aussen vor, vom Kern anonymisierte (Name „Anonymisierte Person (#id)“)
+ebenfalls. Es wird **nur eingefügt** - eine schon im Addon gepflegte Angabe
+bleibt stehen und wird im Bericht als `bestand` gezählt.
+
+Hatte 1.0.0 nach dem Sprung schon mit „keine Spalte“ abgeschlossen (Marker
+mit `grund: keine-spalte`, ohne `quelle`), holt 1.1.0 die Übernahme beim Update
+**einmal** nach. Danach trägt der Marker `quelle`, und es bleibt beim
+Nur-einmal-Prinzip.
 
 ## Das Freitextfeld des Kerns danach
 
@@ -210,6 +258,9 @@ verlangt **beides** - `manage` und `contacts.edit`.
 
 - `tests/Functional/MitgliedsstatusPluginTest.php` - vollständiger Durchlauf
   gegen eine echte Instanz: Übernahme, Marker (mit **und** ohne), Nacharbeit,
-  Sichtbarkeit in beiden Richtungen, CiviCRM-Link, Protokoll.
+  Sichtbarkeit in beiden Richtungen, CiviCRM-Link, Protokoll. Dazu
+  Randleerraum- und Gross/Klein-Varianten beim Zuordnen (N32) und der
+  v0.7-Sprung (N78): Übernahme aus `persons_pre_contacts`, Gegenprobe mit
+  395-Marker, Nachholen eines 1.0.0-Markers ohne Überschreiben.
 - `tests/Unit/MitgliedsstatusWerteTest.php` - die Abbildungsregel als reine
-  Funktion.
+  Funktion, und dass es nur eine Randleerraum-Regel gibt.

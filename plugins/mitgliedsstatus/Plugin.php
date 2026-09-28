@@ -400,7 +400,49 @@ final class Status {
 
     public const TABELLE = 'plugin_mitgliedsstatus_kontakt';
 
+    /**
+     * Die EINE Regel für Leerraum am Rand eines Bestandswortlauts (Audit N32).
+     *
+     * Übernahmefilter, Anzeige der offenen Wortlaute (GROUP BY) und Zuordnen
+     * (WHERE) verwenden genau diesen Ausdruck. Vorher gruppierte die Anzeige
+     * nach dem Rohwert, das Zuordnen kürzte mit PHP-trim() und verglich dann
+     * roh: ' Nichtmitglied NO' oder 'Nichtmitglied NO' mit Tab am Ende stand in
+     * der Liste, liess sich aber nie zuordnen. Die Kollation (PAD SPACE)
+     * gleicht nur nachgestellte Leerzeichen aus, keine vorangestellten und
+     * keine Tabs oder Zeilenumbrüche.
+     *
+     * Warum nicht SQL-TRIM(): TRIM entfernt nur Leerzeichen, keine Tabs und
+     * Zeilenumbrüche. [[:space:]] deckt die Randbehandlung von PHP-trim() bzw.
+     * Werte::normalisieren() praktisch ab; die Abweichungen sind bedeutungslos
+     * (\0 wird nicht erfasst, \f zusätzlich).
+     *
+     * Inneren Mehrfach-Leerraum ('Nichtmitglied  NO') fasst die Regel bewusst
+     * NICHT zusammen: Das verlangt niemand, und solche Gruppen bleiben
+     * einzeln sichtbar und einzeln zuordenbar.
+     *
+     * REGEXP_REPLACE gibt es ab MariaDB 10.0.5 (der Kern verlangt 10.11/11).
+     * Das Ergebnis behält die Kollation der Spalte (implizite Koerzibilität
+     * schlägt den Parameter) - Gross/Klein-Varianten fallen deshalb weiter
+     * per utf8mb4_unicode_ci zusammen, in der Anzeige wie beim Zuordnen.
+     *
+     * Der gesicherte `altwert` selbst bleibt byte-genau; normiert wird nur im
+     * Vergleich.
+     */
+    public const RANDLEERRAUM = '^[[:space:]]+|[[:space:]]+$';
+
+    /** Der normierte `altwert` - Anzeige und Zuordnen teilen genau diesen Ausdruck. */
+    public const ALTWERT_NORMIERT = "REGEXP_REPLACE(altwert, '" . self::RANDLEERRAUM . "', '')";
+
     private function __construct() {}
+
+    /**
+     * Derselbe Ausdruck für eine beliebige Spalte (Übernahmefilter für
+     * `contacts.membership_status` und `persons_pre_contacts.membership_status`).
+     * $spalte ist immer ein Bezeichner aus diesem Code, nie eine Eingabe.
+     */
+    public static function normiert(string $spalte): string {
+        return 'REGEXP_REPLACE(' . $spalte . ", '" . self::RANDLEERRAUM . "', '')";
+    }
 
     /**
      * @return array{status:string, oeffentlich:bool, altwert:string, offen:bool}
@@ -651,7 +693,9 @@ final class Konfiguration {
 
 /**
  * Die einmalige Übernahme der Bestandswerte aus `contacts.membership_status`
- * (Addons#132, Framework#349).
+ * (Addons#132, Framework#349) - oder, beim direkten Sprung aus v0.7, aus dem
+ * stillgelegten Altbestand `persons_pre_contacts.membership_status`
+ * (Framework#395, Audit N78).
  *
  * WARUM SIE NICHT OPTIONAL IST. Der Kern entfernt die Spalte in v0.9.0. Läuft
  * die Übernahme nicht, fallen die gepflegten Werte zwischen die beiden
@@ -679,16 +723,54 @@ final class Konfiguration {
  * Tabelle `contacts`, läuft ein Kern der 0.7-Linie und die Übernahme ist noch
  * nicht möglich - dann wird KEIN Marker gesetzt, damit der nächste Lauf es
  * erneut versucht. Fehlt dagegen die Spalte `membership_status` bei
- * vorhandener Tabelle, ist der Kern schon über v0.9.0 hinaus und es gibt
- * dauerhaft nichts zu übernehmen - dann gehört der Marker gesetzt, sonst
- * suchte später jemand nach einer Übernahme, die nie kommen kann.
+ * vorhandener Tabelle, ist der Kern schon über v0.9.0 hinaus - dann gehört
+ * der Marker gesetzt, sonst suchte später jemand nach einer Übernahme, die nie
+ * kommen kann.
+ *
+ * DER DRITTE FALL: SPALTE WEG, ABER v0.7-ALTBESTAND DA (Audit N78). Eine
+ * v0.7-Instanz springt über den Updater direkt auf einen Kern nach #395. Ihr
+ * `contacts` hatte die Spalte nie - die Werte stehen nur in
+ * `persons_pre_contacts`, unter denselben IDs (#336 kopiert Personen
+ * ID-treu). Das Addon konnte vor dem Update gar nicht installiert werden,
+ * weil ein 0.7-Kern `contacts` nicht kennt. Dann ist der Altbestand die
+ * einzige und aktuelle Quelle, siehe altbestandQuelle().
+ *
+ *  - NUR OHNE 395-MARKER. Der Kern-Schritt 395 setzt
+ *    `migration_395_membership_status_faellt` nur, wenn er die Spalte in
+ *    `contacts` tatsächlich gelöscht hat. Fehlt er, hatte `contacts` die
+ *    Spalte nie - das ist der Sprung aus v0.7. Steht er da, lief die Instanz
+ *    über 0.8/0.9, und `persons_pre_contacts` ist der Stand vom Zeitpunkt
+ *    der #336-Übernahme: womöglich überholt, später von Hand geänderte Werte
+ *    kämen stumm zurück. Dann bleibt es beim dokumentierten Verlust.
+ *  - NUR EINFÜGEN. Aus dem Altbestand wird keine vorhandene Addon-Zeile
+ *    überschrieben; wer nach dem Sprung schon von Hand gepflegt hat, behält
+ *    das. Übersprungene Kontakte zählt der Bericht als `bestand`.
+ *  - EIN 1.0.0-MARKER "keine-spalte" DARF EINMAL NACHGEHOLT WERDEN. Wer nach
+ *    dem Sprung noch 1.0.0 installiert hatte, trägt ihn - und der Kern weist
+ *    ihn auf dem Dashboard an, auf ≥ 1.1.0 zu aktualisieren. Ohne Nachholen
+ *    wäre der Hinweis für genau diese Betreiber wirkungslos. Sicher ist das,
+ *    weil "keine-spalte" "nichts übernommen" bedeutet und der Altbestandspfad
+ *    nur einfügt. Der neue Marker trägt `quelle` und blockiert danach jedes
+ *    weitere Nachholen.
+ *
+ * DAS MARKERFORMAT IST VERTRAG MIT DEM KERN. App\Service\MitgliedsstatusAltbestand
+ * liest `plugin_mitgliedsstatus_uebernahme` und wertet die Felder `grund` und
+ * `quelle` nach derselben Regel aus wie einmalig() hier. Wer die Regel oder die
+ * Felder ändert, ändert beide Seiten.
  */
 final class Uebernahme {
+
+    /** Der stillgelegte v0.7-Altbestand (Framework#336, Schritt 336_altbestand_stilllegen). */
+    public const ALTBESTAND = 'persons_pre_contacts';
+
+    /** Der Marker des Kern-Schritts, der `contacts.membership_status` löscht (Framework#395). */
+    public const MARKER_395 = 'migration_395_membership_status_faellt';
 
     private function __construct() {}
 
     public static function einmalig(PDO $db): void {
-        if (Konfiguration::uebernahmeBericht() !== null) {
+        $bericht = Konfiguration::uebernahmeBericht();
+        if ($bericht !== null && !self::nachholbar($db, $bericht)) {
             return;
         }
 
@@ -697,20 +779,117 @@ final class Uebernahme {
         }
 
         if (!self::spalteExistiert($db, 'contacts', 'membership_status')) {
-            self::abschliessen($db, ['gesamt' => 0, 'zugeordnet' => 0, 'offen' => 0, 'grund' => 'keine-spalte']);
+            if (self::altbestandQuelle($db)) {
+                self::uebernehmen($db, self::altbestandZeilen($db), self::ALTBESTAND, true);
+                return;
+            }
+            if ($bericht === null) {
+                self::abschliessen($db, ['gesamt' => 0, 'zugeordnet' => 0, 'offen' => 0, 'grund' => 'keine-spalte']);
+            }
             return;
+        }
+
+        if ($bericht !== null) {
+            return; // Nachholen gibt es nur für den Altbestand, siehe nachholbar().
         }
 
         // Auch Kontakte im Papierkorb (`deleted_at IS NOT NULL`) werden
         // übernommen. Sie sind wiederherstellbar; ihren Wert jetzt liegen zu
         // lassen hiesse, ihn beim Wiederherstellen verloren zu haben.
+        //
+        // Der Filter ist die Randleerraum-Regel aus Status (Audit N32): Ein
+        // Wert aus nur Tab oder Zeilenumbruch hätte TRIM() passiert, wäre als
+        // offen übernommen worden - und auf der Verwaltungsseite unsichtbar
+        // und für immer offen geblieben.
         $zeilen = $db->query(
-            "SELECT id, membership_status FROM contacts
-             WHERE membership_status IS NOT NULL AND TRIM(membership_status) <> ''"
+            'SELECT id, membership_status FROM contacts
+             WHERE membership_status IS NOT NULL AND ' . Status::normiert('membership_status') . " <> ''"
         )->fetchAll(PDO::FETCH_ASSOC);
 
+        self::uebernehmen($db, $zeilen, 'contacts', false);
+    }
+
+    /**
+     * Ob ein schon vorhandener Marker noch einmal nachgeholt werden darf:
+     * nur ein "keine-spalte" OHNE `quelle` (also von 1.0.0 gesetzt, der den
+     * Altbestand nicht kannte), und nur, wenn der Altbestand jetzt als Quelle
+     * gilt. Siehe den Klassenkommentar.
+     *
+     * @param array<string, mixed> $bericht
+     */
+    private static function nachholbar(PDO $db, array $bericht): bool {
+        return ($bericht['grund'] ?? null) === 'keine-spalte'
+            && !array_key_exists('quelle', $bericht)
+            && self::altbestandQuelle($db);
+    }
+
+    /**
+     * Gilt `persons_pre_contacts` als Quelle? Nur beim direkten Sprung aus
+     * v0.7: Altbestand mit Spalte da, `contacts.membership_status` weg, und
+     * KEIN 395-Marker (siehe Klassenkommentar). Jeder Lesefehler heisst nein -
+     * im Zweifel wird nichts aus einem womöglich überholten Stand geholt.
+     *
+     * Dieselbe Regel steht im Kern (App\Service\MitgliedsstatusAltbestand).
+     */
+    private static function altbestandQuelle(PDO $db): bool {
+        if (!self::tabelleExistiert($db, self::ALTBESTAND)
+            || !self::spalteExistiert($db, self::ALTBESTAND, 'membership_status')
+            || self::spalteExistiert($db, 'contacts', 'membership_status')
+        ) {
+            return false;
+        }
+
+        try {
+            $stmt = $db->prepare('SELECT COUNT(*) FROM settings WHERE setting_key = ?');
+            $stmt->execute([self::MARKER_395]);
+            return (int) $stmt->fetchColumn() === 0;
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Die Werte aus dem Altbestand.
+     *
+     * - JOIN auf `contacts`: hält den Fremdschlüssel der eigenen Tabelle ein
+     *   und lässt DSGVO-gelöschte sowie per Zusammenführen entfernte Kontakte
+     *   aus. Kontakte im Papierkorb werden wie beim contacts-Pfad übernommen.
+     * - Der Namensfilter lässt vom Kern anonymisierte Kontakte aus. Er ist der
+     *   exakte Wortlaut aus GdprController::anonymizePerson() im Kern - ändert
+     *   sich der dort, muss er hier (und in MitgliedsstatusAltbestand)
+     *   mitgezogen werden.
+     * - Randleerraum-Regel wie im contacts-Pfad (Audit N32).
+     *
+     * @return array<int, array{id:mixed, membership_status:mixed}>
+     */
+    private static function altbestandZeilen(PDO $db): array {
+        $zeilen = $db->query(
+            'SELECT p.id, p.membership_status
+             FROM `' . self::ALTBESTAND . '` p
+             JOIN contacts c ON c.id = p.id
+             WHERE p.membership_status IS NOT NULL
+               AND ' . Status::normiert('p.membership_status') . " <> ''
+               AND c.name <> CONCAT('Anonymisierte Person (#', c.id, ')')
+             ORDER BY p.id ASC"
+        )->fetchAll(PDO::FETCH_ASSOC);
+
+        return is_array($zeilen) ? $zeilen : [];
+    }
+
+    /**
+     * Schreibt die gelesenen Zeilen und den Marker in EINER Transaktion.
+     *
+     * $nurEinfuegen (Altbestandspfad): Eine schon vorhandene Addon-Zeile
+     * bleibt unangetastet und wird als `bestand` gezählt. Geprüft wird das
+     * ausdrücklich vorab statt über rowCount() eines ON DUPLICATE KEY UPDATE -
+     * dessen Rückgabe hängt an der Verbindungsoption FOUND_ROWS.
+     *
+     * @param array<int, array{id:mixed, membership_status:mixed}> $zeilen
+     */
+    private static function uebernehmen(PDO $db, array $zeilen, string $quelle, bool $nurEinfuegen): void {
         $zugeordnet = 0;
         $offen = 0;
+        $bestand = 0;
 
         $db->beginTransaction();
         try {
@@ -720,18 +899,42 @@ final class Uebernahme {
             // setzen. Und im INSERT-Zweig ist der Wert 0 - der heutige Zustand
             // "bedingungslos öffentlich" wird bei der Übernahme bewusst NICHT
             // fortgeschrieben (Addons#132: Vorgabe ist "nicht öffentlich").
-            $schreiben = $db->prepare(
-                'INSERT INTO `' . Status::TABELLE . '` (contact_id, status, oeffentlich, altwert, offen, geaendert_von)
-                 VALUES (:id, :status, 0, :altwert, :offen, :von)
-                 ON DUPLICATE KEY UPDATE
-                    status = VALUES(status),
-                    altwert = VALUES(altwert),
-                    offen = VALUES(offen),
-                    geaendert_von = VALUES(geaendert_von)'
-            );
+            //
+            // Beim Altbestand ($nurEinfuegen) ist der UPDATE-Zweig ein no-op:
+            // Die Vorabprüfung unten überspringt vorhandene Zeilen ohnehin,
+            // das no-op sichert nur gegen eine zwischenzeitlich entstandene.
+            if ($nurEinfuegen) {
+                $schreiben = $db->prepare(
+                    'INSERT INTO `' . Status::TABELLE . '` (contact_id, status, oeffentlich, altwert, offen, geaendert_von)
+                     VALUES (:id, :status, 0, :altwert, :offen, :von)
+                     ON DUPLICATE KEY UPDATE contact_id = contact_id'
+                );
+            } else {
+                $schreiben = $db->prepare(
+                    'INSERT INTO `' . Status::TABELLE . '` (contact_id, status, oeffentlich, altwert, offen, geaendert_von)
+                     VALUES (:id, :status, 0, :altwert, :offen, :von)
+                     ON DUPLICATE KEY UPDATE
+                        status = VALUES(status),
+                        altwert = VALUES(altwert),
+                        offen = VALUES(offen),
+                        geaendert_von = VALUES(geaendert_von)'
+                );
+            }
+            $vorhanden = $db->prepare('SELECT 1 FROM `' . Status::TABELLE . '` WHERE contact_id = ? FOR UPDATE');
 
             foreach ($zeilen as $zeile) {
                 $kontaktId = (int) $zeile['id'];
+
+                if ($nurEinfuegen) {
+                    $vorhanden->execute([$kontaktId]);
+                    $schonDa = $vorhanden->fetchColumn() !== false;
+                    $vorhanden->closeCursor();
+                    if ($schonDa) {
+                        $bestand++;
+                        continue;
+                    }
+                }
+
                 $wortlaut = (string) $zeile['membership_status'];
                 $abgebildet = Werte::ausFreitext($wortlaut);
 
@@ -748,19 +951,25 @@ final class Uebernahme {
                     // abgebildeten Fall: Er ist der Herkunftsnachweis und der
                     // Rückweg. Ohne ihn liesse sich die Freitextspalte des
                     // Kerns nicht mehr Zeichen für Zeichen wiederherstellen,
-                    // und die Übernahme wäre eine Einbahnstrasse.
+                    // und die Übernahme wäre eine Einbahnstrasse. Bewusst
+                    // ungekürzt - normiert wird nur im Vergleich (Audit N32).
                     'altwert' => $wortlaut,
                     'offen' => $abgebildet === null ? 1 : 0,
                     'von' => 'Übernahme',
                 ]);
             }
 
-            self::markerSchreiben($db, [
+            $bericht = [
                 'zeitpunkt' => date('c'),
                 'gesamt' => count($zeilen),
                 'zugeordnet' => $zugeordnet,
                 'offen' => $offen,
-            ]);
+                'quelle' => $quelle,
+            ];
+            if ($nurEinfuegen) {
+                $bericht['bestand'] = $bestand;
+            }
+            self::markerSchreiben($db, $bericht);
 
             $db->commit();
         } catch (\Throwable $e) {
@@ -780,11 +989,13 @@ final class Uebernahme {
             'Bestandswerte übernommen',
             'Mitgliedsstatus',
             sprintf(
-                '%d Kontakte gelesen, %d zugeordnet, %d Wortlaute zur Nachbearbeitung offen. '
+                'Quelle: %s. %d Kontakte gelesen, %d zugeordnet, %d Wortlaute zur Nachbearbeitung offen%s. '
                 . 'Alle übernommenen Angaben sind zunächst NICHT öffentlich.',
+                $quelle === self::ALTBESTAND ? 'stillgelegter v0.7-Altbestand (persons_pre_contacts)' : 'contacts',
                 count($zeilen),
                 $zugeordnet,
-                $offen
+                $offen,
+                $nurEinfuegen ? sprintf(', %d bereits im Addon gepflegt und unverändert gelassen', $bestand) : ''
             )
         );
     }
@@ -798,10 +1009,11 @@ final class Uebernahme {
     /**
      * `VALUES(setting_value)` statt `setting_value = setting_value`: Hierher
      * kommt nur, wer die Prüfung am Anfang von einmalig() passiert hat, wer
-     * also KEINEN gültigen Marker vorgefunden hat. Ein no-op-UPDATE liesse
-     * einen leeren Altwert (etwa von Hand geleert) stehen - und damit liefe
-     * die Übernahme bei jeder Aktivierung erneut, weil der Marker nie
-     * zustandekäme.
+     * also KEINEN gültigen Marker vorgefunden hat - oder einen
+     * nachholbaren "keine-spalte" ohne `quelle`, der hier ersetzt werden
+     * MUSS (Audit N78). Ein no-op-UPDATE liesse einen leeren Altwert (etwa
+     * von Hand geleert) stehen - und damit liefe die Übernahme bei jeder
+     * Aktivierung erneut, weil der Marker nie zustandekäme.
      */
     private static function markerSchreiben(PDO $db, array $bericht): void {
         $db->prepare(
@@ -1104,7 +1316,8 @@ class VerwaltungController extends BaseController {
 
     /**
      * Weist allen Kontakten mit EXAKT diesem Bestandswortlaut denselben Status
-     * zu. Das ist die Stelle, an der ein Mensch entscheidet, was die Übernahme
+     * zu - "exakt" bis auf Leerraum am Rand und die Kollation der Spalte,
+     * also genau die Gruppe, die die Liste zeigt. Das ist die Stelle, an der ein Mensch entscheidet, was die Übernahme
      * bewusst nicht geraten hat.
      */
     public function zuordnen(): void {
@@ -1116,16 +1329,19 @@ class VerwaltungController extends BaseController {
             $this->zurueck('fehler');
         }
 
-        // Der Vergleich läuft in der Kollation der Spalte (utf8mb4_unicode_ci)
-        // und fasst damit reine Schreibweisen-Varianten zusammen - genau so,
-        // wie die Liste sie oben schon per GROUP BY zu EINER Zeile
-        // zusammengefasst hat. Anzeige und Verarbeitung müssen dieselbe Regel
-        // anwenden, sonst bliebe nach dem Zuordnen eine Variante übrig, die in
-        // der Liste nie zu sehen war.
+        // Anzeige und Verarbeitung teilen jetzt EINE Konstante
+        // (Status::ALTWERT_NORMIERT, Audit N32). Vorher gruppierte die Liste
+        // nach dem Rohwert, hier wurde die Eingabe gekürzt und roh
+        // verglichen - ein Wortlaut mit Leerraum am Rand stand in der Liste,
+        // liess sich aber nie zuordnen. Der Vergleich läuft weiter in der
+        // Kollation der Spalte (utf8mb4_unicode_ci) und fasst damit auch
+        // reine Schreibweisen-Varianten zusammen - genau so, wie die Liste sie
+        // per GROUP BY zu EINER Zeile zusammengefasst hat. Sonst bliebe nach
+        // dem Zuordnen eine Variante übrig, die in der Liste nie zu sehen war.
         $stmt = Database::getInstance()->prepare(
             'UPDATE `' . Status::TABELLE . '`
              SET status = :status, offen = 0, geaendert_von = :von
-             WHERE offen = 1 AND altwert = :wortlaut'
+             WHERE offen = 1 AND altwert IS NOT NULL AND ' . Status::ALTWERT_NORMIERT . ' = :wortlaut'
         );
         $stmt->execute(['status' => $status, 'von' => $this->benutzername(), 'wortlaut' => $wortlaut]);
         $betroffen = $stmt->rowCount();
@@ -1270,9 +1486,20 @@ class VerwaltungController extends BaseController {
             return $html;
         }
 
+        if (($bericht['quelle'] ?? '') === Uebernahme::ALTBESTAND) {
+            // Audit N78: Der Wert stand nicht in contacts, sondern nur noch im
+            // Altbestand - das soll nachvollziehbar dastehen.
+            $html .= '<p>Übernommen aus dem stillgelegten Altbestand der v0.7 (<code>persons_pre_contacts</code>) - '
+                . 'die Instanz wurde direkt von v0.7 gehoben, <code>contacts</code> führte das Feld nie.</p>';
+        }
+
         $html .= '<p>Gelesen: <strong>' . (int) ($bericht['gesamt'] ?? 0) . '</strong> Kontakte mit einem Eintrag. '
             . 'Zugeordnet: <strong>' . (int) ($bericht['zugeordnet'] ?? 0) . '</strong>. '
-            . 'Zur Nachbearbeitung offen: <strong>' . (int) ($bericht['offen'] ?? 0) . '</strong>.</p>';
+            . 'Zur Nachbearbeitung offen: <strong>' . (int) ($bericht['offen'] ?? 0) . '</strong>.'
+            . ((int) ($bericht['bestand'] ?? 0) > 0
+                ? ' Bereits im Addon gepflegt und unverändert gelassen: <strong>' . (int) $bericht['bestand'] . '</strong>.'
+                : '')
+            . '</p>';
         $html .= '<p style="color:var(--text-muted);font-size:0.9em;">Alle übernommenen Angaben sind zunächst '
             . '<strong>nicht öffentlich</strong> - anders als im Kern, wo sie es bedingungslos waren. Die Freigabe '
             . 'geschieht je Kontakt im Bearbeitungsformular. Nicht abbildbare Wortlaute wurden nicht verworfen, '
@@ -1286,12 +1513,18 @@ class VerwaltungController extends BaseController {
         $csrf = htmlspecialchars(Router::generateCsrfToken(), ENT_QUOTES, 'UTF-8');
 
         try {
+            // Gruppiert und angezeigt wird der normierte Wortlaut
+            // (Status::ALTWERT_NORMIERT) - derselbe Ausdruck, mit dem
+            // zuordnen() vergleicht (Audit N32). Das hidden-Feld trägt damit
+            // keinen Randleerraum mehr, den der Browser (CRLF) oder trim()
+            // unterwegs verändern könnte. Die Ausdrucksform in GROUP BY ist
+            // identisch zum SELECT - unkritisch unter ONLY_FULL_GROUP_BY.
             $stmt = Database::getInstance()->prepare(
-                'SELECT altwert, COUNT(*) AS anzahl
+                'SELECT ' . Status::ALTWERT_NORMIERT . ' AS wortlaut, COUNT(*) AS anzahl
                  FROM `' . Status::TABELLE . '`
-                 WHERE offen = 1 AND altwert IS NOT NULL AND altwert <> \'\'
-                 GROUP BY altwert
-                 ORDER BY anzahl DESC, altwert ASC
+                 WHERE offen = 1 AND altwert IS NOT NULL AND ' . Status::ALTWERT_NORMIERT . ' <> \'\'
+                 GROUP BY ' . Status::ALTWERT_NORMIERT . '
+                 ORDER BY anzahl DESC, wortlaut ASC
                  LIMIT ' . self::MAX_WORTLAUTE
             );
             $stmt->execute();
@@ -1310,11 +1543,12 @@ class VerwaltungController extends BaseController {
 
         $html .= '<p style="color:var(--text-muted);font-size:0.9em;">Diese Wortlaute standen im Freitextfeld des '
             . 'Kerns und liessen sich nicht ohne Raten auf die Werteliste abbilden. Die Zuordnung gilt jeweils für '
-            . 'alle Kontakte mit exakt diesem Wortlaut; der Wortlaut selbst bleibt als Herkunftsnachweis erhalten.</p>';
+            . 'alle Kontakte mit diesem Wortlaut (Leerraum am Rand und Gross-/Kleinschreibung zählen nicht); der '
+            . 'Wortlaut selbst bleibt Zeichen für Zeichen als Herkunftsnachweis erhalten.</p>';
         $html .= '<div class="tabelle-scroll"><table style="width:100%;border-collapse:collapse;">';
 
         foreach ($gruppen as $gruppe) {
-            $wortlaut = (string) $gruppe['altwert'];
+            $wortlaut = (string) $gruppe['wortlaut'];
             $sicher = htmlspecialchars($wortlaut, ENT_QUOTES, 'UTF-8');
 
             $html .= '<tr><td style="padding:0.5rem 0;border-bottom:1px solid var(--border-color);">'

@@ -5,6 +5,7 @@ namespace Tests\Unit;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use Plugin\Mitgliedsstatus\Status;
 use Plugin\Mitgliedsstatus\Werte;
 
 require_once __DIR__ . '/../../plugins/mitgliedsstatus/Plugin.php';
@@ -129,5 +130,18 @@ class MitgliedsstatusWerteTest extends TestCase {
         $this->assertSame(Werte::KEINE_ANGABE, Werte::ausEingabe(null));
         $this->assertSame(Werte::KEINE_ANGABE, Werte::ausEingabe(['mitglied']));
         $this->assertSame(Werte::MITGLIED, Werte::ausEingabe('mitglied'));
+    }
+
+    /**
+     * Audit N32: Übernahmefilter, Anzeige und Zuordnen teilen EINE
+     * Randleerraum-Regel. Die Konstante für `altwert` und der Helfer für
+     * beliebige Spalten dürfen nicht auseinanderlaufen.
+     */
+    public function testRandleerraumRegelIstEineEinzige(): void {
+        $this->assertSame(Status::normiert('altwert'), Status::ALTWERT_NORMIERT);
+        $this->assertSame(
+            "REGEXP_REPLACE(p.membership_status, '^[[:space:]]+|[[:space:]]+$', '')",
+            Status::normiert('p.membership_status')
+        );
     }
 }
