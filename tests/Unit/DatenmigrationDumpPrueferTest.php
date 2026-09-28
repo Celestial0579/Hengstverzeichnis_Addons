@@ -108,7 +108,9 @@ class DatenmigrationDumpPrueferTest extends TestCase {
     /** Chunkgrenzen dürfen das Ergebnis nicht ändern - auch nicht mitten in '' oder \'. */
     #[DataProvider('stueckgroessen')]
     public function testChunkgrenzenAendernNichts(int $stueck): void {
-        $dump = (string) file_get_contents(__DIR__ . '/fixtures/datenmigration-dump.sql');
+        // Die Fixture endet (Dateikonvention) mit Zeilenumbruch, der Fuß des
+        // Dumps nicht - für das Einfügen vor dem Fuß abschneiden.
+        $dump = rtrim((string) file_get_contents(__DIR__ . '/fixtures/datenmigration-dump.sql'), "\n");
         // Ein Block mit allem, was ein Zerleger falsch machen kann, vor dem Fuß.
         $knifflig = self::block('knifflig', self::insert('knifflig', "'1'", "'a;b\\nc\\\\'' -- d /* e */ # f`'"));
         $dump = substr($dump, 0, -strlen(self::FUSS)) . $knifflig . self::FUSS;
