@@ -182,11 +182,41 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
     eine Version lang weiter ausgewertet
   - ein manipuliertes CSRF-Feld (Array) führt zu 403 statt HTTP 500
 
-  Die Sicherheitsfrage für dieses Formular **folgt mit Kern-Captcha je
-  Kontext.** Der gepinnte Kern hält die eingebaute Aufgabe, `captcha-altcha`
-  die seine, in je einem einzigen Session-Slot mit fester DOM-ID. Auf einer
-  Hengstseite mit Deckanfrage-Formular wäre sonst eines der beiden Formulare
-  nicht mehr absendbar.
+  Die Sicherheitsfrage für dieses Formular kam mit 1.4.0 (Kern-Captcha je
+  Kontext, siehe den nächsten Eintrag).
+
+- **`verkaufsboerse` (1.4.0): Sicherheitsfrage im Kontaktformular** (Audit
+  N3). Das Formular meldet sich als Captcha-Kontext `verkaufsboerse` an
+  („Kontaktanfrage zu einem Verkaufsinserat“) und bindet den Spam-Schutz des
+  Kerns ein – eingebaute Rechenaufgabe oder der für dieses Formular bzw.
+  global gewählte Anbieter. Geprüft wird nach dem Leserecht `horses.view` und
+  vor Eingabeprüfung, Inseratsabfrage und Zähler je Inserat; eine ungelöste
+  Aufgabe meldet `?verkaufsanfrage=captcha` mit eigenem Hinweis und bucht den
+  Zähler des Inserats nicht. Honeypot und fehlendes Leserecht verwerfen nur
+  die Aufgabe dieses Formulars. `uninstall()` entfernt zusätzlich
+  `captcha_provider_verkaufsboerse`.
+
+  Möglich wurde das mit Framework 25940ae (Captcha je Kontext, Framework
+  #472): Die eingebaute Aufgabe liegt dort je Formular in einem eigenen Platz
+  der Sitzung, das Feld hat die ID `captcha-<kontext>`. Deckanfrage und
+  Verkaufsbörse auf derselben Hengstseite sind damit unabhängig voneinander
+  lösbar.
+
+- **`captcha-altcha` (1.0.2): Eine Aufgabe je Formular** (Audit N3). Der
+  Rechennachweis lag in einem einzigen Platz der Sitzung
+  (`plugin_captcha_altcha_challenge`), die Rückfall-Aufgabe im gemeinsamen
+  Platz des Kerns. Mit zwei geschützten Formularen auf einer Seite
+  überschrieb das zweite beim Rendern die Aufgabe des ersten. Jetzt liegen
+  Nachweis (`plugin_captcha_altcha_challenges[<kontext>]`) und
+  Rückfall-Aufgabe (`Captcha::issue($kontext)`, `verifyBuiltin(…, $kontext)`)
+  je Kontext. Je Sitzung bleiben höchstens zehn Nachweise offen, der älteste
+  fällt zuerst weg. Ein Nachweis aus dem alten Platz wird beim Prüfen noch
+  einmal angenommen.
+
+- **`deckanfrage` (1.2.2), `kontaktanfrage` (1.1.3): Honeypot und fehlendes
+  Leserecht verwerfen nur die eigene Aufgabe** (Audit N3). `Captcha::clear()`
+  ohne Kontext hätte den gemeinsamen Platz geleert; mit Kontext bleibt die
+  Aufgabe eines anderen Formulars derselben Seite gültig.
 
 - **`verkaufsboerse` (1.3.0): Kein Versand und kein Existenz-Orakel ohne
   `horses.view`** (Audit N4). Ohne Leserecht der Gast-Gruppe auf Pferde
@@ -508,8 +538,20 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   `website`, die ID `verkaufsboerse-website`; eigene CSS- oder
   JS-Anpassungen an `#verkaufsboerse-webseite` müssen umgestellt werden.
   Das Deinstallieren entfernt jetzt die Zähler des Formulars aus
-  `login_attempts`; die Inserate bleiben. Die Sicherheitsfrage folgt mit
-  Kern-Captcha je Kontext.
+  `login_attempts`; die Inserate bleiben. Die Sicherheitsfrage kam mit
+  `verkaufsboerse` 1.4.0 (siehe „Sicherheit“).
+
+- **`verkaufsboerse` 1.4.0, `captcha-altcha` 1.0.2, `deckanfrage` 1.2.2,
+  `kontaktanfrage` 1.1.3 (Captcha je Kontext).** `core_compatibility` und
+  `core_supported_max` bleiben unverändert (Linie 0.9). Die Aufrufe mit
+  Kontext (`Captcha::issue($kontext)`, `verifyBuiltin(…, $kontext)`,
+  `clear($kontext)`) sind neue optionale Parameter an bestehenden
+  Kern-Methoden. Ein Kern bis v0.9.0 ignoriert das zusätzliche Argument und
+  nimmt den gemeinsamen Platz – dort bleibt es beim bisherigen Verhalten.
+  `verkaufsboerse` erkennt einen solchen Kern an der fehlenden Konstante
+  `Captcha::MAX_CONTEXTS` und lässt die Sicherheitsfrage dort weg; sonst
+  überschriebe sie die Aufgabe der Deckanfrage auf derselben Seite. Getrennte
+  Plätze gibt es erst mit dem Kern nach v0.9.0 (gepinnt: Framework 25940ae).
 
 ## [0.9.0] – 2026-08-27
 

@@ -176,7 +176,7 @@ class Plugin {
             return $html;
         }
 
-        $aufgabe = Aufgabe::stellen(Konfiguration::obergrenze());
+        $aufgabe = Aufgabe::stellen(Konfiguration::obergrenze(), $kontext);
         if ($aufgabe === null) {
             // Ohne aktive Sitzung lässt sich die Aufgabe nicht hinterlegen -
             // also stellen wir auch keine. Kein Fragment zurückgeben heisst:
@@ -187,7 +187,13 @@ class Plugin {
         // Der Rückfall wird MIT dem Nachweis zusammen ausgegeben und nicht
         // erst nachträglich: Captcha::issue() muss beim Rendern laufen, sonst
         // liegt beim Absenden keine Aufgabe in der Sitzung.
-        $rueckfallFrage = Konfiguration::rueckfallAktiv() ? Captcha::issue() : null;
+        //
+        // Mit Kontext (Audit N3): Ohne ihn lag die Rückfall-Aufgabe im
+        // gemeinsamen Platz des Kerns, und ein zweites geschütztes Formular
+        // derselben Seite überschrieb sie beim Rendern. Ein Kern vor der
+        // Kontext-Unterstützung ignoriert das zusätzliche Argument und nimmt
+        // den gemeinsamen Platz - wie bisher.
+        $rueckfallFrage = Konfiguration::rueckfallAktiv() ? Captcha::issue($kontext) : null;
 
         return Widget::fragment($aufgabe, $kontext, $rueckfallFrage);
     }
@@ -214,7 +220,7 @@ class Plugin {
         // die Aufgabe aus der Sitzung, und genau das ist die
         // Einmalverwendung. Bliebe sie liegen, taugte ein einmal gelöster
         // Nachweis für eine Serie von Absendungen.
-        $aufgabe = Aufgabe::abholen();
+        $aufgabe = Aufgabe::abholen($kontext);
 
         $roh = is_string($input[Widget::FELD] ?? null) ? trim($input[Widget::FELD]) : '';
 
@@ -228,8 +234,9 @@ class Plugin {
 
             // Der Rückfall ist die Rechenaufgabe des Kerns, die wir beim
             // Rendern mit ausgegeben haben. Sie prüft der Kern selbst - und
-            // verbraucht dabei ebenfalls ihre Aufgabe (Einmalverwendung).
-            return Captcha::verifyBuiltin(is_string($input['captcha'] ?? null) ? $input['captcha'] : null);
+            // verbraucht dabei ebenfalls ihre Aufgabe (Einmalverwendung) - die
+            // dieses Kontexts, in dem widgetRendern() sie gestellt hat.
+            return Captcha::verifyBuiltin(is_string($input['captcha'] ?? null) ? $input['captcha'] : null, $kontext);
         }
 
         return Aufgabe::pruefen($aufgabe, $roh);
@@ -439,8 +446,32 @@ final class Konfiguration {
  */
 final class Aufgabe {
 
-    /** Schlüssel der laufenden Aufgabe in der Sitzung - mit Addon-Präfix, damit er niemandem in die Quere kommt. */
-    private const SESSION_KEY = 'plugin_captcha_altcha_challenge';
+    /**
+     * Aufgaben JE FORMULAR-KONTEXT in der Sitzung (Audit N3):
+     * `$_SESSION['plugin_captcha_altcha_challenges'][<kontext>]` - mit
+     * Addon-Präfix, damit der Schlüssel niemandem in die Quere kommt.
+     *
+     * Vorher gab es genau einen Platz. Zwei geschützte Formulare auf einer
+     * Seite (etwa Deckanfrage und Verkaufsbörse auf einer Hengstseite)
+     * überschrieben sich beim Rendern gegenseitig die Aufgabe, und das zuerst
+     * gerenderte scheiterte beim Absenden immer.
+     */
+    private const SESSION_KEY = 'plugin_captcha_altcha_challenges';
+
+    /**
+     * Der frühere gemeinsame Platz. Wird nicht mehr beschrieben, aber beim
+     * Abholen noch gelesen: Ein Formular, das vor dem Update ausgeliefert
+     * wurde, bleibt so einmal absendbar (wie im Kern).
+     */
+    private const SESSION_KEY_ALT = 'plugin_captcha_altcha_challenge';
+
+    /**
+     * Höchstzahl gleichzeitig offener Aufgaben je Sitzung; darüber fällt die
+     * am längsten nicht mehr gestellte weg. Derselbe Wert wie
+     * `Captcha::MAX_CONTEXTS` im Kern - bewusst als eigene Konstante, damit
+     * das Addon auch auf Kernen ohne diese Konstante lädt.
+     */
+    public const MAX_KONTEXTE = 10;
 
     /** Der einzige unterstützte Algorithmus; das Feld steht im Nachweis, damit er dem ALTCHA-Format entspricht. */
     public const ALGORITHMUS = 'SHA-256';
@@ -448,12 +479,14 @@ final class Aufgabe {
     private function __construct() {}
 
     /**
-     * Stellt eine neue Aufgabe und liefert das, was der Browser davon sehen
-     * darf: Salt, Prüfsumme und Obergrenze - NICHT die Zahl.
+     * Stellt eine neue Aufgabe für das Formular `$kontext` und liefert das,
+     * was der Browser davon sehen darf: Salt, Prüfsumme und Obergrenze -
+     * NICHT die Zahl. Eine zuvor gestellte Aufgabe DESSELBEN Kontexts wird
+     * ersetzt; die anderer Formulare bleiben stehen.
      *
      * @return array{algorithm:string, challenge:string, salt:string, maxnumber:int}|null
      */
-    public static function stellen(int $obergrenze): ?array {
+    public static function stellen(int $obergrenze, string $kontext): ?array {
         if (session_status() !== PHP_SESSION_ACTIVE) {
             return null;
         }
@@ -462,13 +495,33 @@ final class Aufgabe {
         $zahl = random_int(0, $obergrenze);
         $pruefsumme = hash('sha256', $salt . $zahl);
 
-        $_SESSION[self::SESSION_KEY] = [
+        $alle = $_SESSION[self::SESSION_KEY] ?? [];
+        if (!is_array($alle)) {
+            $alle = [];
+        }
+
+        // Neu einsortieren statt überschreiben: Die Reihenfolge des Arrays ist
+        // die Reihenfolge der Ausgabe, und die älteste fällt zuerst weg.
+        // Abgelaufene Aufgaben räumen wir bei der Gelegenheit mit ab.
+        $platz = self::platz($kontext);
+        unset($alle[$platz]);
+        $jetzt = time();
+        foreach ($alle as $schluessel => $vorhanden) {
+            if (!is_array($vorhanden) || ($jetzt - (int) ($vorhanden['gestellt'] ?? 0)) > Captcha::TTL_SECONDS) {
+                unset($alle[$schluessel]);
+            }
+        }
+        $alle[$platz] = [
             'salt' => $salt,
             'zahl' => $zahl,
             'challenge' => $pruefsumme,
             'max' => $obergrenze,
-            'gestellt' => time(),
+            'gestellt' => $jetzt,
         ];
+        while (count($alle) > self::MAX_KONTEXTE) {
+            unset($alle[array_key_first($alle)]);
+        }
+        $_SESSION[self::SESSION_KEY] = $alle;
 
         return [
             'algorithm' => self::ALGORITHMUS,
@@ -479,19 +532,37 @@ final class Aufgabe {
     }
 
     /**
-     * Holt die laufende Aufgabe und VERBRAUCHT sie dabei.
+     * Holt die Aufgabe des Formulars `$kontext` und VERBRAUCHT sie dabei.
+     * Aufgaben anderer Formulare bleiben unberührt.
      *
      * @return array<string, mixed>|null
      */
-    public static function abholen(): ?array {
+    public static function abholen(string $kontext): ?array {
         if (session_status() !== PHP_SESSION_ACTIVE) {
             return null;
         }
 
-        $aufgabe = $_SESSION[self::SESSION_KEY] ?? null;
-        unset($_SESSION[self::SESSION_KEY]);
+        $platz = self::platz($kontext);
+        if (is_array($_SESSION[self::SESSION_KEY] ?? null)
+            && array_key_exists($platz, $_SESSION[self::SESSION_KEY])
+        ) {
+            $aufgabe = $_SESSION[self::SESSION_KEY][$platz];
+            unset($_SESSION[self::SESSION_KEY][$platz]);
+        } else {
+            $aufgabe = $_SESSION[self::SESSION_KEY_ALT] ?? null;
+            unset($_SESSION[self::SESSION_KEY_ALT]);
+        }
 
         return is_array($aufgabe) ? $aufgabe : null;
+    }
+
+    /**
+     * Platzname eines Kontexts - dieselbe Form wie im Kern und wie die
+     * DOM-ID des Widgets: klein geschrieben, nur [a-z0-9_-], höchstens 64
+     * Zeichen.
+     */
+    private static function platz(string $kontext): string {
+        return substr((string) preg_replace('/[^a-z0-9_-]/', '', strtolower($kontext)), 0, 64);
     }
 
     /**
