@@ -3,6 +3,7 @@
 
 namespace Tests\Functional;
 
+use App\Database;
 use App\Security\Captcha;
 use Tests\Support\HttpClient;
 use Tests\Support\HttpResponse;
@@ -717,6 +718,72 @@ class KontaktanfragePluginTest extends FunctionalTestCase {
             'kontakt_id' => (string) $kontaktId,
             'captcha' => (string) $antwort,
         ], $felder));
+    }
+
+    /**
+     * Audit N23: Ein Kontakt, der JÜNGER ist als die Anfrage, war nicht ihr
+     * Ziel - die Kennung wurde neu vergeben oder ein Import hat die Kontakte
+     * durch andere mit derselben Kennung ersetzt. Die Anfrage ginge sonst an
+     * eine fremde Person. Weitergeleitet wird nicht, die Verwaltung zeigt
+     * "Datensatz entfernt".
+     *
+     * Die Gegenprobe (created_at NULL) muss bis zum Versand kommen: Ein
+     * unbekanntes Alter gilt nicht als jünger, sonst hießen Altbestände
+     * fälschlich "entfernt". Der Versand selbst scheitert hier mangels SMTP
+     * (siehe Klassenkommentar) - "versand-fehler" belegt, dass die
+     * Weiterleitung versucht wurde.
+     */
+    public function testWeiterleitenVerweigertJuengerenKontakt(): void {
+        $admin = $this->authenticatedClient();
+        $toggle = $admin->post('/admin/plugins/toggle', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'slug' => self::SLUG,
+            'enable' => '1',
+        ]);
+        $this->assertSame('/admin/plugins?success=1', $toggle->location());
+
+        $unique = uniqid();
+        $kontaktId = $this->createContact($admin, "JuengerKontakt-{$unique}", [
+            'email' => "juenger-{$unique}@example.test",
+        ]);
+        $anfragender = "juenger-anfrage-{$unique}@example.test";
+        $db = Database::getInstance();
+        $db->prepare("INSERT INTO `plugin_kontaktanfrage_requests`
+                (contact_id, reason_key, reason_label, requester_name, requester_email, created_at)
+                VALUES (?, 'sonstiges', 'Sonstiges', 'Anfragender', ?, NOW() - INTERVAL 1 HOUR)")
+            ->execute([$kontaktId, $anfragender]);
+        $anfrageId = (int) $db->lastInsertId();
+
+        try {
+            $db->prepare('UPDATE contacts SET created_at = NOW() + INTERVAL 1 DAY WHERE id = ?')->execute([$kontaktId]);
+
+            $verwaltung = $admin->get(self::VERWALTUNG);
+            $this->assertSame(200, $verwaltung->statusCode);
+            $this->assertMatchesRegularExpression(
+                '/<tr>(?:(?!<\/tr>).)*Datensatz entfernt(?:(?!<\/tr>).)*' . preg_quote($anfragender, '/') . '/s',
+                $verwaltung->body,
+                'Die Anfrage an den jüngeren Kontakt muss als "Datensatz entfernt" erscheinen.'
+            );
+            $jung = $admin->post('/plugin/kontaktanfrage/verwaltung/weiterleiten', [
+                'csrf_token' => $verwaltung->formField('csrf_token') ?? '',
+                'id' => (string) $anfrageId,
+            ]);
+            $this->assertSame(self::VERWALTUNG . '?ka=kein-datensatz', $jung->location());
+
+            // Gegenprobe: unbekanntes Alter.
+            try {
+                $db->prepare('UPDATE contacts SET created_at = NULL WHERE id = ?')->execute([$kontaktId]);
+            } catch (\PDOException $e) {
+                $this->markTestSkipped('contacts.created_at ist in diesem Schema nicht NULL-fähig.');
+            }
+            $unbekannt = $admin->post('/plugin/kontaktanfrage/verwaltung/weiterleiten', [
+                'csrf_token' => $verwaltung->formField('csrf_token') ?? '',
+                'id' => (string) $anfrageId,
+            ]);
+            $this->assertSame(self::VERWALTUNG . '?ka=versand-fehler', $unbekannt->location());
+        } finally {
+            $db->prepare('DELETE FROM `plugin_kontaktanfrage_requests` WHERE id = ?')->execute([$anfrageId]);
+        }
     }
 
     /** Loest die ausgeschriebene Rechenaufgabe ueber die Bedeutung der Zahlwoerter. */

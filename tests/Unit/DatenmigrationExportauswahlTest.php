@@ -20,13 +20,31 @@ require_once __DIR__ . '/../../plugins/datenmigration/Plugin.php';
  */
 class DatenmigrationExportauswahlTest extends TestCase {
 
-    /** Das Schema des Kerns in v0.8 (database/schema.sql) plus zwei Addon-Tabellen. */
+    /**
+     * Das Schema des Kerns in v0.9 (database/schema.sql) plus Addon-Tabellen -
+     * darunter eine mit Fremdschlüssel auf users (mitglieder-konten).
+     */
     private const VORHANDEN = [
         'addon_repos', 'api_keys', 'audit_logs', 'contact_id_map', 'contacts',
-        'gdpr_requests', 'group_permissions', 'groups', 'horse_persons',
-        'horse_registrations', 'horses', 'login_attempts', 'match_labels',
-        'password_resets', 'plugins', 'settings', 'user_groups', 'users',
-        'plugin_galerie_media', 'plugin_kontaktanfrage_requests',
+        'email_2fa_codes', 'gdpr_requests', 'group_permissions', 'groups', 'horse_media',
+        'horse_persons', 'horse_registrations', 'horses', 'login_attempts', 'match_labels',
+        'password_resets', 'plugins', 'settings', 'user_groups', 'user_passkeys', 'users',
+        'plugin_galerie_media', 'plugin_kontaktanfrage_requests', 'plugin_mitglieder_konten_zuordnung',
+    ];
+
+    /** Die Fremdschlüssel dazu, wie information_schema sie liefert (Tabelle => Ziele). */
+    private const FKS = [
+        'contact_id_map' => ['contacts'],
+        'email_2fa_codes' => ['users'],
+        'horse_media' => ['horses'],
+        'horse_persons' => ['horses', 'contacts'],
+        'horse_registrations' => ['horses'],
+        'horses' => ['contacts'],
+        'user_groups' => ['users', 'groups'],
+        'group_permissions' => ['groups'],
+        'user_passkeys' => ['users'],
+        'api_keys' => ['users'],
+        'plugin_mitglieder_konten_zuordnung' => ['users'],
     ];
 
     /**
@@ -79,8 +97,105 @@ class DatenmigrationExportauswahlTest extends TestCase {
      */
     public function testVollstaendigeAuswahlErfasstJedeVorhandeneTabelle(): void {
         $alle = Exportauswahl::tabellen(Exportauswahl::schluessel(), self::VORHANDEN);
-
         $this->assertSame(self::VORHANDEN, $alle);
+
+        $mitFks = Exportauswahl::tabellen(Exportauswahl::schluessel(), self::VORHANDEN, self::FKS);
+        $this->assertSame(self::VORHANDEN, $mitFks);
+    }
+
+    /**
+     * Audit M3: Passkeys, E-Mail-Anmeldecodes und jede Tabelle mit
+     * Fremdschlüssel auf users gehen mit der Vorgabe NICHT mehr mit - mit und
+     * ohne Fremdschlüssel-Karte. Bis 1.1.0 liefen die beiden Kerntabellen
+     * unter "sonstiges" (per Vorgabe an) und hängten sich beim Einspielen an
+     * fremde Konten gleicher Kennung.
+     */
+    public function testVorgabeEnthaeltKeineBenutzerbezogenenTabellen(): void {
+        foreach ([[], self::FKS] as $fks) {
+            $tabellen = Exportauswahl::tabellen(Exportauswahl::vorgabe(), self::VORHANDEN, $fks);
+            $this->assertNotContains('user_passkeys', $tabellen);
+            $this->assertNotContains('email_2fa_codes', $tabellen);
+        }
+        $mitFks = Exportauswahl::tabellen(Exportauswahl::vorgabe(), self::VORHANDEN, self::FKS);
+        $this->assertNotContains('plugin_mitglieder_konten_zuordnung', $mitFks);
+        $this->assertContains('plugin_galerie_media', $mitFks);
+
+        $benutzer = Exportauswahl::tabellen([Exportauswahl::GRUPPE_BENUTZER], self::VORHANDEN, self::FKS);
+        foreach (['users', 'user_passkeys', 'email_2fa_codes', 'plugin_mitglieder_konten_zuordnung'] as $t) {
+            $this->assertContains($t, $benutzer);
+        }
+    }
+
+    /**
+     * Die neue Zuordnung gilt für Export und Plan; die alte bleibt für die
+     * Importregel, damit ältere Archive mit user_passkeys unter "sonstiges"
+     * nicht abgewiesen, sondern ohne diese Tabelle eingespielt werden.
+     */
+    public function testNeueUndAlteZuordnung(): void {
+        $this->assertSame(Exportauswahl::GRUPPE_BENUTZER, Exportauswahl::gruppeFuer('user_passkeys'));
+        $this->assertSame(Exportauswahl::GRUPPE_SONSTIGES, Exportauswahl::altGruppeFuer('user_passkeys'));
+        $this->assertSame(Exportauswahl::GRUPPE_BENUTZER, Exportauswahl::gruppeFuer('plugin_x', ['users']));
+        $this->assertSame('addons', Exportauswahl::altGruppeFuer('plugin_x'));
+        $this->assertSame('addons', Exportauswahl::gruppeFuer('plugin_x', ['horses']));
+        // Die feste Zuordnung geht vor: horses bleibt Pferde, auch mit Verweis auf users.
+        $this->assertSame('pferde', Exportauswahl::gruppeFuer('horses', ['users']));
+    }
+
+    /**
+     * `weiche_verweise` aus einer plugin.json steuert, was "trennen" beim
+     * Import LÖSCHT. Ein Addon darf deshalb nur eigene plugin_-Tabellen aus
+     * owns.tables beschreiben, und nur mit schlichten Bezeichnern - sonst
+     * könnte jedes installierte Addon `trennen: loeschen` auf users erklären.
+     */
+    public function testWeicheVerweiseAusPluginJsonWerdenGeprueft(): void {
+        $manifest = [
+            'slug' => 'beispiel',
+            'owns' => ['tables' => ['plugin_beispiel_a', 'plugin_beispiel_b', 'users_kopie']],
+            'weiche_verweise' => [
+                'plugin_beispiel_a' => [
+                    ['ziel' => 'contacts', 'spalte' => 'contact_id', 'trennen' => 'null_wert'],
+                    ['ziel' => 'horses', 'spalte' => 'horse_id', 'wo' => ['art' => 'pferd'], 'trennen' => 'loeschen'],
+                    ['ziel' => 'horses; DROP TABLE users', 'spalte' => 'x', 'trennen' => 'loeschen'],
+                    ['ziel' => 'horses', 'spalte' => 'Horse_Id', 'trennen' => 'loeschen'],
+                    ['ziel' => 'horses', 'spalte' => 'horse_id', 'trennen' => 'alles'],
+                    ['ziel' => 'horses', 'spalte' => 'horse_id', 'wo' => ['art' => ['x']], 'trennen' => 'loeschen'],
+                    'kein-objekt',
+                ],
+                // fremde Tabelle, nicht in owns.tables
+                'users' => [['ziel' => 'contacts', 'spalte' => 'id', 'trennen' => 'loeschen']],
+                'plugin_fremd_x' => [['ziel' => 'contacts', 'spalte' => 'id', 'trennen' => 'loeschen']],
+                // in owns.tables, aber ohne plugin_-Präfix
+                'users_kopie' => [['ziel' => 'contacts', 'spalte' => 'id', 'trennen' => 'loeschen']],
+            ],
+        ];
+
+        $ergebnis = Exportauswahl::weicheVerweiseAusManifest($manifest);
+
+        $this->assertSame(['plugin_beispiel_a'], array_keys($ergebnis['verweise']));
+        $this->assertSame([
+            ['ziel' => 'contacts', 'spalte' => 'contact_id', 'wo' => [], 'trennen' => 'null_wert'],
+            ['ziel' => 'horses', 'spalte' => 'horse_id', 'wo' => ['art' => 'pferd'], 'trennen' => 'loeschen'],
+        ], $ergebnis['verweise']['plugin_beispiel_a']);
+        $this->assertCount(8, $ergebnis['verworfen']);
+
+        $this->assertSame(['verweise' => [], 'verworfen' => []], Exportauswahl::weicheVerweiseAusManifest(['slug' => 'x']));
+        $this->assertCount(1, Exportauswahl::weicheVerweiseAusManifest(['weiche_verweise' => 'x'])['verworfen']);
+    }
+
+    /**
+     * Die Kontaktanfrage-Tabellen stehen in der Konstante UND in der
+     * plugin.json des Addons - zusammengeführt zählen sie einmal.
+     */
+    public function testVerweiseAusKonstanteUndPluginJsonWerdenZusammengefuehrt(): void {
+        $json = json_decode((string) file_get_contents(__DIR__ . '/../../plugins/kontaktanfrage/plugin.json'), true);
+        $ausJson = Exportauswahl::weicheVerweiseAusManifest($json);
+        $this->assertSame([], $ausJson['verworfen']);
+
+        $alle = Exportauswahl::verweiseZusammenfuehren(Exportauswahl::WEICHE_VERWEISE, $ausJson['verweise']);
+        $this->assertCount(1, $alle['plugin_kontaktanfrage_requests']);
+        $this->assertCount(1, $alle['plugin_kontaktanfrage_optout']);
+        $this->assertSame('null_wert', $alle['plugin_kontaktanfrage_requests'][0]['trennen']);
+        $this->assertCount(4, $alle['match_labels']);
     }
 
     /**

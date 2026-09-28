@@ -28,11 +28,20 @@
 # wird als Bezeichner gequotet (Backticks verdoppelt), keine Eingabe.
 datenmigration|SQL mit konkatenierter Variable|'SELECT COUNT(*) FROM ' . $quoted
 
-# datenmigration abhaengigkeitsWarnungen() -> $zaehle: $tabelle kommt immer
-# ueber $quote() (Bezeichner-Quoting) aus information_schema bzw. der
-# Code-Konstante Exportauswahl::WEICHE_VERWEISE; $bedingung ist entweder eine
-# gequotete Spalte + ' IS NOT NULL' oder eine Konstante aus WEICHE_VERWEISE.
+# datenmigration zaehle() (Export-Warnung, Import-Risiken): $tabelle geht
+# durch bezeichner() (Backticks verdoppelt) und stammt aus information_schema,
+# der Konstante Exportauswahl::WEICHE_VERWEISE oder einer plugin.json, deren
+# Bezeichner Exportauswahl::weicheVerweiseAusManifest() auf ^[a-z0-9_]+$
+# prueft. $bedingung baut verweisBedingung() nur aus gequoteten Spalten und
+# festen Fragmenten (IS NOT NULL, <> 0, = ?); die wo-Werte werden gebunden.
 datenmigration|SQL mit konkatenierter Variable|'SELECT COUNT(*) FROM ' . $tabelle . ' WHERE ' . $bedingung
+
+# datenmigration trenneAbhaengige() (Audit N23): dieselbe Herkunft wie bei
+# zaehle(); $setzen besteht nur aus gequoteten Spalten und ' = NULL' bzw.
+# ' = 0'. Die Kindtabelle einer plugin.json-Angabe ist zusaetzlich auf eigene
+# plugin_-Tabellen des Addons (owns.tables) beschraenkt.
+datenmigration|SQL mit konkatenierter Variable|'DELETE FROM ' . $tabelle . ' WHERE ' . $bedingung
+datenmigration|SQL mit konkatenierter Variable|'UPDATE ' . $tabelle . ' SET ' . $setzen . ' WHERE ' . $bedingung
 
 # pferd-des-tages kandidaten(): $bedingungen besteht nur aus festen
 # SQL-Fragmenten (Kriterien::bedingungen()), Werte laufen ueber ?-Platzhalter.

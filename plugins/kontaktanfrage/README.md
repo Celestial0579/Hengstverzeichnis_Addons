@@ -212,6 +212,20 @@ Betreiber tun.
 - **Ein nachträgliches Opt-out gilt rückwirkend:** Eine bereits gespeicherte
   Anfrage lässt sich danach nicht mehr weiterleiten. Eine gespeicherte
   Anfrage ist kein Freibrief, eine später erklärte Ablehnung zu übergehen.
+- **Keine Weiterleitung an einen jüngeren Kontakt (1.1.1).** Ist der Kontakt
+  unter der gespeicherten Kennung jünger als die Anfrage (`contacts.created_at`
+  nach `created_at` der Anfrage), war er nicht ihr Ziel: Die Kennung wurde neu
+  vergeben (MySQL < 8 und MariaDB < 10.2.4 setzen `AUTO_INCREMENT` nach einem
+  Neustart zurück) oder ein Import hat die Kontakte durch andere mit derselben
+  Kennung ersetzt. Die Anfrage erscheint dann als „Datensatz entfernt" und wird
+  nicht weitergeleitet. Ein fehlendes `created_at` gilt als unbekannt, nicht
+  als jünger - Altbestände bleiben weiterleitbar.
+- **Verweise für die Datenmigration.** Weil `contact_id` keinen Fremdschlüssel
+  hat, nennt die `plugin.json` beide Tabellen unter `weiche_verweise`. Ersetzt
+  ein Import (Addon `datenmigration` ab 1.2.0) die Kontakte, ohne diese
+  Tabellen mitzubringen, zeigt die Vorschau die betroffenen Anfragen und
+  Opt-outs, und „trennen" setzt Anfragen auf `contact_id = 0` („Datensatz
+  entfernt") bzw. löscht die Opt-outs.
 - **Reine Logik ohne Datenbank** (`Eingabe`, `Gruende`) ist als Unit-Test
   festgenagelt: `tests/Unit/KontaktanfrageEingabeTest.php` und
   `tests/Unit/KontaktanfrageGruendeTest.php`. Die Umrechnung und ihr Marker

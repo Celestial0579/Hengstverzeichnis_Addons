@@ -479,16 +479,26 @@ final class Ziel {
      * Datensatz zwischenzeitlich aus der Veröffentlichung genommen wurde.
      * Ein Datensatz im Papierkorb ist dagegen auch hier keiner mehr.
      *
+     * $nichtNach (Audit N23): Ein Kontakt, der JÜNGER ist als die Anfrage,
+     * kann nicht ihr Ziel gewesen sein. Das passiert, wenn eine Kennung neu
+     * vergeben wurde (MySQL < 8 und MariaDB < 10.2.4 setzen AUTO_INCREMENT
+     * nach einem Neustart auf MAX+1 zurück) oder ein Import die Kontakte
+     * durch jüngere mit derselben Kennung ersetzt hat. Die Anfrage ginge
+     * sonst an eine fremde Person. Ein fehlendes created_at gilt als
+     * unbekannt, nicht als jünger - sonst hießen Altbestände fälschlich
+     * "entfernt". Der Hauptschutz ist die Pflichtwahl beim Import
+     * (datenmigration); das hier ist die zweite Linie.
+     *
      * @return array{id:int, name:string, email:?string}|null
      */
-    public static function intern(int $id): ?array {
-        return self::laden($id, false);
+    public static function intern(int $id, ?string $nichtNach = null): ?array {
+        return self::laden($id, false, $nichtNach);
     }
 
     /**
      * @return array{id:int, name:string, email:?string}|null
      */
-    private static function laden(int $id, bool $nurVeroeffentlicht): ?array {
+    private static function laden(int $id, bool $nurVeroeffentlicht, ?string $nichtNach = null): ?array {
         if ($id < 1) {
             return null;
         }
@@ -503,12 +513,18 @@ final class Ziel {
         // wird nirgends angezeigt, sondern ausschließlich als Empfängeradresse
         // der Weiterleitung verwendet - das ist der Zweck dieses Addons. Wer
         // sie ausgibt, hebt genau den Schutz auf, den es herstellt.
+        //
+        // Beide Zeitstempel sind TIMESTAMP-Spalten (intern UTC) und werden in
+        // derselben Sitzung gelesen - der Vergleich ist damit unabhängig von
+        // der Zeitzone.
         $sql = $nurVeroeffentlicht
-            ? 'SELECT id, name, email FROM contacts WHERE id = ? AND deleted_at IS NULL AND is_published = 1'
-            : 'SELECT id, name, email FROM contacts WHERE id = ? AND deleted_at IS NULL';
+            ? 'SELECT id, name, email FROM contacts WHERE id = ? AND deleted_at IS NULL AND is_published = 1
+                 AND (? IS NULL OR created_at IS NULL OR created_at <= ?)'
+            : 'SELECT id, name, email FROM contacts WHERE id = ? AND deleted_at IS NULL
+                 AND (? IS NULL OR created_at IS NULL OR created_at <= ?)';
 
         $stmt = Database::getInstance()->prepare($sql);
-        $stmt->execute([$id]);
+        $stmt->execute([$id, $nichtNach, $nichtNach]);
         $zeile = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$zeile) {
             return null;
@@ -1302,10 +1318,14 @@ class VerwaltungController extends BaseController {
         // LEFT, nicht INNER - eine Anfrage an einen inzwischen gelöschten
         // Kontakt bleibt sichtbar und löschbar, sonst verschwände sie
         // unbemerkt aus der Verwaltung, ohne aus der Tabelle zu sein.
+        // Ein Kontakt, der jünger ist als die Anfrage, war nicht ihr Ziel
+        // (neu vergebene Kennung, Import) - die Zeile zeigt dann "Datensatz
+        // entfernt", genau wie die Weiterleitung sie behandelt (Audit N23).
         $stmt = $db->prepare(
             'SELECT r.*, c.name AS kontakt_name, c.email AS kontakt_email, c.deleted_at AS kontakt_deleted
              FROM `plugin_kontaktanfrage_requests` r
              LEFT JOIN contacts c ON c.id = r.contact_id
+                  AND (c.created_at IS NULL OR r.created_at IS NULL OR c.created_at <= r.created_at)
              ORDER BY r.created_at DESC, r.id DESC
              LIMIT :limit OFFSET :offset'
         );
@@ -1387,7 +1407,9 @@ class VerwaltungController extends BaseController {
             $this->zurueck('opt-out');
         }
 
-        $ziel = Ziel::intern($zielId);
+        // Mit dem Eingang der Anfrage: Ein jüngerer Kontakt unter derselben
+        // Kennung ist nicht der, an den sie gerichtet war (Audit N23).
+        $ziel = Ziel::intern($zielId, isset($anfrage['created_at']) ? (string) $anfrage['created_at'] : null);
         if ($ziel === null) {
             $this->zurueck('kein-datensatz');
         }
