@@ -5,6 +5,10 @@ namespace Tests\Functional;
 
 use App\Database;
 use PDO;
+use Plugin\Plausibilitaetspruefung\Pruefung;
+use Plugin\Plausibilitaetspruefung\Regel;
+use Plugin\Plausibilitaetspruefung\Regelwerk;
+use ReflectionProperty;
 use Tests\Support\HttpClient;
 
 /**
@@ -368,6 +372,189 @@ class PlausibilitaetspruefungPluginTest extends FunctionalTestCase {
     // ----------------------------------------------------------------------
     // Helfer
     // ----------------------------------------------------------------------
+
+    /**
+     * Audit N34: Das Suchmuster für U+FFFD trug die Standardkollation des
+     * Zeichensatzes und kollidierte mit der Spaltenkollation ("Illegal mix of
+     * collations"). Die Regel meldete deshalb immer "Keine Fälle im Bestand".
+     * Das zweite Pferd mit Umlaut und ähnlichem Namen ist die Gegenprobe
+     * gegen Falschtreffer eines zu großzügigen Vergleichs.
+     */
+    public function testZeichenschadenWirdGefunden(): void {
+        $admin = $this->authenticatedClient();
+        $this->pluginAktivieren($admin);
+        $unique = uniqid();
+
+        $kaputtId = $this->createHorse($admin, "PPZeichen-{$unique}", ['is_published' => '0']);
+        $sauberId = $this->createHorse($admin, "PPZö-{$unique}", ['is_published' => '0']);
+        // Direkt per SQL, damit keine Eingabefilterung des Kerns dazwischenfunkt.
+        $kaputtName = "PPZ\u{FFFD}{$unique}";
+        $this->db()->prepare('UPDATE horses SET name = ? WHERE id = ?')->execute([$kaputtName, $kaputtId]);
+
+        try {
+            $bericht = $admin->get(self::BERICHT);
+            $this->assertSame(200, $bericht->statusCode);
+            $karte = $this->regelKarteAus($bericht->body, 'Zeichenschaden (U+FFFD) im Text');
+
+            $this->assertStringContainsString(htmlspecialchars($kaputtName, ENT_QUOTES, 'UTF-8'), $karte,
+                'Ein Pferd mit U+FFFD im Namen muss im Bericht stehen (N34).');
+            $this->assertStringContainsString('im Namen', $karte);
+            $this->assertStringNotContainsString("PPZö-{$unique}", $karte,
+                'Ein Umlaut ist kein Zeichenschaden - der Vergleich muss byte-genau sein.');
+            $this->assertStringNotContainsString('Keine Fälle im Bestand', $karte);
+            $this->assertStringNotContainsString('konnte nicht ausgewertet werden', $karte);
+
+            // Der Bericht rechnet den Zwischenstand neu; die Kachel selbst ist
+            // 15 Minuten zwischengespeichert und zeigt nur Summen.
+            $stmt = $this->db()->prepare('SELECT anzahl FROM `plugin_plausibilitaet_zaehler` WHERE regel = ?');
+            $stmt->execute(['zeichenschaden']);
+            $this->assertGreaterThanOrEqual(1, (int) $stmt->fetchColumn());
+        } finally {
+            $this->inDenPapierkorb([$kaputtId, $sauberId]);
+        }
+    }
+
+    /**
+     * Das failure_scenario (2) aus N34: Die gemeinsame UNION-ALL-Abfrage des
+     * Bearbeitungsformulars scheiterte an der kaputten Regel - und nahm den
+     * blockierenden Widerspruch am selben Datensatz mit.
+     */
+    public function testZeichenschadenVerschlucktKeineBlockierendenFunde(): void {
+        $admin = $this->authenticatedClient();
+        $this->pluginAktivieren($admin);
+        $unique = uniqid();
+
+        $vaterId = $this->createHorse($admin, "PPZVater-{$unique}", [
+            'birth_year' => '2015',
+            'sex' => 'stallion',
+            'is_published' => '0',
+        ]);
+        $fohlenId = $this->createHorse($admin, "PPZFohlen-{$unique}", [
+            'birth_year' => '2010',
+            'sex' => 'mare',
+            'is_published' => '0',
+        ]);
+        $this->db()->prepare('UPDATE horses SET name = ?, sire_id = ? WHERE id = ?')
+            ->execute(["PPZFohlen\u{FFFD}{$unique}", $vaterId, $fohlenId]);
+
+        try {
+            $form = $admin->get('/admin/horses/edit?id=' . $fohlenId);
+            $this->assertSame(200, $form->statusCode);
+            $this->assertStringContainsString('Plausibilitätsprüfung', $form->body);
+            $this->assertStringContainsString('Elternteil jünger als das Fohlen', $form->body,
+                'Der blockierende Widerspruch darf nicht hinter dem Zeichenschaden verschwinden (N34).');
+            $this->assertStringContainsString('Zeichenschaden', $form->body);
+        } finally {
+            $this->inDenPapierkorb([$fohlenId, $vaterId]);
+        }
+    }
+
+    /**
+     * Eine defekte Regel darf die Funde der übrigen nicht verschlucken, und
+     * der Bericht muss sie als "nicht auswertbar" kenntlich machen statt als
+     * "Keine Fälle" (N34). Läuft im PHPUnit-Prozess: Die kaputte Regel wird
+     * per Reflection in den Regelsatz geschoben.
+     *
+     * Geladen wird die REPO-Fassung von Plugin.php, nicht die vendorierte -
+     * sonst "Cannot redeclare" unter `composer test` in einem Prozess (siehe
+     * MitgliederKontenPluginTest::setUpBeforeClass()).
+     */
+    public function testDefekteRegelVerschlucktKeineAnderenFunde(): void {
+        require_once __DIR__ . '/../../plugins/plausibilitaetspruefung/Plugin.php';
+
+        $admin = $this->authenticatedClient();
+        $this->pluginAktivieren($admin);
+        $unique = uniqid();
+
+        $vaterId = $this->createHorse($admin, "PPDVater-{$unique}", [
+            'birth_year' => '2015',
+            'sex' => 'stallion',
+            'is_published' => '0',
+        ]);
+        $fohlenId = $this->createHorse($admin, "PPDFohlen-{$unique}", [
+            'birth_year' => '2010',
+            'sex' => 'mare',
+            'is_published' => '0',
+        ]);
+        $this->db()->prepare('UPDATE horses SET sire_id = ? WHERE id = ?')->execute([$vaterId, $fohlenId]);
+
+        $blocker = Regelwerk::nach('eltern-juenger');
+        $this->assertInstanceOf(Regel::class, $blocker);
+        $kaputt = new Regel(
+            'kaputt-test',
+            Regelwerk::SCHWERE_BLOCKER,
+            'Absichtlich kaputte Testregel',
+            'Diese Regel fragt eine Spalte ab, die es nicht gibt - sie muss scheitern, ohne andere Regeln mitzureißen.',
+            'SELECT h.id AS horse_id, h.name AS name, h.is_published AS oeffentlich, h.gibt_es_nicht AS detail
+             FROM horses h WHERE h.deleted_at IS NULL AND {WO}',
+            static fn(array $h): bool => true
+        );
+
+        // Die Fehlerzeilen landen in einer eigenen Datei statt auf der
+        // Konsole des Testlaufs - und belegen nebenbei, dass der Fehler nicht
+        // mehr stumm bleibt.
+        $logDatei = (string) tempnam(sys_get_temp_dir(), 'plaus-log-');
+        $logVorher = ini_set('error_log', $logDatei);
+
+        $liste = new ReflectionProperty(Regelwerk::class, 'regeln');
+        $liste->setValue(null, [$blocker, $kaputt]);
+        try {
+            $stmt = $this->db()->prepare('SELECT * FROM horses WHERE id = ?');
+            $stmt->execute([$fohlenId]);
+            $horse = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            $funde = Pruefung::fuerPferd($fohlenId, $horse, Regelwerk::SCHWERE_BLOCKER);
+            $this->assertContains('eltern-juenger', array_column($funde, 'regel'),
+                'Die intakte Blocker-Regel muss ihren Fund trotz der defekten Regel liefern.');
+            $this->assertNotContains('kaputt-test', array_column($funde, 'regel'));
+
+            $this->assertTrue(Pruefung::fuerBestand($kaputt)['fehler'],
+                'Eine Regel, die scheitert, muss als Fehler kenntlich sein - nicht als "Keine Fälle".');
+            $this->assertFalse(Pruefung::fuerBestand($blocker)['fehler']);
+
+            $this->assertStringContainsString('Regel "kaputt-test" fehlgeschlagen', (string) file_get_contents($logDatei),
+                'Eine scheiternde Regel gehört ins Server-Log.');
+        } finally {
+            // Die Unit-Tests laufen im selben Prozess und dürfen die
+            // manipulierte Liste nicht erben.
+            $liste->setValue(null, null);
+            ini_set('error_log', $logVorher === false ? '' : $logVorher);
+            @unlink($logDatei);
+            $this->inDenPapierkorb([$fohlenId, $vaterId]);
+        }
+    }
+
+    /** Idempotent - der Ablauftest lässt das Addon aktiv zurück. */
+    private function pluginAktivieren(HttpClient $admin): void {
+        $admin->post('/admin/plugins/toggle', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'slug' => self::SLUG,
+            'enable' => '1',
+        ]);
+        $this->assertSame(200, $admin->get(self::BERICHT)->statusCode);
+    }
+
+    /**
+     * Die Testpferde aus dem Bestand nehmen (Soft-Delete, wie der Papierkorb
+     * des Kerns): Alle Regeln prüfen `deleted_at IS NULL`, später laufende
+     * Tests erben also keine zusätzlichen Funde.
+     *
+     * @param array<int, int> $ids
+     */
+    private function inDenPapierkorb(array $ids): void {
+        $stmt = $this->db()->prepare('UPDATE horses SET deleted_at = NOW() WHERE id = ?');
+        foreach ($ids as $id) {
+            $stmt->execute([$id]);
+        }
+    }
+
+    /** Die Karte einer Regel im Bericht, von ihrer Überschrift bis zur nächsten Karte. */
+    private function regelKarteAus(string $body, string $titel): string {
+        $start = strpos($body, $titel);
+        $this->assertNotFalse($start, "Karte '{$titel}' fehlt im Bericht.");
+        $ende = strpos($body, '<div class="card">', $start);
+        return $ende === false ? substr($body, $start) : substr($body, $start, $ende - $start);
+    }
 
     /**
      * Zahl der abgehakten Faelle.

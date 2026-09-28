@@ -204,6 +204,35 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   Adresse zu scheitern; läuft die alte Mitgliedschaft noch, ist die Zeile
   blockiert.
 
+- **`pferd-des-tages` (1.0.1): Die Vorgabenliste zeigt heute und die
+  nächsten Tage wieder zuverlässig an** (Audit N33). Die Verwaltungsseite hat
+  alle Einträge absteigend sortiert und nach 14 Zeilen abgeschnitten. Wer mehr
+  als zwei Wochen im Voraus plante, sah danach nur die spätesten Termine. Die
+  heutige Vorgabe, die unmittelbar anstehenden Vorgaben und die Rückschau
+  fehlten dann, und ausgeblendete Vorgaben ließen sich nicht aufheben. Die
+  Liste ist jetzt zweigeteilt:
+  - „Heute und anstehend“: aufsteigend sortiert, mit Hinweis, falls die Liste
+    gekürzt wird (ab 366 Einträgen).
+  - „Zurückliegend“: die letzten 14 Tage. Vergangene Vorgaben, die älter sind,
+    erscheinen nicht mehr; sie wirken ohnehin nicht mehr.
+
+- **`plausibilitaetspruefung` (1.0.1): Die Regel „Zeichenschaden“
+  funktioniert** (Audit N34). Das Suchmuster für U+FFFD trug die
+  Standardkollation des Zeichensatzes und kollidierte mit der Kollation der
+  Spalten `horses.name` und `horses.description` („Illegal mix of
+  collations“). Die Regel meldete deshalb immer „Keine Fälle“. Das Muster
+  vergleicht jetzt ausdrücklich binär (`utf8mb4_bin`). Nach dem Update können
+  Bericht und Kachel erstmals Fälle zu dieser Regel zeigen.
+
+- **`plausibilitaetspruefung` (1.0.1): Eine fehlerhafte Regel verschluckt
+  nicht mehr alle Funde eines Pferds** (Audit N34). Bisher ließ ein einziger
+  Fehler die gemeinsame Abfrage scheitern. Das Bearbeitungsformular zeigte
+  dann keinen einzigen Fund, auch keinen blockierenden. Scheitert die
+  gemeinsame Abfrage, läuft jetzt jede Regel einzeln; die fehlerhafte wird
+  übersprungen und im Server-Log vermerkt. Kann eine Regel im Bericht nicht
+  ausgewertet werden, steht dort „Diese Regel konnte nicht ausgewertet werden“
+  statt „Keine Fälle im Bestand“.
+
 - **Die Composer-Zeitgrenze vorsorglich angehoben** (Framework#424). Composer
   bricht Kindprozesse nach 300 Sekunden ab. Im Framework hat die Suite diese
   Grenze erreicht und einen nächtlichen Lauf als „gescheitert" gemeldet, ohne

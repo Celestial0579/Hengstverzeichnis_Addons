@@ -96,6 +96,17 @@ class PlausibilitaetspruefungRegelwerkTest extends TestCase {
         );
     }
 
+    /**
+     * Audit N34: Ohne ausdrückliche Kollation kollidiert das Suchmuster mit
+     * der Spaltenkollation, und die Regel läuft nie. Billiger Wächter gegen
+     * einen Rückbau.
+     */
+    public function testZeichenschadenVergleichtMitExpliziterKollation(): void {
+        $regel = Regelwerk::nach('zeichenschaden');
+        $this->assertInstanceOf(Regel::class, $regel);
+        $this->assertStringContainsString('COLLATE utf8mb4_bin', $regel->sql);
+    }
+
     public function testHinweisRegelnBleibenHinweise(): void {
         foreach (['gestorben-offener-zeitraum', 'ohne-lebensnummer', 'ohne-geschlecht', 'zeichenschaden'] as $id) {
             $regel = Regelwerk::nach($id);
