@@ -1,6 +1,66 @@
 # plugin-findings.allow — bewusst akzeptierte Funde des statischen Plugin-Checks.
-# Eine Zeile je Muster "<plugin>|<titel>" (Teilstring). Ein Treffer zaehlt als
-# akzeptiert und blockiert nicht. Nur fuer gepruefte, dokumentierte Ausnahmen —
-# der Anlass gehoert in die PR-Beschreibung.
 #
-# (leer: derzeit keine Ausnahmen)
+# Zwei Formate, je eine Zeile:
+#
+#   <plugin>|<titel>                     gibt die ganze Regel fuer das Plugin
+#                                        frei - nur in begruendeten
+#                                        Ausnahmefaellen, denn eine spaetere
+#                                        echte Luecke im selben Addon faellt
+#                                        dann nicht mehr auf.
+#   <plugin>|<titel>|<Code-Ausschnitt>   gibt EINE Stelle frei: Der Ausschnitt
+#                                        muss als fester Teilstring im
+#                                        Fingerabdruck des Funds stehen (erstes
+#                                        Argument des Aufrufs, Kommentare
+#                                        entfernt, Whitespace zu einem
+#                                        Leerzeichen zusammengefasst, ungekuerzt).
+#                                        Zeilenunabhaengig - der Eintrag
+#                                        ueberlebt Umbauten oberhalb der Stelle.
+#
+# <plugin> und <titel> werden EXAKT verglichen (voller Titel, wie ihn der Scan
+# ausgibt). Den Ausschnitt aus der Scan-Ausgabe uebernehmen (die Anzeige dort
+# ist ab 160 Zeichen gekuerzt; der Fingerabdruck steht vollstaendig in der
+# Ausgabe von `php security/lib/sql-concat-check.php <datei>`).
+#
+# Nur fuer gepruefte Stellen: Ueber jedem Eintrag steht, WARUM die Stelle
+# sicher ist. Der Anlass gehoert zusaetzlich in die PR-Beschreibung.
+
+# datenmigration localInventory(): Tabellenname stammt aus SHOW TABLES und
+# wird als Bezeichner gequotet (Backticks verdoppelt), keine Eingabe.
+datenmigration|SQL mit konkatenierter Variable|'SELECT COUNT(*) FROM ' . $quoted
+
+# datenmigration abhaengigkeitsWarnungen() -> $zaehle: $tabelle kommt immer
+# ueber $quote() (Bezeichner-Quoting) aus information_schema bzw. der
+# Code-Konstante Exportauswahl::WEICHE_VERWEISE; $bedingung ist entweder eine
+# gequotete Spalte + ' IS NOT NULL' oder eine Konstante aus WEICHE_VERWEISE.
+datenmigration|SQL mit konkatenierter Variable|'SELECT COUNT(*) FROM ' . $tabelle . ' WHERE ' . $bedingung
+
+# pferd-des-tages kandidaten(): $bedingungen besteht nur aus festen
+# SQL-Fragmenten (Kriterien::bedingungen()), Werte laufen ueber ?-Platzhalter.
+pferd-des-tages|SQL mit konkatenierter Variable|'SELECT h.id FROM horses h WHERE ' . implode(' AND ', $bedingungen)
+
+# pferd-des-tages werteliste(): $spalte ist per in_array-Whitelist auf
+# 'color'/'breed' beschraenkt, bevor die Abfrage entsteht.
+pferd-des-tages|SQL mit konkatenierter Variable|'SELECT DISTINCT `' . $spalte . '` AS wert FROM horses
+
+# kontaktanfrage spalteExistiert(): Tabellenname ist eine interne Konstante
+# der Aufrufer, per str_replace als Bezeichner gequotet; die Spalte laeuft
+# ueber $db->quote().
+kontaktanfrage|SQL mit konkatenierter Variable|'SHOW COLUMNS FROM `' . str_replace('`', '``', $tabelle) . '` LIKE '
+
+# mitgliedsstatus spalteExistiert(): wie kontaktanfrage - interne Konstante
+# ('contacts'), Bezeichner-Quoting, Spalte ueber $db->quote().
+mitgliedsstatus|SQL mit konkatenierter Variable|'SHOW COLUMNS FROM `' . str_replace('`', '``', $tabelle) . '` LIKE '
+
+# Platzhalterlisten: Die Variable besteht nur aus '?' und Kommas
+# (array_fill/str_repeat), die Werte werden gebunden.
+inzuchtkoeffizient|SQL mit Variable im Query-String (Interpolation)|WHERE id IN ({$placeholders}) AND deleted_at IS NULL
+zuchtschau-ergebnisse|SQL mit konkatenierter Variable|WHERE ergebnis_id IN (' . $platzhalter . ')
+merkliste|SQL mit Variable im Query-String (Interpolation)|FROM horses WHERE id IN ({$platzhalter}) AND deleted_at IS NULL
+mitglieder-konten|SQL mit Variable im Query-String (Interpolation)|FROM settings WHERE setting_key IN ({$platzhalter})
+mitglieder-konten|SQL mit Variable im Query-String (Interpolation)|FROM users WHERE id IN ({$platzhalter})
+
+# plausibilitaetspruefung Pruefung::fuerPferd(): $teile enthaelt nur
+# Regelwerk::abfrage() ueber die im Code definierten Regeln - feste SQL mit
+# {WO} -> 'h.id = ?' und einer per Konstruktor auf ^[a-z0-9-]+$ geprueften
+# Regelkennung; das Pferd wird gebunden.
+plausibilitaetspruefung|SQL-String aus Variable zusammengesetzt (Funktionsaufruf/Ausdruck)|implode(' UNION ALL ', $teile)

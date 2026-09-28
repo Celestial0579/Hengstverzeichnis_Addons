@@ -1,11 +1,13 @@
 # Semgrep SAST
 #
 # WARUM DIESES REPO ES BRAUCHT: Die einzige PHP-Analyse hier war bisher
-# security/plugin-security-scan.sh - 144 Zeilen grep. Der Scanner ist gut
-# darin, wofür er gebaut wurde (eval, Backticks, dynamische Includes), aber er
-# arbeitet zeilenweise und ohne Datenfluss: Mehrzeilig zusammengesetztes SQL
-# sieht er nicht, und ob ein interpolierter Wert aus einem Literal oder aus
-# $_GET stammt, kann er nicht unterscheiden. Der Kern lässt aus genau diesem
+# security/plugin-security-scan.sh - grep plus eine Tokenizer-Prüfung für SQL.
+# Der Scanner ist gut darin, wofür er gebaut wurde (eval, Backticks, dynamische
+# Includes, SQL, das direkt im query/prepare/exec-Aufruf zusammengesetzt wird -
+# seit Audit N36 auch mehrzeilig), aber er arbeitet ohne Datenfluss: SQL, das
+# vorab in einer Variable gebaut wird, sieht er nicht, und ob ein
+# interpolierter Wert aus einem Literal oder aus $_GET stammt, kann er nicht
+# unterscheiden. Der Kern lässt aus genau diesem
 # Grund seit Langem Semgrep laufen - die rund 8.000 Zeilen PHP in plugins/
 # waren davon schlicht nicht erfasst, obwohl sie im selben Prozess mit
 # denselben Rechten laufen wie der Kern (docs/plugin-development.md,
