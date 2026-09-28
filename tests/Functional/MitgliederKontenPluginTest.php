@@ -73,6 +73,12 @@ class MitgliederKontenPluginTest extends FunctionalTestCase {
     private array $aufraeumen = [];
 
     protected function tearDown(): void {
+        // Die Zielgruppe ist geteilter Zustand der Suite - ein Test, der sie
+        // auf eine unzulaessige Gruppe stellt, darf die naechsten nicht
+        // beeinflussen.
+        Konfiguration::speichern([Konfiguration::S_GRUPPE => '0']);
+        Konfiguration::leereCache();
+
         $db = Database::getInstance();
         $db->exec('DELETE FROM `' . Zuordnung::TABELLE . '`');
         if ($this->aufraeumen !== []) {
@@ -267,27 +273,164 @@ class MitgliederKontenPluginTest extends FunctionalTestCase {
         $this->assertSame('neu', $nachId[9002]['zustand'], 'Ohne Adresse ist in einer reinen Lesegruppe zulaessig.');
     }
 
-    public function testOhneAdresseUndMitSchreibenderZielgruppeBlockiertDieVorschau(): void {
+    private function schreibGruppeAnlegen(HttpClient $admin, string $name): int {
+        $gruppe = $this->leseGruppeAnlegen($admin, $name);
+        $this->setGroupPermissions($admin, $gruppe, ['horses' => ['view', 'edit']]);
+
+        return $gruppe;
+    }
+
+    private function gruppeNachSlug(string $slug): int {
+        $stmt = Database::getInstance()->prepare('SELECT id FROM `groups` WHERE slug = ?');
+        $stmt->execute([$slug]);
+
+        return (int)$stmt->fetchColumn();
+    }
+
+    /**
+     * Eine schreibende Zielgruppe wird nicht mehr nur fuer Mitglieder ohne
+     * Adresse abgewiesen, sondern ganz: Die Vorschau bietet nichts an und
+     * fragt CiviCRM gar nicht erst (Audit H1).
+     */
+    public function testEineSchreibendeZielgruppeBlockiertDieGanzeVorschau(): void {
         $admin = $this->authenticatedClient();
         $this->addonAktivieren($admin);
-        $einmalig = substr(uniqid(), -6);
-
-        $seite = $admin->get('/admin/groups');
-        $antwort = $admin->post('/admin/groups/create', [
-            'csrf_token' => $seite->formField('csrf_token') ?? '',
-            'name' => "Mitglieder schreiben {$einmalig}",
-        ]);
-        preg_match('/group=(\d+)/', (string)$antwort->location(), $treffer);
-        $gruppe = (int)$treffer[1];
-        $this->setGroupPermissions($admin, $gruppe, ['horses' => ['view', 'edit']]);
+        $gruppe = $this->schreibGruppeAnlegen($admin, 'Mitglieder schreiben ' . substr(uniqid(), -6));
 
         Konfiguration::speichern([Konfiguration::S_GRUPPE => (string)$gruppe]);
         Konfiguration::leereCache();
 
         $vorschau = Abgleich::vorschau($this->attrappe([$this->civiZeile(9101, 21, 'Ohne Adresse')]));
 
-        $this->assertSame('blockiert', $vorschau['zeilen'][0]['zustand']);
-        $this->assertStringContainsString('Lesegruppe', (string)$vorschau['zeilen'][0]['grund']);
+        $this->assertSame([], $vorschau['zeilen']);
+        $this->assertStringContainsString('Lesegruppe', (string)$vorschau['fehler']);
+    }
+
+    /**
+     * Audit H1: Das Addon-Recht `mitglieder_konten.manage` laesst sich an
+     * Nicht-Admins vergeben. Es darf nicht dazu fuehren, dass Konten in
+     * `admin` oder einer schreibenden Gruppe entstehen - im Kern legt nur ein
+     * Admin Konten an und weist Gruppen zu.
+     */
+    public function testEinNichtAdminMitManageKannKeineAdminOderSchreibgruppeSetzen(): void {
+        $admin = $this->authenticatedClient();
+        $this->addonAktivieren($admin);
+        $x = substr(uniqid(), -6);
+
+        $lese = $this->leseGruppeAnlegen($admin, "MK lesen {$x}");
+        $schreib = $this->schreibGruppeAnlegen($admin, "MK schreiben {$x}");
+        $stelle = $this->leseGruppeAnlegen($admin, "Geschaeftsstelle {$x}");
+        $this->setGroupPermissions($admin, $stelle, ['mitglieder_konten' => ['manage']]);
+        $adminGruppe = $this->gruppeNachSlug('admin');
+        $gastGruppe = $this->gruppeNachSlug('public');
+
+        $this->aufraeumen[] = "gst{$x}";
+        $stelleClient = $this->createAndLoginEditor($admin, "gst{$x}", "gst-{$x}@example.org", [$stelle]);
+
+        $seite = $stelleClient->get('/plugin/mitglieder-konten/verwaltung');
+        $this->assertSame(200, $seite->statusCode, "Body: {$seite->body}");
+        $this->assertStringContainsString("value=\"{$lese}\"", $seite->body);
+        foreach ([$adminGruppe, $schreib, $stelle, $gastGruppe] as $verboten) {
+            $this->assertStringNotContainsString("value=\"{$verboten}\"", $seite->body, "Gruppe {$verboten} darf nicht zur Wahl stehen.");
+        }
+        $csrf = $seite->formField('csrf_token') ?? '';
+
+        // Positivkontrolle: eine Lesegruppe laesst sich speichern.
+        $ok = $stelleClient->post('/plugin/mitglieder-konten/verwaltung/zugang', [
+            'csrf_token' => $csrf, 'basis_url' => 'https://civi.example.org',
+            'api_key' => '', 'team_email' => '', 'gruppe' => (string)$lese, 'typen' => '',
+        ]);
+        $this->assertStringContainsString('mk=gespeichert', (string)$ok->location(), "Body: {$ok->body}");
+
+        $angriffe = [(string)$adminGruppe, (string)$schreib, (string)$stelle, (string)$gastGruppe, '999999', '-1', 'abc', '', ['1']];
+        foreach ($angriffe as $wert) {
+            $antwort = $stelleClient->post('/plugin/mitglieder-konten/verwaltung/zugang', [
+                'csrf_token' => $csrf, 'basis_url' => 'https://angreifer.example',
+                'api_key' => '', 'team_email' => '', 'gruppe' => $wert, 'typen' => '',
+            ]);
+            $this->assertStringContainsString(
+                'mk=gruppe-unzulaessig',
+                (string)$antwort->location(),
+                'Gruppe ' . json_encode($wert) . " haette abgelehnt werden muessen. Body: {$antwort->body}"
+            );
+        }
+
+        Konfiguration::leereCache();
+        $this->assertSame($lese, Konfiguration::gruppeId(), 'Ein abgelehnter Versuch darf nichts speichern.');
+        $this->assertSame('https://civi.example.org', Konfiguration::basis(), 'Auch die Adresse bleibt unveraendert.');
+
+        $protokolliert = (int)Database::getInstance()
+            ->query("SELECT COUNT(*) FROM audit_logs WHERE action = 'Unzulaessige Zielgruppe abgelehnt'")
+            ->fetchColumn();
+        $this->assertGreaterThan(0, $protokolliert);
+    }
+
+    /**
+     * Altbestand: Eine frueher gespeicherte Admin- oder Schreibgruppe, oder
+     * eine Lesegruppe, die NACH dem Speichern Schreibrechte bekommen hat,
+     * darf beim Anlegen kein Konto erzeugen.
+     */
+    public function testEineUnzulaessigeGespeicherteGruppeLegtKeinKontoAn(): void {
+        $admin = $this->authenticatedClient();
+        $this->addonAktivieren($admin);
+        $x = substr(uniqid(), -6);
+        $db = Database::getInstance();
+        $adminGruppe = $this->gruppeNachSlug('admin');
+        $this->aufraeumen[] = '9601';
+        $this->aufraeumen[] = '9602';
+        $this->aufraeumen[] = '9603';
+
+        $mitgliederVorher = (int)$db->query("SELECT COUNT(*) FROM user_groups WHERE group_id = {$adminGruppe}")->fetchColumn();
+
+        Konfiguration::speichern([Konfiguration::S_GRUPPE => (string)$adminGruppe]);
+        Konfiguration::leereCache();
+        $vorschau = Abgleich::vorschau($this->attrappe([$this->civiZeile(9601, 61, 'Mit Adresse', "a-{$x}@example.org")]));
+        $this->assertSame([], $vorschau['zeilen']);
+        $this->assertStringContainsString('Lesegruppe', (string)$vorschau['fehler']);
+
+        $ergebnis = Abgleich::anlegen([9601], $this->attrappe([$this->civiZeile(9601, 61, 'Mit Adresse', "a-{$x}@example.org")]));
+        $this->assertSame(0, $ergebnis['angelegt']);
+        $this->assertNotSame([], $ergebnis['fehler']);
+        $this->assertSame(0, (int)$db->query("SELECT COUNT(*) FROM users WHERE username = '9601'")->fetchColumn());
+        $this->assertSame($mitgliederVorher, (int)$db->query("SELECT COUNT(*) FROM user_groups WHERE group_id = {$adminGruppe}")->fetchColumn());
+
+        // Lesegruppe gespeichert, danach bekommt sie Schreibrechte.
+        $spaeter = $this->leseGruppeAnlegen($admin, "MK spaeter schreibend {$x}");
+        Konfiguration::speichern([Konfiguration::S_GRUPPE => (string)$spaeter]);
+        Konfiguration::leereCache();
+        $this->setGroupPermissions($admin, $spaeter, ['horses' => ['view', 'edit']]);
+        $ergebnis = Abgleich::anlegen([9602], $this->attrappe([$this->civiZeile(9602, 62, 'Spaet', "b-{$x}@example.org")]));
+        $this->assertSame(0, $ergebnis['angelegt']);
+
+        // Eine Gruppe, die es nicht mehr gibt.
+        Konfiguration::speichern([Konfiguration::S_GRUPPE => '999999']);
+        Konfiguration::leereCache();
+        $ergebnis = Abgleich::anlegen([9603], $this->attrappe([$this->civiZeile(9603, 63, 'Weg', "c-{$x}@example.org")]));
+        $this->assertSame(0, $ergebnis['angelegt']);
+        $this->assertNotSame([], $ergebnis['fehler']);
+    }
+
+    /** Der Tageslauf legt nichts an - er warnt, sperrt aber weiter. */
+    public function testDerTageslaufWarntBeiUnzulaessigerZielgruppeUndSperrtTrotzdem(): void {
+        $admin = $this->authenticatedClient();
+        $this->addonAktivieren($admin);
+        $x = substr(uniqid(), -6);
+        $gruppe = $this->leseGruppeAnlegen($admin, "MK Tageslauf {$x}");
+        Konfiguration::speichern([Konfiguration::S_GRUPPE => (string)$gruppe]);
+        Konfiguration::leereCache();
+
+        $this->aufraeumen[] = '9701';
+        Abgleich::anlegen([9701], $this->attrappe([$this->civiZeile(9701, 71, 'Geht bald', "t-{$x}@example.org")]));
+
+        Konfiguration::speichern([Konfiguration::S_GRUPPE => (string)$this->gruppeNachSlug('admin')]);
+        Konfiguration::leereCache();
+
+        $bericht = Abgleich::taeglicherLauf($this->attrappe([]));
+        $this->assertSame(1, $bericht['gesperrt'], 'Die Sperre beendeter Mitgliedschaften laeuft trotz unzulaessiger Gruppe.');
+        $gewarnt = (int)Database::getInstance()
+            ->query("SELECT COUNT(*) FROM audit_logs WHERE action = 'Mitglieder-Konten: Zielgruppe unzulaessig'")
+            ->fetchColumn();
+        $this->assertGreaterThan(0, $gewarnt);
     }
 
     public function testKontenEntstehenGenauEinmalUndMitZuordnung(): void {
