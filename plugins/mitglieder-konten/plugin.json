@@ -1,10 +1,10 @@
 {
     "slug": "mitglieder-konten",
     "name": "Mitglieder-Konten",
-    "version": "1.0.1",
+    "version": "1.1.0",
     "core_compatibility": ">=0.9.0-beta.3",
     "core_supported_max": "0.9",
-    "description": "Legt Benutzerkonten für Verbandsmitglieder aus einer CiviCRM-Instanz an: Benutzername = Mitgliedschafts-ID, Erstpasswort erzeugt, Zuordnung zu einer reinen Lesegruppe. Hat ein Mitglied keine eigene E-Mail-Adresse, gehen die Zugangsdaten gesammelt an das Verwaltungsteam. Kein Datenabgleich darüber hinaus - CiviCRM ist ausschliesslich die Quelle dafür, WER ein Konto bekommt. Endet eine Mitgliedschaft, sperrt der tägliche Lauf das Konto (nie löschen).",
+    "description": "Legt Benutzerkonten für Verbandsmitglieder aus einer CiviCRM-Instanz an: Benutzername = Mitgliedschafts-ID, Erstpasswort erzeugt, Zuordnung zu einer reinen Lesegruppe. Hat ein Mitglied keine eigene E-Mail-Adresse, gehen die Zugangsdaten gesammelt an das Verwaltungsteam. Kein Datenabgleich darüber hinaus - CiviCRM ist ausschliesslich die Quelle dafür, WER ein Konto bekommt. Endet eine Mitgliedschaft, sperrt der tägliche Lauf das Konto (nie löschen); unplausibel viele Änderungen auf einmal bestätigt ein Admin. Den CiviCRM-Zugang richtet nur ein Admin ein.",
     "author": "Hengstverzeichnis_Addons",
     "hooks": [
         "admin.dashboard_tiles"
@@ -22,7 +22,9 @@
             "plugin_mitglieder_konten_key",
             "plugin_mitglieder_konten_gruppe",
             "plugin_mitglieder_konten_team_email",
-            "plugin_mitglieder_konten_typen"
+            "plugin_mitglieder_konten_typen",
+            "plugin_mitglieder_konten_key_bindung",
+            "plugin_mitglieder_konten_sperre_angehalten"
         ]
     },
     "entry": "Plugin.php"
