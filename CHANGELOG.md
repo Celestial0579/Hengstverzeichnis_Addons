@@ -31,7 +31,67 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   stehen, und das Protokoll auf „CiviCRM-Zugang gespeichert“ durch
   Nicht-Admins durchsehen.
 
+- **`mitglieder-konten` (1.1.0): Den CiviCRM-Zugang richtet nur noch ein
+  Admin ein.** Wer Basis-Adresse und API-Schlüssel setzt, bestimmt die
+  Datenquelle für Vorschau, Anlage und den täglichen Lauf. Mit
+  `mitglieder_konten.manage` ließ sich eine eigene Quelle samt eigenem
+  Schlüssel eintragen und damit jede gewünschte Antwort liefern – bis hin zu
+  Massensperren. Das Recht reicht weiterhin für die Verwaltungsseite, die
+  Vorschau und das Anlegen in der vom Admin gewählten Lesegruppe; die
+  Einstellungen sehen Nicht-Admins nur zum Lesen, jeder Speicherversuch
+  endet mit 403.
+
+- **`mitglieder-konten` (1.1.0): API-Schlüssel an die CiviCRM-Adresse
+  gebunden** (Audit M5). Wer die Basis-Adresse ändert, muss den
+  API-Schlüssel neu eingeben; bis dahin wird nichts gespeichert. Bisher ging
+  der gespeicherte Schlüssel an jede neu eingetragene Adresse. Erlaubt ist
+  nur noch `https://` ohne Zugangsdaten, Parameter oder Fragment; ein Pfad
+  bleibt zulässig. `localhost` und Ziele, die auf private, Loopback-,
+  Link-Local-, CGNAT- oder reservierte Adressen auflösen, werden abgelehnt –
+  auch in IPv6-Verpackung (IPv4-mapped, NAT64, 6to4). Vor jeder Anfrage wird
+  der Host aufgelöst, und die Verbindung geht genau an die geprüfte Adresse.
+  Fehlermeldungen in der Verwaltung sind allgemein gehalten, Einzelheiten
+  stehen nur im Serverprotokoll, nie mit dem Schlüssel.
+
+  **Für Betreiber:** Eine `http://`-Adresse muss auf `https://` umgestellt
+  werden. Ein CiviCRM im eigenen Netz gibt der Serverbetreiber über die
+  Umgebungsvariable `MITGLIEDER_KONTEN_INTERNE_HOSTS` (kommagetrennte
+  Hostnamen) frei. Mit Egress-Proxy löst der Proxy auf; dann ist dessen
+  Filter die Grenze. Ein bereits gespeicherter Schlüssel wird beim ersten
+  Lesen an die jetzige Adresse gebunden.
+
 ### Behoben
+
+- **`mitglieder-konten` (1.1.0): keine Massensperre mehr durch eine leere
+  oder gefilterte CiviCRM-Antwort** (Audit N30). Der tägliche Lauf fragt den
+  Status der zugeordneten Mitgliedschaften gezielt per ID ab; der Filter
+  „Mitgliedschaftsarten“ gilt nur noch für die Anlage. Gesperrt wird nur, was
+  CiviCRM ausdrücklich als beendet meldet oder dort nicht mehr auffindbar
+  ist; eine Zeile ohne Statusangabe sperrt nicht. Würden mehr als 20 %
+  (mindestens 10) der Konten auf einmal gesperrt oder entsperrt, hält der
+  Lauf in dieser Richtung an. Ein Admin bestätigt auf der Verwaltungsseite
+  genau die angezeigte Menge (neue Route
+  `POST /plugin/mitglieder-konten/verwaltung/sperren-bestaetigen`).
+
+- **`mitglieder-konten` (1.1.0): Konten werden wieder entsperrt, wenn die
+  Mitgliedschaft wieder läuft** (Audit N30). Das gilt nur für Sperren mit dem
+  Grund „Mitgliedschaft beendet“ und nur für Konten in reinen Lesegruppen.
+  Sperren durch einen Admin oder die Ruhesperre bleiben bestehen.
+
+- **`mitglieder-konten` (1.1.0): Versandfehler bei den Zugangsdaten werden
+  gemeldet** (Audit N31). Scheitert die Willkommensmail oder die Sammelmail
+  an das Verwaltungsteam, oder fehlt die Team-Adresse, nennt die Verwaltung
+  die betroffenen Benutzernamen. Das Protokoll hält den Fall fest, ohne
+  Passwörter. Ein Weg „Zugangsdaten neu erzeugen und versenden“ folgt als
+  eigenes Issue.
+
+- **`mitglieder-konten` (1.1.0): belegte E-Mail-Adressen und Wiedereintritte
+  in der Vorschau** (Audit N29). Bereits vergebene oder im Stapel doppelte
+  Adressen (etwa eine gemeinsame Familienadresse) erscheinen vor der Anlage
+  als „geht nicht“. Tritt ein Mitglied wieder ein, übernimmt das Addon das
+  bisherige Konto samt Benutzername und Passwort, statt an der doppelten
+  Adresse zu scheitern; läuft die alte Mitgliedschaft noch, ist die Zeile
+  blockiert.
 
 - **Die Composer-Zeitgrenze vorsorglich angehoben** (Framework#424). Composer
   bricht Kindprozesse nach 300 Sekunden ab. Im Framework hat die Suite diese

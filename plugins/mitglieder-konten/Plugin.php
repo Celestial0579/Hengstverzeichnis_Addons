@@ -22,17 +22,28 @@
 //     würde - belegte Namen, Nummern mit `@`, fehlende Lesegruppe.
 //
 //  3. BENUTZERNAME = MITGLIEDSCHAFTS-ID (vom Betreiber so entschieden).
-//     Die Folge gehört benannt: Endet eine Mitgliedschaft und tritt jemand
-//     später neu ein, vergibt CiviCRM eine NEUE Mitgliedschafts-ID. Es
-//     entsteht dann ein zweites Konto, und das erste bleibt gesperrt stehen.
-//     Das ist mit Punkt 4 stimmig - ein Konto je Mitgliedschaftszeitraum -,
-//     aber es ist eine Entscheidung und kein Zufall.
+//     Endet eine Mitgliedschaft und tritt jemand später neu ein, vergibt
+//     CiviCRM eine NEUE Mitgliedschafts-ID. Seit 1.1.0 (Audit N29) erkennt
+//     die Vorschau das über die CiviCRM-Kontakt-ID und ÜBERNIMMT das alte
+//     Konto: Die Zuordnung wird auf die neue Mitgliedschaft umgehängt, das
+//     Konto nach denselben Regeln wie im Tageslauf entsperrt. Der
+//     Benutzername bleibt die ALTE Mitgliedschafts-ID - ein zweites Konto
+//     scheiterte ohnehin an der eindeutigen E-Mail-Adresse. Läuft die alte
+//     Mitgliedschaft noch (oder ist ihr Status unklar), ist die Zeile
+//     blockiert.
 //
 //  4. ENDET DIE MITGLIEDSCHAFT, WIRD GESPERRT - NIE GELÖSCHT. Der tägliche
-//     Lauf liest den Mitgliedszustand (mehr nicht, er speichert ihn nicht)
-//     und setzt für Konten ohne laufende Mitgliedschaft `deactivated_at`.
-//     Eine Sperre ist umkehrbar, eine Löschung nimmt Zuordnungen und Spuren
-//     mit (Framework#358).
+//     Lauf fragt den Status der zugeordneten Mitgliedschaften gezielt per ID
+//     ab (Audit N30) - ohne Typfilter, denn der gilt nur für die Anlage - und
+//     setzt `deactivated_at` nur bei ausdrücklich "läuft nicht" oder einer
+//     in CiviCRM nicht mehr auffindbaren ID. Eine Zeile ohne Statusfeld ist
+//     "unklar" und sperrt nicht. Läuft eine Mitgliedschaft wieder, wird ein
+//     Konto mit Grund `membership_ended` automatisch entsperrt - aber nur,
+//     wenn es ausschließlich in Lesegruppen ist. Mehr als 20 % (mindestens
+//     10) Sperren oder Entsperrungen auf einmal hält der Lauf an; ein ADMIN
+//     bestätigt auf der Verwaltungsseite genau die angezeigte Menge. Eine
+//     Sperre ist umkehrbar, eine Löschung nimmt Zuordnungen und Spuren mit
+//     (Framework#358).
 //
 //  5. DAS KONTO LEGT DER KERN AN, nicht dieses Addon:
 //     App\Service\UserProvisioning (Framework#384). Ein nachgebauter
@@ -47,6 +58,19 @@
 //     Deshalb: erzeugtes Passwort, `must_change_password = 1` (der Kern setzt
 //     das bei jeder Neuanlage), und der Hinweis in der Mail, es sofort zu
 //     wechseln.
+//
+//  7. DEN CIVICRM-ZUGANG RICHTET NUR EIN ADMIN EIN (seit 1.1.0). Wer URL
+//     und Schlüssel setzt, bestimmt die Datenquelle für Vorschau, Anlage und
+//     Tageslauf - mit einer eigenen Quelle liessen sich Massensperren
+//     auslösen. `mitglieder_konten.manage` darf die Seite sehen, die
+//     Vorschau ansehen und Konten in der vom Admin gewählten Lesegruppe
+//     anlegen. Der Schlüssel ist an die Basis-Adresse gebunden (Audit M5):
+//     Wer die Adresse ändert, muss ihn neu eingeben, und er geht nur an
+//     https-Ziele mit öffentlicher Adresse.
+//
+//  8. VERSANDFEHLER WERDEN GEMELDET (Audit N31) - in der Verwaltung und im
+//     Protokoll, mit Benutzernamen, nie mit Passwort. Einen Weg "Zugangsdaten
+//     neu erzeugen und versenden" gibt es noch nicht (Folge-Issue).
 //
 // Installation (lokal im Framework-Repo):
 //   cp -r mitglieder-konten plugins/mitglieder-konten
@@ -140,7 +164,9 @@ class Plugin {
             [
                 'module' => self::MODUL,
                 'action' => 'manage',
-                'label' => 'Mitglieder-Konten anlegen und den CiviCRM-Zugang pflegen',
+                // Seit 1.1.0 ohne "Zugang pflegen": Den CiviCRM-Zugang richtet
+                // nur ein Admin ein (siehe VerwaltungController::zugang()).
+                'label' => 'Mitglieder-Konten ansehen und anlegen',
                 'module_label' => 'Mitglieder-Konten',
             ],
         ];
@@ -170,6 +196,8 @@ class Plugin {
             ['method' => 'GET',  'path' => '/verwaltung',            'callback' => [VerwaltungController::class, 'index']],
             ['method' => 'POST', 'path' => '/verwaltung/zugang',     'callback' => [VerwaltungController::class, 'zugang']],
             ['method' => 'POST', 'path' => '/verwaltung/anlegen',    'callback' => [VerwaltungController::class, 'anlegen']],
+            // Nur Admin (N30) - die Pruefung steht im Controller.
+            ['method' => 'POST', 'path' => '/verwaltung/sperren-bestaetigen', 'callback' => [VerwaltungController::class, 'sperrenBestaetigen']],
         ];
     }
 }
@@ -190,7 +218,7 @@ final class GruppenHelfer {
 }
 
 /**
- * Die Einstellungen. Fuenf Werte, deshalb kein eigenes Schema - das Register
+ * Die Einstellungen. Sieben Werte, deshalb kein eigenes Schema - das Register
  * `owns` zaehlt sie auf und entfernt sie beim Deinstallieren.
  */
 final class Konfiguration {
@@ -200,6 +228,23 @@ final class Konfiguration {
     public const S_GRUPPE = 'plugin_mitglieder_konten_gruppe';
     public const S_TEAM = 'plugin_mitglieder_konten_team_email';
     public const S_TYPEN = 'plugin_mitglieder_konten_typen';
+
+    /**
+     * SHA-256 der normalisierten Basis-Adresse, fuer die der Schluessel
+     * eingegeben wurde (Audit M5). Ohne diese Bindung ging der gespeicherte
+     * Schluessel an JEDE neu eingetragene Adresse - wer die Adresse aendern
+     * durfte, konnte ihn sich an einen eigenen Server schicken lassen.
+     */
+    public const S_KEY_BINDUNG = 'plugin_mitglieder_konten_key_bindung';
+
+    /** Vom Tageslauf angehaltene Massenaenderung, JSON (Audit N30). */
+    public const S_ANGEHALTEN = 'plugin_mitglieder_konten_sperre_angehalten';
+
+    /** Alle Schluessel - daraus entsteht die IN-Liste in alle(). */
+    private const ALLE = [
+        self::S_URL, self::S_KEY, self::S_GRUPPE, self::S_TEAM, self::S_TYPEN,
+        self::S_KEY_BINDUNG, self::S_ANGEHALTEN,
+    ];
 
     /** @var array<string, string>|null */
     private static ?array $cache = null;
@@ -213,10 +258,11 @@ final class Konfiguration {
         }
 
         try {
+            $platzhalter = implode(', ', array_fill(0, count(self::ALLE), '?'));
             $stmt = Database::getInstance()->prepare(
-                'SELECT setting_key, setting_value FROM settings WHERE setting_key IN (?, ?, ?, ?, ?)'
+                "SELECT setting_key, setting_value FROM settings WHERE setting_key IN ({$platzhalter})"
             );
-            $stmt->execute([self::S_URL, self::S_KEY, self::S_GRUPPE, self::S_TEAM, self::S_TYPEN]);
+            $stmt->execute(self::ALLE);
             $zeilen = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
             self::$cache = is_array($zeilen) ? $zeilen : [];
         } catch (\Throwable $e) {
@@ -248,7 +294,99 @@ final class Konfiguration {
             return '';
         }
 
+        // M5, Schutz in der Tiefe: Passt die gespeicherte Bindung nicht zur
+        // aktuellen Adresse (etwa weil S_URL an zugang() vorbei geaendert
+        // wurde), wird der Schluessel nicht herausgegeben.
+        $bindung = (string)(self::alle()[self::S_KEY_BINDUNG] ?? '');
+        if ($bindung === '') {
+            // Altbestand vor 1.1.0: einmalig an die jetzige Adresse binden.
+            // Scheitert das Schreiben, gilt der Schluessel trotzdem - sonst
+            // stuende ein Update mit einer schreibgeschuetzten settings-Zeile
+            // ohne Tageslauf da.
+            try {
+                self::speichern([self::S_KEY_BINDUNG => self::bindung(self::basis())]);
+            } catch (\Throwable) {
+                // bewusst still - siehe oben
+            }
+        } elseif (!hash_equals($bindung, self::bindung(self::basis()))) {
+            return '';
+        }
+
         return (string)(Crypto::decrypt($roh) ?? '');
+    }
+
+    /**
+     * Ob ein Schluessel gespeichert ist - nach dem ROHWERT, nicht nach
+     * apiKey(). apiKey() liefert bei fremder Bindung '' und oeffnete sonst
+     * den Weg "kein Schluessel da, also darf die Adresse frei geaendert
+     * werden" (M5).
+     */
+    public static function schluesselGespeichert(): bool {
+        return trim((string)(self::alle()[self::S_KEY] ?? '')) !== '';
+    }
+
+    /** Die gespeicherte Bindung ('' = Altbestand ohne Bindung). */
+    public static function gespeicherteBindung(): string {
+        return (string)(self::alle()[self::S_KEY_BINDUNG] ?? '');
+    }
+
+    /** Bindungswert einer Basis-Adresse: SHA-256 der normalisierten Form (M5). */
+    public static function bindung(string $basis): string {
+        return hash('sha256', strtolower(rtrim(trim($basis), '/')));
+    }
+
+    /**
+     * Die angehaltene Massenaenderung (N30), je Richtung.
+     *
+     * @return array<string, array{richtung:string, ids:array<int,int>, anzahl:int, grenze:int, zeit:string}>
+     */
+    public static function angehalten(): array {
+        $roh = (string)(self::alle()[self::S_ANGEHALTEN] ?? '');
+        if ($roh === '') {
+            return [];
+        }
+        $daten = json_decode($roh, true);
+        if (!is_array($daten)) {
+            return [];
+        }
+
+        $ergebnis = [];
+        foreach (['sperren', 'entsperren'] as $richtung) {
+            $eintrag = $daten[$richtung] ?? null;
+            if (!is_array($eintrag) || !is_array($eintrag['ids'] ?? null)) {
+                continue;
+            }
+            $ids = array_values(array_unique(array_map('intval', $eintrag['ids'])));
+            sort($ids);
+            $ergebnis[$richtung] = [
+                'richtung' => $richtung,
+                'ids' => $ids,
+                'anzahl' => (int)($eintrag['anzahl'] ?? count($ids)),
+                'grenze' => (int)($eintrag['grenze'] ?? 0),
+                'zeit' => (string)($eintrag['zeit'] ?? ''),
+            ];
+        }
+
+        return $ergebnis;
+    }
+
+    /**
+     * Fingerabdruck der angehaltenen Menge. Das Bestaetigungsformular traegt
+     * ihn mit: Hat ein spaeterer Lauf die Menge ersetzt, passt er nicht mehr,
+     * und die Bestaetigung gilt nicht fuer etwas, das der Admin nie gesehen
+     * hat.
+     */
+    public static function angehaltenFingerabdruck(): string {
+        $angehalten = self::angehalten();
+        if ($angehalten === []) {
+            return '';
+        }
+        $teile = [];
+        foreach ($angehalten as $richtung => $eintrag) {
+            $teile[] = $richtung . ':' . implode(',', $eintrag['ids']);
+        }
+
+        return hash('sha256', implode('|', $teile));
     }
 
     public static function gruppeId(): int {
@@ -293,12 +431,19 @@ final class Konfiguration {
     }
 
     /**
-     * Prueft und normalisiert die Basis-URL.
+     * Prueft und normalisiert die Basis-URL - rein syntaktisch, ohne DNS.
      *
-     * Nur http/https, kein Pfad, keine Query: Die Adresse wird zu einem
-     * API-Endpunkt zusammengesetzt, und eine Basis mit eigener Query fuehrte
-     * woanders hin als gedacht. `javascript:` und `data:` scheiden damit
-     * ebenfalls aus.
+     * Nur https (M5): Der Schluessel geht als Kopfzeile mit, und ueber http
+     * laege er offen im Netz. Keine Zugangsdaten, keine Query, kein Fragment:
+     * Die Adresse wird zu einem API-Endpunkt zusammengesetzt, und eine Basis
+     * mit eigener Query fuehrte woanders hin als gedacht. Ein PFAD ist
+     * erlaubt, weil CiviCRM oft in einem Unterverzeichnis liegt.
+     *
+     * `localhost` und literale nicht-oeffentliche IPs fallen schon hier
+     * heraus, damit der Fehler beim Speichern sichtbar wird. Numerische
+     * Hostformen wie `2130706433` oder `0177.0.0.1` sind fuer filter_var
+     * keine IPs - die faengt die Laufzeitpruefung nach der Aufloesung ab
+     * (CiviApi::zielPruefen()).
      */
     public static function pruefeBasis(string $eingabe): ?string {
         $eingabe = trim($eingabe);
@@ -307,10 +452,26 @@ final class Konfiguration {
         }
 
         $teile = parse_url($eingabe);
-        if (!is_array($teile) || !in_array($teile['scheme'] ?? '', ['http', 'https'], true)) {
+        if (!is_array($teile) || strtolower((string)($teile['scheme'] ?? '')) !== 'https') {
+            return null;
+        }
+        if (isset($teile['user']) || isset($teile['pass'])) {
             return null;
         }
         if (($teile['host'] ?? '') === '' || ($teile['query'] ?? '') !== '' || ($teile['fragment'] ?? '') !== '') {
+            return null;
+        }
+        // parse_url laesst ein leeres '?' oder '#' als leeren Wert stehen.
+        if (str_contains($eingabe, '?') || str_contains($eingabe, '#')) {
+            return null;
+        }
+
+        $host = strtolower(rtrim((string)$teile['host'], '.'));
+        if ($host === 'localhost' || str_ends_with($host, '.localhost')) {
+            return null;
+        }
+        $literal = (str_starts_with($host, '[') && str_ends_with($host, ']')) ? substr($host, 1, -1) : $host;
+        if (filter_var($literal, FILTER_VALIDATE_IP) !== false && !CiviApi::ipIstOeffentlich($literal)) {
             return null;
         }
 
@@ -424,6 +585,60 @@ final class Zuordnung {
         );
         $stmt->execute([$membershipId]);
     }
+
+    public static function entsperrvermerk(int $membershipId): void {
+        $stmt = Database::getInstance()->prepare(
+            'UPDATE `' . self::TABELLE . '` SET gesperrt_am = NULL WHERE membership_id = ?'
+        );
+        $stmt->execute([$membershipId]);
+    }
+
+    /**
+     * Je CiviCRM-Kontakt die juengste Zuordnung - Grundlage fuer die
+     * Erkennung eines Wiedereintritts (N29).
+     *
+     * @return array<int, array{membership_id:int, user_id:int}> contact_id => Zuordnung
+     */
+    public static function nachKontakt(): array {
+        try {
+            $zeilen = Database::getInstance()
+                ->query(
+                    'SELECT membership_id, user_id, civicrm_contact_id FROM `' . self::TABELLE . '`
+                     ORDER BY angelegt_am ASC, membership_id ASC'
+                )
+                ->fetchAll(PDO::FETCH_ASSOC);
+        } catch (\Throwable $e) {
+            return [];
+        }
+
+        $ergebnis = [];
+        foreach ((array)$zeilen as $z) {
+            // Spaetere Zeilen ueberschreiben fruehere: Die juengste gewinnt.
+            $ergebnis[(int)$z['civicrm_contact_id']] = [
+                'membership_id' => (int)$z['membership_id'],
+                'user_id' => (int)$z['user_id'],
+            ];
+        }
+
+        return $ergebnis;
+    }
+
+    /**
+     * Haengt eine Zuordnung auf eine neue Mitgliedschafts-ID um (N29).
+     *
+     * Ein UPDATE des Primaerschluessels - es gibt keine Fremdschluessel auf
+     * membership_id, und uq_mk_user bleibt erfuellt, weil sich user_id nicht
+     * aendert. rowCount() === 1 ist die Pruefung gegen einen parallelen Lauf:
+     * Hat ihn ein anderer schon umgehaengt, trifft das UPDATE nichts.
+     */
+    public static function umhaengen(int $alt, int $neu): bool {
+        $stmt = Database::getInstance()->prepare(
+            'UPDATE `' . self::TABELLE . '` SET membership_id = ? WHERE membership_id = ?'
+        );
+        $stmt->execute([$neu, $alt]);
+
+        return $stmt->rowCount() === 1;
+    }
 }
 
 /**
@@ -437,16 +652,32 @@ final class Abgleich {
     /** Hoechstzahl je Anlagestapel. Eine Bremse, keine Leistungsgrenze. */
     public const MAX_JE_STAPEL = 100;
 
+    /**
+     * Plausibilitaetsgrenze des Tageslaufs (N30): Mehr als dieser Anteil der
+     * aktiven (bzw. gesperrten) Zuordnungen auf einmal - mindestens aber
+     * AENDER_MIN_ABSOLUT - ist kein Alltag, sondern ein Fehler der Quelle
+     * oder ein Angriff. Dann haelt der Lauf an, und ein Admin bestaetigt.
+     */
+    public const AENDER_MIN_ABSOLUT = 10;
+    public const AENDER_HOECHSTANTEIL = 0.2;
+
+    /** Sperrgrund dieses Addons - nur solche Sperren hebt es selbst wieder auf. */
+    public const GRUND = 'membership_ended';
+
     private function __construct() {}
 
     /**
      * Was ein Anlagelauf taete - VOR dem ersten Konto.
      *
      * Jede Zeile traegt ihren Zustand: `neu` (wird angelegt), `vorhanden`
-     * (hat schon ein Konto), oder ein Hinderungsgrund. Die Hinderungsgruende
-     * sind genau die, die der Kern beim Anlegen zurueckweisen wuerde - sie
-     * hier zu zeigen ist der Unterschied zwischen "1.496 Konten, 37 Fehler
-     * im Protokoll" und "37 Faelle, die vorher zu klaeren sind".
+     * (hat schon ein Konto), `wiedereintritt` (das fruehere Konto desselben
+     * CiviCRM-Kontakts wird uebernommen, N29) oder `blockiert` mit Grund.
+     * Die Hinderungsgruende sind genau die, an denen die Anlage scheitern
+     * wuerde - belegter Benutzername, unzulaessiger Name, eine E-Mail-Adresse,
+     * die schon einem Konto gehoert (UNIQUE in `users`), dieselbe Adresse
+     * zweimal im Stapel. Sie hier zu zeigen ist der Unterschied zwischen
+     * "1.496 Konten, 37 Fehler im Protokoll" und "37 Faelle, die vorher zu
+     * klaeren sind".
      *
      * @return array{zeilen: array<int, array<string, mixed>>, fehler: ?string}
      */
@@ -466,13 +697,48 @@ final class Abgleich {
         try {
             $mitgliedschaften = $client->laufendeMitgliedschaften(Konfiguration::typIds());
         } catch (CiviApiFehler $e) {
+            $e->protokollieren();
             return ['zeilen' => [], 'fehler' => $e->getMessage()];
         }
 
+        // Vor der Pruefung sortiert: Die Regel "dieselbe Adresse zweimal im
+        // Stapel - die spaetere ist blockiert" braucht eine feste Reihenfolge.
+        usort($mitgliedschaften, static fn(array $a, array $b): int => $a['membership_id'] <=> $b['membership_id']);
+
         $bekannt = Zuordnung::alle();
+        $nachKontakt = Zuordnung::nachKontakt();
         $belegt = self::belegteBenutzernamen();
+        $adressen = self::belegteAdressen();
+
+        // N29: Kandidaten fuer einen Wiedereintritt sammeln und den Status
+        // ihrer ALTEN Mitgliedschaft in EINEM Aufruf erfragen - ohne
+        // Typfilter. Die typgefilterte Liste oben taugt dafuer nicht: Eine
+        // noch laufende Mitgliedschaft einer anderen Art fehlt dort und sahe
+        // wie beendet aus.
+        $alteIds = [];
+        $altUserIds = [];
+        foreach ($mitgliedschaften as $m) {
+            $frueher = $nachKontakt[$m['contact_id']] ?? null;
+            if (!isset($bekannt[$m['membership_id']]) && $frueher !== null && $frueher['membership_id'] !== $m['membership_id']) {
+                $alteIds[] = $frueher['membership_id'];
+                $altUserIds[] = $frueher['user_id'];
+            }
+        }
+        $alterStatus = [];
+        $altkonten = [];
+        if ($alteIds !== []) {
+            try {
+                $alterStatus = $client->statusNachId($alteIds);
+            } catch (CiviApiFehler $e) {
+                $e->protokollieren();
+                return ['zeilen' => [], 'fehler' => $e->getMessage()];
+            }
+            $altkonten = self::kontenZustand($altUserIds);
+        }
 
         $zeilen = [];
+        $imLauf = [];
+        $uebernommen = [];
         foreach ($mitgliedschaften as $m) {
             $benutzername = (string)$m['membership_id'];
             $zeile = [
@@ -484,38 +750,79 @@ final class Abgleich {
                 'zustand' => 'neu',
                 'grund' => '',
             ];
+            $frueher = $nachKontakt[$m['contact_id']] ?? null;
+            $adresse = mb_strtolower(trim((string)$m['email']), 'UTF-8');
 
             if (isset($bekannt[$m['membership_id']])) {
                 $zeile['zustand'] = 'vorhanden';
+            } elseif ($frueher !== null && $frueher['membership_id'] !== $m['membership_id']) {
+                $alt = $frueher['membership_id'];
+                $konto = $altkonten[$frueher['user_id']] ?? null;
+                // Fehlt die alte ID in CiviCRM, gilt sie als beendet - wie im
+                // Tageslauf. true und null ("unklar") blockieren.
+                $laeuftNoch = array_key_exists($alt, $alterStatus) && $alterStatus[$alt] !== false;
+
+                if ($laeuftNoch) {
+                    $zeile['zustand'] = 'blockiert';
+                    $zeile['grund'] = sprintf('Der Kontakt hat bereits ein Konto über Mitgliedschaft %d.', $alt);
+                } elseif ($konto === null || $konto['deleted_at'] !== null) {
+                    $zeile['zustand'] = 'blockiert';
+                    $zeile['grund'] = 'Früheres Konto wurde gelöscht, hält die Adresse aber noch - ein Admin muss es endgültig entfernen.';
+                } elseif (isset($uebernommen[$frueher['user_id']])) {
+                    // Zwei neue Mitgliedschaften desselben Kontakts: Das alte
+                    // Konto kann nur eine davon uebernehmen.
+                    $zeile['zustand'] = 'blockiert';
+                    $zeile['grund'] = sprintf('Der Kontakt hat bereits ein Konto über Mitgliedschaft %d.', $uebernommen[$frueher['user_id']]);
+                } else {
+                    $zeile['zustand'] = 'wiedereintritt';
+                    $zeile['grund'] = sprintf('Früheres Konto %s wird übernommen.', $konto['username']);
+                    $zeile['user_id'] = $frueher['user_id'];
+                    $zeile['alte_membership_id'] = $alt;
+                    $uebernommen[$frueher['user_id']] = $m['membership_id'];
+                }
             } elseif (isset($belegt[mb_strtolower($benutzername, 'UTF-8')])) {
                 $zeile['zustand'] = 'blockiert';
                 $zeile['grund'] = 'Der Benutzername ist bereits vergeben - nicht durch dieses Addon.';
             } elseif (LoginIdentifier::usernameErrors($benutzername) !== []) {
                 $zeile['zustand'] = 'blockiert';
                 $zeile['grund'] = implode(' ', LoginIdentifier::usernameErrors($benutzername));
+            } elseif ($adresse !== '' && isset($adressen[$adresse])) {
+                // N29: `users.email` ist UNIQUE - auch fuer soft-geloeschte
+                // Konten. Bisher scheiterte das erst beim Anlegen.
+                $zeile['zustand'] = 'blockiert';
+                $zeile['grund'] = 'Die E-Mail-Adresse gehört bereits zu einem anderen Konto (z. B. gemeinsame Familienadresse).';
+            } elseif ($adresse !== '' && isset($imLauf[$adresse])) {
+                $zeile['zustand'] = 'blockiert';
+                $zeile['grund'] = sprintf('Dieselbe E-Mail-Adresse hat schon Mitgliedschaft %d in dieser Liste.', $imLauf[$adresse]);
             }
-            // Mitglieder ohne Adresse brauchen keinen eigenen Zweig mehr: Die
+            // Mitglieder ohne Adresse brauchen keinen eigenen Zweig: Die
             // Zielgruppe ist oben bereits auf eine reine Lesegruppe
             // festgelegt, und genau die verlangt Framework#348 fuer Konten
             // ohne Adresse. UserProvisioning prueft das beim Anlegen ohnehin.
 
+            if ($zeile['zustand'] === 'neu' && $adresse !== '') {
+                $imLauf[$adresse] = $m['membership_id'];
+            }
             $zeilen[] = $zeile;
         }
-
-        usort($zeilen, static fn(array $a, array $b): int => $a['membership_id'] <=> $b['membership_id']);
 
         return ['zeilen' => $zeilen, 'fehler' => null];
     }
 
     /**
-     * Legt die ausgewaehlten Konten an.
+     * Legt die ausgewaehlten Konten an bzw. uebernimmt fruehere Konten bei
+     * einem Wiedereintritt (N29).
+     *
+     * Die erzeugten Passwoerter verlassen diese Methode nicht - sie gehen
+     * nur in die Zustellung (N31: Das fruehere Feld `zugangsdaten` ist
+     * entfallen, niemand ausserhalb brauchte es).
      *
      * @param array<int, int> $membershipIds
-     * @return array{angelegt: int, uebersprungen: int, fehler: array<int, string>, zugangsdaten: array<int, array<string,string>>}
+     * @return array{angelegt: int, reaktiviert: int, uebersprungen: int, fehler: array<int, string>}
      */
-    public static function anlegen(array $membershipIds, ?CiviApi $client = null): array {
+    public static function anlegen(array $membershipIds, ?CiviApi $client = null, ?Mailer $mailer = null): array {
         $client ??= Konfiguration::client();
-        $ergebnis = ['angelegt' => 0, 'uebersprungen' => 0, 'fehler' => [], 'zugangsdaten' => []];
+        $ergebnis = ['angelegt' => 0, 'reaktiviert' => 0, 'uebersprungen' => 0, 'fehler' => []];
 
         $auswahl = array_slice(array_values(array_unique(array_map('intval', $membershipIds))), 0, self::MAX_JE_STAPEL);
         if ($auswahl === []) {
@@ -544,12 +851,18 @@ final class Abgleich {
             $nachId[(int)$zeile['membership_id']] = $zeile;
         }
 
+        $zugangsdaten = [];
         foreach ($auswahl as $membershipId) {
             $zeile = $nachId[$membershipId] ?? null;
 
             // Die Auswahl kommt aus einem Formular und ist damit
-            // nutzergesteuert: Was in der Vorschau nicht als `neu` steht, wird
-            // nicht angelegt - auch wenn es im POST steht.
+            // nutzergesteuert: Was in der Vorschau nicht als `neu` oder
+            // `wiedereintritt` steht, wird nicht angefasst - auch wenn es im
+            // POST steht.
+            if ($zeile !== null && $zeile['zustand'] === 'wiedereintritt') {
+                self::uebernehmen($db, $zeile, $ergebnis);
+                continue;
+            }
             if ($zeile === null || $zeile['zustand'] !== 'neu') {
                 $ergebnis['uebersprungen']++;
                 continue;
@@ -572,7 +885,7 @@ final class Abgleich {
 
             Zuordnung::merken($membershipId, $angelegt->userId, (int)$zeile['contact_id']);
             $ergebnis['angelegt']++;
-            $ergebnis['zugangsdaten'][] = [
+            $zugangsdaten[] = [
                 'benutzername' => (string)$zeile['benutzername'],
                 'passwort' => $passwort,
                 'email' => (string)$zeile['email'],
@@ -580,9 +893,65 @@ final class Abgleich {
             ];
         }
 
-        self::zugangsdatenZustellen($ergebnis['zugangsdaten']);
+        foreach (self::zugangsdatenZustellen($zugangsdaten, $mailer) as $fehler) {
+            $ergebnis['fehler'][] = $fehler;
+        }
 
         return $ergebnis;
+    }
+
+    /**
+     * Wiedereintritt (N29): die Zuordnung auf die neue Mitgliedschaft
+     * umhaengen und das Konto nach denselben Regeln wie im Tageslauf
+     * entsperren. Kein neues Passwort, keine Mail, kein Abgleich der Adresse
+     * (Punkt 1 im Dateikopf) - das Mitglied meldet sich mit seinen alten
+     * Zugangsdaten an.
+     *
+     * @param array<string, mixed> $zeile
+     * @param array{angelegt: int, reaktiviert: int, uebersprungen: int, fehler: array<int, string>} $ergebnis
+     */
+    private static function uebernehmen(PDO $db, array $zeile, array &$ergebnis): void {
+        $neu = (int)$zeile['membership_id'];
+        $alt = (int)$zeile['alte_membership_id'];
+        $userId = (int)$zeile['user_id'];
+
+        $db->beginTransaction();
+        try {
+            if (!Zuordnung::umhaengen($alt, $neu)) {
+                // Parallel geaendert - lieber nichts tun als raten.
+                $db->rollBack();
+                $ergebnis['uebersprungen']++;
+                return;
+            }
+
+            $konto = self::kontenZustand([$userId])[$userId] ?? null;
+            $gesperrt = $konto !== null && $konto['deactivated_at'] !== null;
+            $entsperrt = $gesperrt && self::entsperren($userId, $neu);
+            if (!$gesperrt) {
+                Zuordnung::entsperrvermerk($neu);
+            }
+
+            AuditLogger::log(
+                'Konto übernommen (Wiedereintritt)',
+                'users',
+                sprintf('Benutzer-ID %d, Mitgliedschaft alt %d -> neu %d%s', $userId, $alt, $neu, $gesperrt && !$entsperrt ? ', bleibt gesperrt' : '')
+            );
+            $db->commit();
+        } catch (\Throwable $e) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            error_log('[mitglieder-konten] Wiedereintritt fehlgeschlagen: ' . $e->getMessage());
+            $ergebnis['fehler'][] = sprintf('Mitgliedschaft %d: Das frühere Konto konnte nicht übernommen werden.', $neu);
+            return;
+        }
+
+        $ergebnis['reaktiviert']++;
+        if ($gesperrt && !$entsperrt) {
+            // Gesperrt aus anderem Grund (Admin, Ruhesperre) oder in einer
+            // schreibenden Gruppe: Das entscheidet ein Mensch, nicht CiviCRM.
+            $ergebnis['fehler'][] = sprintf('Konto %s bleibt gesperrt - bitte durch einen Admin prüfen.', (string)($konto['username'] ?? $userId));
+        }
     }
 
     /**
@@ -592,44 +961,105 @@ final class Abgleich {
      * GESAMMELT und nicht je Konto: Bei einem Stapel ohne Adressen waeren das
      * sonst hundert Mails an dieselbe Stelle, und die hundertste geht unter.
      *
+     * N31: Jeder Fehlschlag wird gemeldet - als EIN Sammeltext je Fall mit
+     * den Benutzernamen, und im Audit-Log. NIE mit Passwort: Das Protokoll
+     * lesen mehr Leute als die, fuer die das Passwort bestimmt ist.
+     *
      * @param array<int, array<string, string>> $daten
+     * @return array<int, string> Fehlertexte fuer die Verwaltung
      */
-    private static function zugangsdatenZustellen(array $daten): void {
+    private static function zugangsdatenZustellen(array $daten, ?Mailer $mailer = null): array {
         if ($daten === []) {
-            return;
+            return [];
         }
 
-        $mailer = new Mailer();
-        $ohneAdresse = [];
+        $fehler = [];
+        try {
+            $mailer ??= new Mailer();
+        } catch (\Throwable $e) {
+            // Der Konstruktor liest `settings` - scheitert das, geht gar nichts heraus.
+            error_log('[mitglieder-konten] Mailer nicht verfuegbar: ' . $e->getMessage());
+            $namen = array_column($daten, 'benutzername');
+            self::zustellungsfehler('Mailversand nicht verfuegbar', $namen);
+            return [sprintf(
+                'Zugangsdaten konnten nicht versendet werden für: %s - Passwort durch einen Admin neu setzen.',
+                implode(', ', $namen)
+            )];
+        }
 
+        $ohneAdresse = [];
+        $gescheitert = [];
         foreach ($daten as $satz) {
             if ($satz['email'] === '') {
                 $ohneAdresse[] = $satz;
                 continue;
             }
-            $mailer->sendWelcomeEmail($satz['email'], $satz['benutzername'], $satz['passwort']);
+            try {
+                $ok = $mailer->sendWelcomeEmail($satz['email'], $satz['benutzername'], $satz['passwort']);
+            } catch (\Throwable $e) {
+                error_log('[mitglieder-konten] Willkommensmail gescheitert: ' . $e->getMessage());
+                $ok = false;
+            }
+            if (!$ok) {
+                $gescheitert[] = $satz['benutzername'];
+            }
+        }
+
+        if ($gescheitert !== []) {
+            self::zustellungsfehler('Willkommensmail nicht versendet', $gescheitert);
+            $fehler[] = sprintf(
+                'Zugangsdaten konnten nicht versendet werden für: %s - Passwort über „Passwort vergessen“ oder durch einen Admin neu setzen.',
+                implode(', ', $gescheitert)
+            );
         }
 
         if ($ohneAdresse === []) {
-            return;
+            return $fehler;
         }
 
+        $namen = array_column($ohneAdresse, 'benutzername');
         $team = Konfiguration::teamAdresse();
         if ($team === '') {
-            AuditLogger::log(
-                'Zugangsdaten nicht zustellbar',
-                'users',
-                sprintf(
-                    '%d Konto/Konten ohne eigene Adresse angelegt, aber keine Adresse des Verwaltungsteams '
-                    . 'hinterlegt. Die Passwoerter sind damit nirgends - die Konten brauchen ein neu '
-                    . 'gesetztes Passwort durch einen Admin.',
-                    count($ohneAdresse)
-                )
+            self::zustellungsfehler(
+                'Keine Adresse des Verwaltungsteams hinterlegt - die Passwoerter sind nirgends, '
+                . 'die Konten brauchen ein neu gesetztes Passwort durch einen Admin',
+                $namen
             );
-            return;
+            $fehler[] = sprintf(
+                'Keine Adresse des Verwaltungsteams hinterlegt - Zugangsdaten nicht zugestellt für: %s. Passwort durch einen Admin neu setzen.',
+                implode(', ', $namen)
+            );
+            return $fehler;
         }
 
-        $mailer->send($team, 'Neue Mitglieder-Konten - Zugangsdaten', self::teamMailHtml($ohneAdresse));
+        try {
+            $ok = $mailer->send($team, 'Neue Mitglieder-Konten - Zugangsdaten', self::teamMailHtml($ohneAdresse));
+        } catch (\Throwable $e) {
+            error_log('[mitglieder-konten] Sammelmail gescheitert: ' . $e->getMessage());
+            $ok = false;
+        }
+        if (!$ok) {
+            self::zustellungsfehler('Sammelmail an das Verwaltungsteam nicht versendet', $namen);
+            $fehler[] = sprintf(
+                'Sammelmail an das Verwaltungsteam nicht versendet - betroffen: %s. Passwort durch einen Admin neu setzen.',
+                implode(', ', $namen)
+            );
+        }
+
+        return $fehler;
+    }
+
+    /**
+     * Ein Audit-Eintrag je Zustellungsfehler - nur Benutzernamen (N31).
+     *
+     * @param array<int, string> $benutzernamen
+     */
+    private static function zustellungsfehler(string $fall, array $benutzernamen): void {
+        AuditLogger::log(
+            'Zugangsdaten nicht zustellbar',
+            'users',
+            sprintf('%s. Betroffene Benutzernamen: %s', $fall, implode(', ', $benutzernamen))
+        );
     }
 
     /**
@@ -677,15 +1107,30 @@ final class Abgleich {
 
     /**
      * Der taegliche Lauf. Er legt NICHTS an - Anlegen ist eine bewusste
-     * Handlung mit Vorschau (Addons#131). Er sperrt nur, was nicht mehr
-     * laeuft.
+     * Handlung mit Vorschau (Addons#131). Er sperrt, was nicht mehr laeuft,
+     * und entsperrt, was wieder laeuft (N30).
      *
-     * @return array{geprueft: int, gesperrt: int}
+     * WARUM SO VORSICHTIG. Frueher galt: "fehlt in der Liste der laufenden
+     * Mitgliedschaften" = beendet. Eine leere Antwort (ACL, halb
+     * eingerichteter API-Benutzer, Typfilter, gefaelschte Quelle) sperrte
+     * damit ueber Nacht den ganzen Bestand. Jetzt:
+     *  - Status gezielt per ID, ohne Typfilter (CiviApi::statusNachId()).
+     *  - Gesperrt wird nur bei ausdruecklich false oder fehlender ID; eine
+     *    Zeile ohne Statusfeld ist "unklar" und sperrt nicht.
+     *  - Mehr als AENDER_HOECHSTANTEIL (mindestens AENDER_MIN_ABSOLUT) je
+     *    Richtung haelt an. Das gilt AUCH fuers Entsperren: Eine gefaelschte
+     *    Quelle koennte sonst alle beendeten Mitglieder zurueckholen.
+     *  - Eine angehaltene Aenderung bestaetigt ein Admin ($bestaetigt), und
+     *    die Bestaetigung gilt nur fuer die gespeicherte ID-Menge.
+     *
+     * @return array{geprueft: int, gesperrt: int, reaktiviert: int, unklar: int, angehalten: bool}
      */
-    public static function taeglicherLauf(?CiviApi $client = null): array {
+    public static function taeglicherLauf(?CiviApi $client = null, bool $bestaetigt = false): array {
+        $bericht = ['geprueft' => 0, 'gesperrt' => 0, 'reaktiviert' => 0, 'unklar' => 0, 'angehalten' => false];
+
         $client ??= Konfiguration::client();
         if (!$client->eingerichtet()) {
-            return ['geprueft' => 0, 'gesperrt' => 0];
+            return $bericht;
         }
 
         // Der Lauf legt keine Konten an - er sperrt nur. Eine unzulaessige
@@ -705,43 +1150,152 @@ final class Abgleich {
             );
         }
 
+        $zuordnungen = Zuordnung::alle();
+        if ($zuordnungen === []) {
+            return $bericht;
+        }
+
         try {
-            $laufend = $client->laufendeMitgliedschaften(Konfiguration::typIds());
+            // OHNE Typfilter (N30): Der Filter "Mitgliedschaftsarten" gilt nur
+            // fuer die Anlage. Mit ihm galt jede Mitgliedschaft einer anderen
+            // Art als beendet.
+            $status = $client->statusNachId(array_keys($zuordnungen));
         } catch (CiviApiFehler $e) {
             // Ein Umgebungsfehler ist kein Ergebnis: Waere CiviCRM
             // unerreichbar und wir deuteten das als "keine Mitgliedschaft
-            // laeuft mehr", spaerrte der Lauf ueber Nacht JEDES Konto.
+            // laeuft mehr", sperrte der Lauf ueber Nacht JEDES Konto.
+            $e->protokollieren();
             AuditLogger::log(
                 'Mitglieder-Abgleich nicht durchgefuehrt',
                 'users',
                 'CiviCRM war nicht erreichbar: ' . $e->getMessage() . ' - es wurde nichts gesperrt.'
             );
-            return ['geprueft' => 0, 'gesperrt' => 0];
-        }
-
-        $laufendeIds = [];
-        foreach ($laufend as $m) {
-            $laufendeIds[(int)$m['membership_id']] = true;
+            return $bericht;
         }
 
         $db = Database::getInstance();
-        $gesperrt = 0;
-        $zuordnungen = Zuordnung::alle();
+        $konten = self::kontenZustand(array_values($zuordnungen));
 
+        $zuSperren = [];
+        $zuEntsperren = [];
+        $adminPruefen = [];
+        $aktiv = 0;
+        $gesperrtBestand = 0;
         foreach ($zuordnungen as $membershipId => $userId) {
-            if (isset($laufendeIds[$membershipId])) {
+            $konto = $konten[$userId] ?? null;
+            if ($konto === null || $konto['deleted_at'] !== null) {
+                continue;
+            }
+            $istAktiv = $konto['deactivated_at'] === null;
+            if ($istAktiv) {
+                $aktiv++;
+            } else {
+                $gesperrtBestand++;
+            }
+
+            if (!array_key_exists($membershipId, $status)) {
+                // In CiviCRM nicht mehr auffindbar = beendet. Verschwinden
+                // viele auf einmal (ACL), greift die Grenze unten.
+                if ($istAktiv) {
+                    $zuSperren[$membershipId] = $userId;
+                }
                 continue;
             }
 
-            $stmt = $db->prepare(
-                "UPDATE users SET deactivated_at = NOW(), deactivated_reason = 'membership_ended'
-                 WHERE id = ? AND deleted_at IS NULL AND deactivated_at IS NULL"
-            );
-            $stmt->execute([$userId]);
+            if ($status[$membershipId] === null) {
+                $bericht['unklar']++;
+            } elseif ($status[$membershipId] === false && $istAktiv) {
+                $zuSperren[$membershipId] = $userId;
+            } elseif ($status[$membershipId] === true && !$istAktiv && $konto['deactivated_reason'] === self::GRUND) {
+                // Nur Lesegruppen: Ein Konto, das vor H1 in eine schreibende
+                // Gruppe gelegt wurde, holt CiviCRM nicht zurueck.
+                if (self::nurLesegruppen($db, $userId)) {
+                    $zuEntsperren[$membershipId] = $userId;
+                } else {
+                    $adminPruefen[] = $userId;
+                }
+            }
+        }
+        $bericht['geprueft'] = count($zuordnungen);
 
-            if ($stmt->rowCount() > 0) {
+        if ($bericht['unklar'] > 0) {
+            AuditLogger::log(
+                'Mitglieder-Abgleich: Status unklar',
+                'users',
+                sprintf('%d Mitgliedschaft(en) ohne auswertbaren Status von CiviCRM - nicht gesperrt.', $bericht['unklar'])
+            );
+        }
+        if ($adminPruefen !== []) {
+            AuditLogger::log(
+                'Mitglieder-Abgleich: Entsperren durch Admin pruefen',
+                'users',
+                sprintf(
+                    'Mitgliedschaft laeuft wieder, aber das Konto ist nicht nur in Lesegruppen - bleibt gesperrt, '
+                    . 'bitte durch einen Admin pruefen. Benutzer-IDs: %s',
+                    implode(', ', $adminPruefen)
+                )
+            );
+        }
+
+        $gespeichert = Konfiguration::angehalten();
+        $neuAngehalten = [];
+        $richtungen = [
+            'sperren' => [$zuSperren, self::grenze($aktiv)],
+            'entsperren' => [$zuEntsperren, self::grenze($gesperrtBestand)],
+        ];
+        $ausfuehren = ['sperren' => [], 'entsperren' => []];
+
+        foreach ($richtungen as $richtung => [$menge, $grenze]) {
+            $freigegeben = [];
+            if ($bestaetigt && isset($gespeichert[$richtung])) {
+                // Nur die Schnittmenge mit dem, was der Admin gesehen hat.
+                // Eine Bestaetigung von "12 Sperren" darf nicht 1.400 Sperren
+                // ausloesen, weil sich die Quelle zwischendurch geaendert hat.
+                $freigegeben = array_intersect_key($menge, array_flip($gespeichert[$richtung]['ids']));
+            }
+            $rest = array_diff_key($menge, $freigegeben);
+
+            if (count($rest) > $grenze) {
+                $ids = array_keys($rest);
+                sort($ids);
+                $neuAngehalten[$richtung] = [
+                    'richtung' => $richtung,
+                    'ids' => $ids,
+                    'anzahl' => count($ids),
+                    'grenze' => $grenze,
+                    'zeit' => date('Y-m-d H:i:s'),
+                ];
+                $rest = [];
+                $bericht['angehalten'] = true;
+                AuditLogger::log(
+                    'Mitglieder-Abgleich angehalten',
+                    'users',
+                    sprintf(
+                        '%d %s ueber der Plausibilitaetsgrenze %d - nichts geaendert, Bestaetigung durch einen Admin noetig',
+                        count($ids),
+                        $richtung === 'sperren' ? 'Sperren' : 'Reaktivierungen',
+                        $grenze
+                    )
+                );
+            }
+            $ausfuehren[$richtung] = $freigegeben + $rest;
+        }
+
+        // Ein Lauf ohne Anhalten leert den Vermerk; einer mit Anhalten
+        // ersetzt ihn durch die aktuelle Menge.
+        Konfiguration::speichern([
+            Konfiguration::S_ANGEHALTEN => $neuAngehalten === [] ? '' : json_encode($neuAngehalten, JSON_THROW_ON_ERROR),
+        ]);
+
+        $sperre = $db->prepare(
+            'UPDATE users SET deactivated_at = NOW(), deactivated_reason = ?
+             WHERE id = ? AND deleted_at IS NULL AND deactivated_at IS NULL'
+        );
+        foreach ($ausfuehren['sperren'] as $membershipId => $userId) {
+            $sperre->execute([self::GRUND, $userId]);
+            if ($sperre->rowCount() > 0) {
                 Zuordnung::sperrvermerk($membershipId);
-                $gesperrt++;
+                $bericht['gesperrt']++;
                 AuditLogger::log(
                     'Konto gesperrt (Mitgliedschaft beendet)',
                     'users',
@@ -750,7 +1304,97 @@ final class Abgleich {
             }
         }
 
-        return ['geprueft' => count($zuordnungen), 'gesperrt' => $gesperrt];
+        foreach ($ausfuehren['entsperren'] as $membershipId => $userId) {
+            if (self::entsperren($userId, $membershipId)) {
+                $bericht['reaktiviert']++;
+            }
+        }
+
+        return $bericht;
+    }
+
+    /** Plausibilitaetsgrenze fuer eine Richtung bei $bestand betroffenen Konten. */
+    public static function grenze(int $bestand): int {
+        return max(self::AENDER_MIN_ABSOLUT, (int)ceil($bestand * self::AENDER_HOECHSTANTEIL));
+    }
+
+    /**
+     * Hebt eine Sperre dieses Addons auf - gemeinsamer Weg fuer den
+     * Tageslauf (N30) und den Wiedereintritt (N29).
+     *
+     * Nur, wenn das Konto ausschliesslich in Lesegruppen ist, und nur fuer
+     * den Grund `membership_ended`: Eine Sperre durch einen Admin oder die
+     * Ruhesperre (Framework#358) hebt CiviCRM nicht auf. Die Spalten sind
+     * dieselben wie in DormantAccountService::reactivate() - ohne den
+     * zurueckgesetzten Fristanker deaktivierte der naechste Nachtlauf das
+     * Konto sofort wieder.
+     */
+    public static function entsperren(int $userId, int $membershipId): bool {
+        $db = Database::getInstance();
+        if (!self::nurLesegruppen($db, $userId)) {
+            return false;
+        }
+
+        $stmt = $db->prepare(
+            "UPDATE users SET deactivated_at = NULL, deactivated_reason = NULL, unprotected_since = NULL
+             WHERE id = ? AND deleted_at IS NULL AND deactivated_at IS NOT NULL AND deactivated_reason = ?"
+        );
+        $stmt->execute([$userId, self::GRUND]);
+        if ($stmt->rowCount() === 0) {
+            return false;
+        }
+
+        Zuordnung::entsperrvermerk($membershipId);
+        AuditLogger::log(
+            'Konto entsperrt (Mitgliedschaft laeuft wieder)',
+            'users',
+            sprintf('Benutzer-ID %d, Mitgliedschaft %d', $userId, $membershipId)
+        );
+
+        return true;
+    }
+
+    /** Ist das Konto in keiner Gruppe mit Schreib-/Veroeffentlichungsrecht und nicht admin? Im Zweifel nein. */
+    private static function nurLesegruppen(PDO $db, int $userId): bool {
+        try {
+            $stmt = $db->prepare('SELECT group_id FROM user_groups WHERE user_id = ?');
+            $stmt->execute([$userId]);
+            $gruppen = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+
+            return array_intersect($gruppen, EmailRequirement::groupIdsRequiringEmail($db)) === [];
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * Zustand der Konten - in Bloecken, damit die IN-Liste klein bleibt.
+     *
+     * @param array<int, int> $userIds
+     * @return array<int, array{username:string, deactivated_at:?string, deactivated_reason:?string, deleted_at:?string}>
+     */
+    private static function kontenZustand(array $userIds): array {
+        $userIds = array_values(array_unique(array_filter(array_map('intval', $userIds), static fn(int $id): bool => $id > 0)));
+        $ergebnis = [];
+        $db = Database::getInstance();
+
+        foreach (array_chunk($userIds, 500) as $block) {
+            $platzhalter = implode(', ', array_fill(0, count($block), '?'));
+            $stmt = $db->prepare(
+                "SELECT id, username, deactivated_at, deactivated_reason, deleted_at FROM users WHERE id IN ({$platzhalter})"
+            );
+            $stmt->execute($block);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $z) {
+                $ergebnis[(int)$z['id']] = [
+                    'username' => (string)$z['username'],
+                    'deactivated_at' => $z['deactivated_at'] !== null ? (string)$z['deactivated_at'] : null,
+                    'deactivated_reason' => $z['deactivated_reason'] !== null ? (string)$z['deactivated_reason'] : null,
+                    'deleted_at' => $z['deleted_at'] !== null ? (string)$z['deleted_at'] : null,
+                ];
+            }
+        }
+
+        return $ergebnis;
     }
 
     /** @return array<string, true> Kleingeschriebene Benutzernamen */
@@ -770,6 +1414,35 @@ final class Abgleich {
 
         return $belegt;
     }
+
+    /**
+     * Vergebene E-Mail-Adressen, kleingeschrieben -> Benutzer-ID (N29).
+     *
+     * INKLUSIVE soft-geloeschter Konten: Der UNIQUE-Index auf `users.email`
+     * erfasst auch sie. Klein geschrieben, weil die Kollation
+     * utf8mb4_unicode_ci Gross- und Kleinschreibung nicht unterscheidet.
+     *
+     * @return array<string, int>
+     */
+    private static function belegteAdressen(): array {
+        try {
+            $zeilen = Database::getInstance()
+                ->query('SELECT id, email FROM users WHERE email IS NOT NULL')
+                ->fetchAll(PDO::FETCH_ASSOC);
+        } catch (\Throwable $e) {
+            return [];
+        }
+
+        $belegt = [];
+        foreach ((array)$zeilen as $z) {
+            $adresse = mb_strtolower(trim((string)$z['email']), 'UTF-8');
+            if ($adresse !== '') {
+                $belegt[$adresse] = (int)$z['id'];
+            }
+        }
+
+        return $belegt;
+    }
 }
 
 /**
@@ -779,6 +1452,12 @@ final class Abgleich {
  * mit ihrem Zustand, ausgewaehlt wird ausdruecklich, und ein Stapel ist auf
  * Abgleich::MAX_JE_STAPEL gedeckelt. 1.496 Konten auf einen Klick waeren
  * nicht rueckholbar (Addons#131).
+ *
+ * Wer was darf (seit 1.1.0):
+ *  - `mitglieder_konten.manage`: Seite, Vorschau, Anlage in der vom Admin
+ *    gewaehlten Lesegruppe.
+ *  - nur Admin: den CiviCRM-Zugang einrichten (zugang()) und eine
+ *    angehaltene Massenaenderung bestaetigen (sperrenBestaetigen()).
  */
 class VerwaltungController extends BaseController {
 
@@ -790,6 +1469,7 @@ class VerwaltungController extends BaseController {
 
     public function index(): void {
         $inhalt = $this->meldung();
+        $inhalt .= $this->angehaltenKarte();
         $inhalt .= $this->zugangKarte();
         $inhalt .= $this->vorschauKarte();
 
@@ -797,6 +1477,13 @@ class VerwaltungController extends BaseController {
     }
 
     public function zugang(): void {
+        // NUR ADMIN (Betreiberentscheidung zu M5/N30). Wer Adresse und
+        // Schluessel setzt, bestimmt die Datenquelle fuer Vorschau, Anlage
+        // und Tageslauf. Mit `manage` allein liesse sich eine eigene Quelle
+        // samt eigenem Schluessel eintragen - und damit jede gewuenschte
+        // Antwort liefern, bis hin zu Massensperren. Im Kern richtet ohnehin
+        // nur ein Admin Integrationen ein.
+        $this->requireAdmin();
         $this->pruefeCsrf();
 
         // Zuerst die Zielgruppe (H1): Bei einem unzulaessigen Wert wird die
@@ -829,12 +1516,45 @@ class VerwaltungController extends BaseController {
         // Ein leeres Schluesselfeld heisst "nicht aendern", nicht "loeschen":
         // Sonst wuerde jedes Speichern der uebrigen Einstellungen den
         // Schluessel mit entfernen, weil das Formular ihn nie zurueckgibt.
+        //
+        // M5: "unveraendert" gilt aber nur bei GLEICHER Adresse. Bisher ging
+        // der gespeicherte Schluessel an jede neu eingetragene Adresse - wer
+        // die Adresse aendern durfte, konnte ihn sich an einen eigenen
+        // Server schicken lassen. Ob ein Schluessel da ist, entscheidet der
+        // Rohwert (schluesselGespeichert()), nicht apiKey(): Das liefert bei
+        // fremder Bindung '' und sagte sonst "kein Schluessel, Adresse frei".
         $schluesselRoh = is_string($_POST['api_key'] ?? null) ? trim($_POST['api_key']) : '';
-        $schluessel = $schluesselRoh === '' ? null : Crypto::encrypt($schluesselRoh);
+        $schluessel = null;
+        $bindung = null;
+        if ($basis === '') {
+            // Zugang entfernen: ohne Adresse kein Schluessel.
+            $schluessel = '';
+            $bindung = '';
+        } elseif ($schluesselRoh !== '') {
+            $schluessel = Crypto::encrypt($schluesselRoh);
+            $bindung = Konfiguration::bindung($basis);
+        } elseif (Konfiguration::schluesselGespeichert()) {
+            $gespeichert = Konfiguration::gespeicherteBindung();
+            $referenz = $gespeichert !== '' ? $gespeichert : Konfiguration::bindung(Konfiguration::basis());
+            if (!hash_equals($referenz, Konfiguration::bindung($basis))) {
+                // Nichts speichern - auch nicht Team, Gruppe oder Typen.
+                PluginAudit::log(
+                    Plugin::SLUG,
+                    'Adressaenderung ohne neuen Schluessel abgelehnt',
+                    'Mitglieder-Konten',
+                    'Neue Basis: ' . $basis
+                );
+                $this->zurueck('schluessel-noetig');
+            }
+            if ($gespeichert === '') {
+                $bindung = Konfiguration::bindung($basis); // Altbestand jetzt binden
+            }
+        }
 
         Konfiguration::speichern([
             Konfiguration::S_URL => $basis,
             Konfiguration::S_KEY => $schluessel,
+            Konfiguration::S_KEY_BINDUNG => $bindung,
             Konfiguration::S_TEAM => $team,
             Konfiguration::S_GRUPPE => (string)$gruppe,
             Konfiguration::S_TYPEN => trim(is_string($_POST['typen'] ?? null) ? $_POST['typen'] : ''),
@@ -849,7 +1569,7 @@ class VerwaltungController extends BaseController {
             sprintf(
                 'Basis: %s, Schluessel %s, Zielgruppe %d',
                 $basis === '' ? '(leer)' : $basis,
-                $schluessel === null ? 'unveraendert' : 'neu gesetzt',
+                $schluessel === null ? 'unveraendert' : ($schluessel === '' ? 'entfernt' : 'neu gesetzt'),
                 $gruppe
             )
         );
@@ -872,8 +1592,9 @@ class VerwaltungController extends BaseController {
             'Mitglieder-Konten angelegt',
             'Mitglieder-Konten',
             sprintf(
-                '%d angelegt, %d uebersprungen, %d Fehler',
+                '%d angelegt, %d uebernommen, %d uebersprungen, %d Fehler',
                 $ergebnis['angelegt'],
+                $ergebnis['reaktiviert'],
                 $ergebnis['uebersprungen'],
                 count($ergebnis['fehler'])
             )
@@ -881,11 +1602,58 @@ class VerwaltungController extends BaseController {
 
         $_SESSION['mitglieder_konten_bericht'] = [
             'angelegt' => $ergebnis['angelegt'],
+            'reaktiviert' => $ergebnis['reaktiviert'],
             'uebersprungen' => $ergebnis['uebersprungen'],
             'fehler' => $ergebnis['fehler'],
         ];
 
         $this->zurueck('angelegt');
+    }
+
+    /**
+     * Eine vom Tageslauf angehaltene Massenaenderung ausfuehren (N30).
+     *
+     * NUR ADMIN: Mit `manage` allein waere die Grenze nur ein zusaetzlicher
+     * Klick fuer denselben, der sie ausgeloest hat. Und nur fuer die
+     * ANGEZEIGTE Menge: Das Formular traegt ihren Fingerabdruck; hat ein
+     * spaeterer Lauf sie ersetzt, gilt die Bestaetigung nicht.
+     */
+    public function sperrenBestaetigen(): void {
+        $this->requireAdmin();
+        $this->pruefeCsrf();
+
+        $aktuell = Konfiguration::angehaltenFingerabdruck();
+        if ($aktuell === '') {
+            $this->zurueck('nichts-angehalten');
+        }
+        $gesehen = is_string($_POST['angehalten'] ?? null) ? $_POST['angehalten'] : '';
+        if (!hash_equals($aktuell, $gesehen)) {
+            $this->zurueck('angehalten-veraltet');
+        }
+
+        $bericht = Abgleich::taeglicherLauf(null, true);
+
+        PluginAudit::log(
+            Plugin::SLUG,
+            'Angehaltenen Mitglieder-Abgleich bestaetigt',
+            'Mitglieder-Konten',
+            sprintf(
+                '%d gesperrt, %d reaktiviert, %d unklar%s',
+                $bericht['gesperrt'],
+                $bericht['reaktiviert'],
+                $bericht['unklar'],
+                $bericht['angehalten'] ? ', weitere Aenderungen erneut angehalten' : ''
+            )
+        );
+
+        if ($bericht['geprueft'] === 0) {
+            $this->zurueck('bestaetigung-fehlgeschlagen');
+        }
+        $_SESSION['mitglieder_konten_lauf'] = [
+            'gesperrt' => $bericht['gesperrt'],
+            'reaktiviert' => $bericht['reaktiviert'],
+        ];
+        $this->zurueck($bericht['angehalten'] ? 'erneut-angehalten' : 'sperren-bestaetigt');
     }
 
     // ---- Anzeige -------------------------------------------------------
@@ -894,10 +1662,16 @@ class VerwaltungController extends BaseController {
         $marker = is_string($_GET['mk'] ?? null) ? $_GET['mk'] : '';
         $texte = [
             'gespeichert' => ['ok', 'Zugang gespeichert.'],
-            'url-ungueltig' => ['fehler', 'Die Adresse muss mit http:// oder https:// beginnen und darf keinen Pfad und keine Parameter enthalten.'],
+            'url-ungueltig' => ['fehler', 'Die Adresse muss mit https:// beginnen, darf keine Parameter und keine Zugangsdaten enthalten und nicht auf ein internes Netz zeigen.'],
+            'schluessel-noetig' => ['fehler', 'Wird die Basis-Adresse geändert, muss der API-Schlüssel neu eingegeben werden. Es wurde nichts gespeichert.'],
             'team-ungueltig' => ['fehler', 'Die Adresse des Verwaltungsteams ist keine gültige E-Mail-Adresse.'],
             'nichts-ausgewaehlt' => ['fehler', 'Es war nichts ausgewählt.'],
             'gruppe-unzulaessig' => ['fehler', 'Als Gruppe für neue Konten ist nur eine reine Lesegruppe zulässig – nicht „Administrator“ und keine Gruppe mit Bearbeitungs- oder Veröffentlichungsrechten. Es wurde nichts gespeichert.'],
+            'sperren-bestaetigt' => ['ok', 'Die angehaltenen Änderungen wurden ausgeführt.'],
+            'erneut-angehalten' => ['fehler', 'Ausgeführt wurde nur die bestätigte Menge. CiviCRM meldet inzwischen weitere Änderungen über der Grenze – sie sind erneut angehalten.'],
+            'angehalten-veraltet' => ['fehler', 'Die angehaltenen Änderungen haben sich seit dem Anzeigen geändert. Bitte die aktuelle Anzeige prüfen und erneut bestätigen. Es wurde nichts geändert.'],
+            'nichts-angehalten' => ['fehler', 'Es ist keine Änderung angehalten.'],
+            'bestaetigung-fehlgeschlagen' => ['fehler', 'CiviCRM konnte nicht befragt werden – es wurde nichts geändert.'],
         ];
 
         $html = '';
@@ -907,13 +1681,24 @@ class VerwaltungController extends BaseController {
             $html .= $this->kasten($art, htmlspecialchars($text, ENT_QUOTES, 'UTF-8'));
         }
 
+        $lauf = $_SESSION['mitglieder_konten_lauf'] ?? null;
+        unset($_SESSION['mitglieder_konten_lauf']);
+        if (is_array($lauf)) {
+            $html .= $this->kasten('ok', sprintf(
+                '%d Konto/Konten gesperrt, %d entsperrt.',
+                (int)($lauf['gesperrt'] ?? 0),
+                (int)($lauf['reaktiviert'] ?? 0)
+            ));
+        }
+
         $bericht = $_SESSION['mitglieder_konten_bericht'] ?? null;
         unset($_SESSION['mitglieder_konten_bericht']);
         if (is_array($bericht)) {
             $zeilen = sprintf(
-                '%d Konto/Konten angelegt, %d übersprungen.',
-                (int)$bericht['angelegt'],
-                (int)$bericht['uebersprungen']
+                '%d Konto/Konten angelegt, %d übernommen, %d übersprungen.',
+                (int)($bericht['angelegt'] ?? 0),
+                (int)($bericht['reaktiviert'] ?? 0),
+                (int)($bericht['uebersprungen'] ?? 0)
             );
             foreach ((array)($bericht['fehler'] ?? []) as $fehler) {
                 $zeilen .= '<br>' . htmlspecialchars((string)$fehler, ENT_QUOTES, 'UTF-8');
@@ -925,17 +1710,70 @@ class VerwaltungController extends BaseController {
     }
 
     private function kasten(string $art, string $inhaltHtml): string {
-        $farbe = $art === 'ok' ? 'success' : 'danger';
+        $farbe = match ($art) {
+            'ok' => 'success',
+            'warnung' => 'warning',
+            default => 'danger',
+        };
 
         return "<div class='card' style='background-color: var(--{$farbe}-soft-bg); color: var(--{$farbe}-fg);'>{$inhaltHtml}</div>";
     }
 
+    /** Warnkasten fuer eine angehaltene Massenaenderung (N30). */
+    private function angehaltenKarte(): string {
+        $angehalten = Konfiguration::angehalten();
+        if ($angehalten === []) {
+            return '';
+        }
+
+        $zeilen = '';
+        foreach ($angehalten as $richtung => $eintrag) {
+            $gezeigt = array_slice($eintrag['ids'], 0, 50);
+            $zeilen .= sprintf(
+                '<li><strong>%d %s</strong> (Grenze %d, angehalten %s)<br><small>Mitgliedschaften: %s%s</small></li>',
+                $eintrag['anzahl'],
+                $richtung === 'sperren' ? 'Sperren' : 'Entsperrungen',
+                $eintrag['grenze'],
+                htmlspecialchars($eintrag['zeit'], ENT_QUOTES, 'UTF-8'),
+                htmlspecialchars(implode(', ', $gezeigt), ENT_QUOTES, 'UTF-8'),
+                count($eintrag['ids']) > count($gezeigt) ? ' …' : ''
+            );
+        }
+
+        $inhalt = '<strong>Mitglieder-Abgleich angehalten.</strong> Der tägliche Lauf hätte mehr Konten auf einmal '
+                . 'geändert, als plausibel ist. Es wurde nichts geändert.<ul>' . $zeilen . '</ul>';
+
+        if ($this->isAdmin()) {
+            $csrf = htmlspecialchars(Router::generateCsrfToken(), ENT_QUOTES, 'UTF-8');
+            $abdruck = htmlspecialchars(Konfiguration::angehaltenFingerabdruck(), ENT_QUOTES, 'UTF-8');
+            $inhalt .= "<form method='POST' action='" . Plugin::VERWALTUNG . "/sperren-bestaetigen'
+                    data-confirm='Genau diese Änderungen jetzt ausführen?'>
+                    <input type=\"hidden\" name=\"csrf_token\" value=\"{$csrf}\">
+                    <input type=\"hidden\" name=\"angehalten\" value=\"{$abdruck}\">
+                    <button type='submit' class='btn'>Diese Änderungen bestätigen</button>
+                </form>";
+        } else {
+            $inhalt .= '<p>Bestätigen kann das nur ein Administrator.</p>';
+        }
+
+        return $this->kasten('warnung', $inhalt);
+    }
+
     private function zugangKarte(): string {
+        $istAdmin = $this->isAdmin();
         $csrf = htmlspecialchars(Router::generateCsrfToken(), ENT_QUOTES, 'UTF-8');
         $basis = htmlspecialchars(Konfiguration::basis(), ENT_QUOTES, 'UTF-8');
         $team = htmlspecialchars(Konfiguration::teamAdresse(), ENT_QUOTES, 'UTF-8');
         $typen = htmlspecialchars(implode(', ', Konfiguration::typIds()), ENT_QUOTES, 'UTF-8');
-        $schluesselGesetzt = Konfiguration::apiKey() !== '';
+
+        // Nach dem Rohwert, nicht nach apiKey() (M5) - und mit dem Hinweis,
+        // wenn der Schluessel zu einer anderen Adresse gehoert.
+        $platzhalter = 'noch nicht gesetzt';
+        if (Konfiguration::schluesselGespeichert()) {
+            $platzhalter = Konfiguration::apiKey() !== ''
+                ? 'gesetzt — leer lassen, um ihn zu behalten'
+                : 'gesetzt, passt aber nicht zur Adresse — bitte neu eingeben';
+        }
 
         $db = Database::getInstance();
         $gespeichert = Konfiguration::gruppeId();
@@ -960,20 +1798,33 @@ class VerwaltungController extends BaseController {
         }
         $pflicht = $altbestand ? ' required' : '';
 
+        // Nicht-Admins sehen die Einstellungen, koennen sie aber nicht
+        // aendern - der Server prueft das in zugang() ohnehin.
+        $gesperrt = $istAdmin ? '' : ' disabled';
+        $hinweis = $istAdmin
+            ? ''
+            : "<p style='color:var(--text-muted);'><strong>Nur Administratoren können den Zugang ändern.</strong></p>";
+        $knopf = $istAdmin ? "<button type='submit' class='btn' style='margin-top:1rem;'>Speichern</button>" : '';
+        $schluesselFeld = $istAdmin
+            ? "<label for='api_key' style='display:block;font-weight:bold;margin-top:0.8rem;'>API-Schlüssel</label>
+                <input type='password' id='api_key' name='api_key' autocomplete='off' placeholder='{$platzhalter}' style='width:100%;padding:0.5rem;'>
+                <small style='color:var(--text-muted);'>Wird verschlüsselt gespeichert und nie wieder angezeigt. Wird die Basis-Adresse geändert, muss er neu eingegeben werden.</small>"
+            : '';
+
         return "<div class='card'>
             <h2 style='font-size:1.15rem;margin-top:0;'>CiviCRM-Zugang</h2>
             <p style='color:var(--text-muted);'>
                 Gelesen werden ausschliesslich laufende Mitgliedschaften und der zugehörige Kontakt
                 (Name, Adresse). Es wird nichts übernommen und nichts zurückgeschrieben.
             </p>
+            {$hinweis}
             <form method='POST' action='" . Plugin::VERWALTUNG . "/zugang'>
+                <fieldset style='border:0;padding:0;margin:0;'{$gesperrt}>
                 <input type=\"hidden\" name=\"csrf_token\" value=\"{$csrf}\">
                 <label for='basis_url' style='display:block;font-weight:bold;'>Basis-Adresse</label>
                 <input type='url' id='basis_url' name='basis_url' value='{$basis}' placeholder='https://civicrm.example.org' style='width:100%;padding:0.5rem;'>
 
-                <label for='api_key' style='display:block;font-weight:bold;margin-top:0.8rem;'>API-Schlüssel</label>
-                <input type='password' id='api_key' name='api_key' autocomplete='off' placeholder='" . ($schluesselGesetzt ? 'gesetzt — leer lassen, um ihn zu behalten' : 'noch nicht gesetzt') . "' style='width:100%;padding:0.5rem;'>
-                <small style='color:var(--text-muted);'>Wird verschlüsselt gespeichert und nie wieder angezeigt.</small>
+                {$schluesselFeld}
 
                 <label for='gruppe' style='display:block;font-weight:bold;margin-top:0.8rem;'>Gruppe für neue Konten</label>
                 <select id='gruppe' name='gruppe' style='width:100%;padding:0.5rem;'{$pflicht}>{$optionen}</select>
@@ -988,8 +1839,10 @@ class VerwaltungController extends BaseController {
 
                 <label for='typen' style='display:block;font-weight:bold;margin-top:0.8rem;'>Mitgliedschaftsarten (IDs, leer = alle)</label>
                 <input type='text' id='typen' name='typen' value='{$typen}' placeholder='z. B. 1, 3' style='width:100%;padding:0.5rem;'>
+                <small style='color:var(--text-muted);'>Gilt nur für die Anlage neuer Konten, nicht für die Sperre.</small>
 
-                <button type='submit' class='btn' style='margin-top:1rem;'>Speichern</button>
+                {$knopf}
+                </fieldset>
             </form>
         </div>";
     }
@@ -1007,12 +1860,12 @@ class VerwaltungController extends BaseController {
                 <p style='color:var(--text-muted);'>CiviCRM meldet keine laufende Mitgliedschaft.</p></div>";
         }
 
-        $zaehler = ['neu' => 0, 'vorhanden' => 0, 'blockiert' => 0];
+        $zaehler = ['neu' => 0, 'wiedereintritt' => 0, 'vorhanden' => 0, 'blockiert' => 0];
         $tabelle = '';
         $gezeigt = 0;
 
         foreach ($zeilen as $zeile) {
-            $zaehler[$zeile['zustand']]++;
+            $zaehler[$zeile['zustand']] = ($zaehler[$zeile['zustand']] ?? 0) + 1;
 
             // Nur die anlegbaren bekommen eine Zeile mit Kaestchen. Der Rest
             // steht in der Zusammenfassung - eine Liste mit 1.400 bereits
@@ -1022,13 +1875,15 @@ class VerwaltungController extends BaseController {
             }
             $gezeigt++;
 
-            $anlegbar = $zeile['zustand'] === 'neu';
+            $anlegbar = in_array($zeile['zustand'], ['neu', 'wiedereintritt'], true);
             $kaestchen = $anlegbar
                 ? sprintf("<input type='checkbox' name='membership_ids[]' value='%d' checked>", (int)$zeile['membership_id'])
                 : '—';
-            $grund = $anlegbar
-                ? ($zeile['email'] === '' ? '<em>ohne eigene Adresse — geht ans Verwaltungsteam</em>' : '')
-                : htmlspecialchars((string)$zeile['grund'], ENT_QUOTES, 'UTF-8');
+            if ($zeile['zustand'] === 'neu') {
+                $grund = $zeile['email'] === '' ? '<em>ohne eigene Adresse — geht ans Verwaltungsteam</em>' : '';
+            } else {
+                $grund = htmlspecialchars((string)$zeile['grund'], ENT_QUOTES, 'UTF-8');
+            }
 
             $tabelle .= sprintf(
                 "<tr><td style='padding:0.3rem 0.6rem 0.3rem 0'>%s</td>"
@@ -1051,12 +1906,13 @@ class VerwaltungController extends BaseController {
             <h2 style='font-size:1.15rem;margin-top:0;'>Vorschau</h2>
             <p style='color:var(--text-muted);'>
                 <strong>{$zaehler['neu']}</strong> anlegbar &middot;
+                <strong>{$zaehler['wiedereintritt']}</strong> werden übernommen &middot;
                 <strong>{$zaehler['vorhanden']}</strong> haben schon ein Konto &middot;
                 <strong>{$zaehler['blockiert']}</strong> gehen nicht.
                 Je Durchgang werden höchstens <strong>{$deckel}</strong> Konten angelegt.
             </p>
             <form method='POST' action='" . Plugin::VERWALTUNG . "/anlegen'
-                  data-confirm='Ausgewählte Konten jetzt anlegen? Zugangsdaten gehen unmittelbar heraus.'>
+                  data-confirm='Ausgewählte Konten jetzt anlegen bzw. übernehmen? Zugangsdaten neuer Konten gehen unmittelbar heraus.'>
                 <input type=\"hidden\" name=\"csrf_token\" value=\"{$csrf}\">
                 <div style='overflow-x:auto;'>
                 <table style='width:100%;border-collapse:collapse;'>
