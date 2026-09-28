@@ -60,6 +60,39 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   Filter die Grenze. Ein bereits gespeicherter Schlüssel wird beim ersten
   Lesen an die jetzige Adresse gebunden.
 
+- **Der statische Plugin-Check erkennt im Aufruf zusammengesetztes SQL jetzt
+  zuverlässig** (Audit N36). Bisher schlug die Regel nur an, wenn direkt vor
+  dem Verkettungspunkt ein doppeltes Anführungszeichen stand und der Aufruf
+  auf eine Zeile passte. `->exec()` fehlte ganz. Die im Repo übliche
+  Schreibweise `$db->query('… ' . $x)`, meist über mehrere Zeilen, fiel
+  deshalb komplett durch. Das Gate meldete „bestanden“, obwohl README und
+  SECURITY.md genau diese Musterklasse als blockierend zusagen.
+
+  Die Prüfung läuft jetzt über den PHP-Tokenizer
+  (`security/lib/sql-concat-check.php`). Sie erfasst `query`, `prepare` und
+  `exec`, beide Anführungszeichenarten, mehrzeilige Aufrufe sowie per
+  `sprintf`/`implode` gebautes SQL. `->quote(…)` und `(int)`-Casts bleiben
+  ausgenommen. Die zwölf bestehenden Treffer (Bezeichner-Quoting, feste
+  Spaltenlisten, Platzhalterlisten) sind geprüft und einzeln freigegeben. Eine
+  ausnutzbare Stelle war nicht darunter.
+
+  Weiterhin nicht erfasst wird SQL, das vorab in einer Variable gebaut wird.
+  Das bleibt Aufgabe von Semgrep.
+
+- **Die Allowlist des Plugin-Checks gibt jetzt Einzelstellen frei.** Neben
+  `<plugin>|<titel>` gilt das Format `<plugin>|<titel>|<Code-Ausschnitt>`.
+  Plugin und Titel werden dabei exakt verglichen. Eine geprüfte Ausnahme
+  schaltet damit nicht mehr die ganze Regel für ein Addon ab, und eine spätere
+  echte Injection im selben Addon fällt weiterhin auf. Ein Regressionstest
+  (`tests/Unit/PluginSecurityScanTest.php`) prüft die Muster aus dem Befund.
+
+- **Der Rückfall des Plugin-Checks ohne PHP-CLI prüfte gar nichts.** Das
+  `sed`-Muster, das dort Kommentarzeilen entfernt, brach an seinem eigenen
+  Trennzeichen ab; jede Datei blieb leer, und der Lauf meldete still „keine
+  auffälligen Muster“. Das Muster ist korrigiert. Weil der Rückfall
+  SQL-Backticks nicht von Shell-Backticks trennen kann, meldet er
+  Backtick-Funde nur noch als MED; blockierend prüft die CI mit Tokenizer.
+
 ### Behoben
 
 - **`mitglieder-konten` (1.1.0): keine Massensperre mehr durch eine leere
@@ -102,6 +135,28 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   also alle drei Suiten in **einem** Prozess — die 300 Sekunden gelten damit
   für den gesamten Lauf statt je Suite. `config.process-timeout` steht
   deshalb auch hier auf 1800.
+
+- **`qr-code` (1.2.1): Die Kompatibilitätsgrenze stimmt wieder** (Audit N35).
+  Seit dem Sicherheitsfix GHSA-xrrq-9j94-fr5g holt der Aushang das Foto über
+  `App\Helper\MediaUrl`. Diese Klasse gibt es erst ab Kern 0.5.1
+  (Framework#262). Das Manifest erlaubte trotzdem weiter Kern ab 0.4.0. Auf
+  Kernen 0.4.0–0.5.0 lud das Addon deshalb, und „Aushang drucken“ brach bei
+  jedem Pferd mit HTTP 500 ab. `core_compatibility` steht jetzt auf `>=0.5.1`.
+
+- **`merkliste` (1.2.1): Dieselbe Korrektur.** Auch die Merkliste nutzt
+  `MediaUrl` für die Vorschaubilder und erklärte bisher `>=0.4.0`. Jetzt steht
+  dort `>=0.5.1`.
+
+### Geändert
+
+- **Neuer Manifest-Test: Die Kern-Untergrenze muss zu den genutzten Kern-APIs
+  passen.** `tests/Manifest/KernMindestversionTest.php` sammelt je Addon die
+  referenzierten `App\`-Klassen und statischen Methoden. Er gleicht sie mit
+  einer Tabelle ab, in der die Kernversion ihrer Einführung steht. Zusätzlich
+  prüft er, dass jede genutzte Kernklasse und jede statisch aufgerufene
+  Methode im gepinnten Framework existiert. Wer ein Addon auf ein neues
+  Kern-API umstellt, trägt dessen Einführungsversion in die Tabelle ein. Wird
+  die Anhebung von `core_compatibility` vergessen, wird der Lauf rot.
 
 ## [0.9.0] – 2026-08-27
 

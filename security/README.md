@@ -11,7 +11,8 @@ hoch-konfidenten gefährlichen Mustern:
 - Code-/Kommando-Ausführung (`eval`/`system`/`exec`/… als Funktion — **nicht**
   PDO-`->exec()`), Backtick-Shell
 - dynamisches `include`/`require` mit Variable
-- SQL mit interpolierter/konkatenierter Variable (statt gebundener Parameter)
+- SQL, das im Aufruf aus Variablen zusammengesetzt wird (statt gebundener
+  Parameter) — siehe „SQL-Prüfung“ unten
 - Datei-Operationen mit Nutzereingabe (LFI/Path-Traversal)
 - Ausgabe von Superglobals ohne Encoding (XSS)
 - `unserialize()` (Eingabequelle prüfen)
@@ -26,8 +27,58 @@ security/plugin-security-scan.sh                 # alle plugins/
 security/plugin-security-scan.sh /pfad/zu/plugins
 ```
 
-Exit: `0` = keine blockierenden Funde, `2` = HIGH/CRIT gefunden.
-Bewusste Ausnahmen: `baseline/plugin-findings.allow` (`<plugin>|<titel>`-Muster).
+Exit: `0` = keine blockierenden Funde, `2` = HIGH/CRIT gefunden, `1` =
+Aufruf-/Umgebungsfehler (auch: der SQL-Prüfer selbst ist gescheitert).
+
+### SQL-Prüfung (Tokenizer)
+
+Die SQL-Regeln laufen nicht zeilenweise per grep, sondern über den
+PHP-Tokenizer (`lib/sql-concat-check.php`). Geprüft wird das **erste
+Argument** jedes `->query(`, `->prepare(` und `->exec(` (auch `?->` und `::`)
+— über mehrere Zeilen hinweg und in beiden Anführungszeichenarten. Drei
+Titel, alle HIGH:
+
+| Titel | Beispiel |
+| --- | --- |
+| SQL mit Variable im Query-String (Interpolation) | `"… WHERE id = $id"`, Heredoc mit `{$x}` |
+| SQL mit konkatenierter Variable | `'… WHERE id = ' . $id` |
+| SQL-String aus Variable zusammengesetzt (Funktionsaufruf/Ausdruck) | `sprintf('… %s', $x)`, `implode(' UNION ALL ', $teile)`, Ternär |
+
+Ausgenommen sind nur `->quote(…)`/`->quoteIdentifier(…)`-Ketten (Empfänger
+wie `$db`, `$this->db`, `Database::getInstance()` samt Argumenten) und eine
+Variable direkt nach `(int)`/`(float)`. Ein bloßes `->query($sql)` oder
+`->query($this->sql)` meldet der Check nicht.
+
+**Grenzen (bewusst):** SQL, das vorab in einer Variable gebaut und dann als
+`->query($sql)` übergeben wird, und Aufbau per `.=` sieht auch der Tokenizer
+nicht — dafür braucht es Datenfluss, das bleibt Aufgabe von Semgrep
+(`.github/workflows/semgrep.yml`).
+
+**Rückfall ohne PHP-CLI** (oder mit `PLUGIN_SCAN_NO_PHP=1`): zeilenweise, mit
+dem Hinweis „SQL-Pruefung: Rueckfall zeilenweise …“. Die früheren beiden
+Regeln bleiben blockierend, die erweiterte Regel für einfache
+Anführungszeichen und die Backtick-Regel melden nur MED — ohne Tokenizer gibt
+es keinen Fingerabdruck für die Einzelfreigaben und keine Trennung von
+SQL-Bezeichnern und Shell-Backticks. Die CI hat immer PHP und prüft
+vollständig.
+
+### Bewusste Ausnahmen — `baseline/plugin-findings.allow`
+
+```text
+<plugin>|<titel>                     # ganze Regel für das Plugin
+<plugin>|<titel>|<Code-Ausschnitt>   # genau eine Stelle
+```
+
+Plugin und Titel werden **exakt** verglichen (voller Titel). Der
+Code-Ausschnitt muss als fester Teilstring im Fingerabdruck des Funds stehen
+(erstes Argument, Kommentare entfernt, Whitespace zu einem Leerzeichen
+zusammengefasst, ungekürzt) — zeilenunabhängig, der Eintrag überlebt Umbauten
+oberhalb der Stelle. Über jedem Eintrag steht als Kommentar, warum die Stelle
+sicher ist. Mit `PLUGIN_SCAN_ALLOW=<datei>` lässt sich eine andere Allowlist
+angeben (für Tests).
+
+`tests/Unit/PluginSecurityScanTest.php` prüft die Muster, die Ausnahmen, die
+Allowlist-Granularität und dass jeder Eintrag der echten Allowlist greift.
 
 Kein Ersatz für Semgrep, sondern eine gezielte, fehlalarmarme Ergänzung.
 
