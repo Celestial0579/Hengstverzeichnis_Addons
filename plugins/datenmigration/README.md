@@ -1,13 +1,15 @@
 # Datenmigration (Instanz-Umzug)
 
-Zieht eine Framework-Instanz auf eine andere um — Datenbank und Uploads in
-einem Archiv:
+Zieht eine Framework-Instanz auf eine andere um — Datenbank, Uploads und
+Pferdefotos in einem Archiv:
 
 | Bestandteil | Inhalt |
 |---|---|
-| `manifest.json` | Kern-Version, Seitenname, Plugin-Bestand, Zeilen je **enthaltener** Tabelle, die gewählten Gruppen |
+| `manifest.json` | Kern-Version, Seitenname, Plugin-Bestand, Zeilen je **enthaltener** Tabelle, die gewählten Gruppen, Fingerabdruck des `APP_KEY`, Namen der verschlüsselten Einstellungen |
 | `database.sql` | DB-Dump der ausgewählten Tabellen |
-| `uploads/…` | Dateien aus `public/uploads` (Pferdebilder, Logos, Galerie) — nur wenn die Gruppe „Dateien“ gewählt ist |
+| `uploads/…` | Dateien aus `public/uploads` (Logos, Galerie, Dokumente) — nur wenn die Gruppe „Dateien“ gewählt ist |
+| `storage-horses/…` | Pferdefotos aus `storage/horses` (seit 1.3.0) — ebenfalls mit der Gruppe „Dateien“ |
+| `geheimnisse.json` | nur mit Exportpasswort: die mit dem `APP_KEY` verschlüsselten Zugangsdaten, umverschlüsselt mit dem Exportpasswort (seit 1.3.0) |
 
 ## Was mitgeht, wird ausgewählt (#121)
 
@@ -28,7 +30,7 @@ Frage vorher. Jede Gruppe nennt ihre Tabellen und deren Zeilenzahl:
 | Protokolle & Auskunftsanfragen | `audit_logs`, `gdpr_requests` | an |
 | **Benutzer, Gruppen, Rechte** | `users`, `groups`, `user_groups`, `group_permissions`, `api_keys`, `password_resets`, `login_attempts`, `user_passkeys`, `email_2fa_codes` und **jede Tabelle mit Fremdschlüssel auf `users`** (auch von Addons, z. B. `plugin_mitglieder_konten_zuordnung`) | **aus** |
 | Nicht zugeordnete Tabellen | alles Übrige (erscheint nur, wenn es welche gibt) | an |
-| Dateien | `public/uploads` | an |
+| Dateien | `public/uploads` und die Pferdefotos aus `storage/horses` | an |
 
 **Warum die Vorgabe so verläuft.** Beide bequemen Enden sind falsch: „alles
 angehakt“ macht die Änderung wirkungslos, „nichts angehakt“ erzeugt ein leeres
@@ -95,7 +97,9 @@ und beim Import die Pflichtwahl (siehe unten).
    Archiv erneut prüfen und entpacken → **vollständigen** Sicherungs-Dump der
    Zielinstanz nach `var/datenmigration/sicherung-…` schreiben → Sicherung
    trocken prüfen → Wartungsmodus → Dump einspielen → ggf. abhängige Zeilen
-   trennen → ggf. alle Sitzungen beenden → Wartungsmodus aufheben. Ein
+   trennen → ggf. Zugangsdaten an den `APP_KEY` angleichen → ggf. alle
+   Sitzungen beenden → Wartungsmodus aufheben → Dateien und Pferdefotos
+   übernehmen → Schutzdateien unter `public/uploads` wiederherstellen. Ein
    abgewiesenes Archiv hinterlässt **keine** Sicherung und ändert nichts.
 
 ### Prüfung des Dumps (seit 1.2.0, Audit M1)
@@ -192,6 +196,49 @@ auch für deaktivierte Addons. `pferd-des-tages` braucht keinen Eintrag: Seine
 Pferdeverweise sind echte Fremdschlüssel, und die Pferde-Kennungen in seinen
 Auswahlkriterien stecken in Konfigurationswerten, nicht in einer Spalte.
 
+### Anderer `APP_KEY`: Zugangsdaten mitnehmen (seit 1.3.0, Audit M25)
+
+Mit dem `APP_KEY` verschlüsselt liegen in der Datenbank: das SMTP-Passwort,
+die Zugangsdaten der Backup-Ziele, die Secrets von Addons (`captcha-*`,
+`mitglieder-konten`) und die TOTP-Geheimnisse der Konten. Der `APP_KEY`
+wandert nicht mit. Bis 1.2.0 lag auf einer Zielinstanz mit eigenem Schlüssel
+danach unlesbarer Chiffretext — ohne Meldung, bis die erste Mail nicht
+rausging.
+
+* **Export:** Das Manifest trägt einen Fingerabdruck des `APP_KEY` (HMAC, der
+  Schlüssel lässt sich daraus nicht zurückgewinnen) und die **Namen** der
+  verschlüsselten Einstellungen sowie die **Zahl** der TOTP-Geheimnisse. Wer
+  die Werte mitnehmen will, gibt ein **Exportpasswort** an (mindestens 12
+  Zeichen): Dann liegen sie zusätzlich in `geheimnisse.json`, verschlüsselt
+  mit PBKDF2-SHA256 (600 000 Runden) und AES-256-GCM. Das Passwort wird
+  weder protokolliert noch auf Zwischenseiten mitgeführt — nach der
+  Warnseite ist es erneut einzugeben. Wer Archiv **und** Passwort hat, hat
+  die Zugangsdaten; das Passwort also getrennt weitergeben.
+* **Gleicher Schlüssel:** nichts zu tun, kein Passwortfeld.
+* **Anderer Schlüssel:** Die Vorschau nennt die betroffenen Einstellungen,
+  die Zahl der Konten mit TOTP und vorhandene Passkeys — und als Alternative,
+  den `APP_KEY` der Quelle zu übernehmen. Anwenden verlangt dann
+  * das **Exportpasswort** (falls das Archiv `geheimnisse.json` hat): Die
+    Werte werden mit dem `APP_KEY` des Ziels neu verschlüsselt. Ein falsches
+    Passwort bricht ab, bevor sich etwas ändert; **oder**
+  * die ausdrückliche Zustimmung „Ohne Exportpasswort fortfahren“: Die
+    genannten Einstellungen werden **geleert** und sind neu einzutragen.
+* Geleert oder neu verschlüsselt wird nur, was wie ein Chiffrat aussieht und
+  sich auf dem Ziel **tatsächlich nicht** entschlüsseln lässt — ein
+  manipuliertes Manifest kann so keine Klartext-Einstellung wie `site_name`
+  leeren.
+* **TOTP ohne Exportpasswort** bleibt unangetastet (fail-closed): Leeren
+  schaltete den zweiten Faktor still ab. Betroffene melden sich mit einem
+  Backup-Code an und richten TOTP neu ein, oder ein Administrator setzt den
+  zweiten Faktor zurück.
+* **Passkeys** sind an den `APP_KEY` gebunden (Benutzer-Handle) und lassen
+  sich nicht umschlüsseln. Sie bleiben stehen, funktionieren aber nicht mehr
+  und sind neu zu registrieren; die Vorschau nennt die Zahl.
+* **Unbekannt** (Archiv im Format 1/2 oder Ziel ohne `APP_KEY`): nur ein
+  Hinweis. Nach dem Import zählt das Addon Werte, die wie ein Chiffrat
+  aussehen, sich aber nicht entschlüsseln lassen, und nennt die Zahl im
+  Protokoll und in der Abschlussmeldung; geleert wird nichts.
+
 ### Wenn Import und Rückweg scheitern
 
 Scheitert der Import, wird die Sicherung streamend zurückgespielt, der
@@ -216,29 +263,53 @@ Fehlerseite nennt den Pfad der Sicherung. Dann:
 | Datenbank | alle Tabellen ersetzt | nur die enthaltenen Tabellen ersetzt, übrige bleiben stehen |
 | Uploads | Verzeichnistausch, alter Stand bleibt als `public/uploads.import-alt` | zusammengeführt; überschriebene Originale nach `var/datenmigration/ersetzte-dateien-…` |
 | Uploads ohne Gruppe „Dateien“ | — | `public/uploads` wird **nicht angefasst** |
+| Pferdefotos (`storage/horses`) | Inhalt ersetzt: nur hier vorhandene Fotos wandern nach `var/datenmigration/ersetzte-dateien-…/storage-horses`, `.gitkeep` bleibt | zusammengeführt; überschriebene Fotos nach `var/datenmigration/ersetzte-dateien-…/storage-horses` |
 | Sitzungen | **alle** werden beendet, API-Schlüssel ungültig (Konten sind ausgetauscht) | bleiben bestehen, sofern keine Tabelle der Gruppe „Benutzer“ ersetzt wurde |
 | stehenbleibende abhängige Tabellen | Pflichtwahl trennen/stehen lassen | Pflichtwahl trennen/stehen lassen |
 
 Ob Dateien angefasst werden, entscheidet der tatsächliche Inhalt des Archivs,
-nicht das Manifest — ein Manifest ist eine Behauptung.
+nicht das Manifest — ein Manifest ist eine Behauptung. Ein Archiv ohne
+Pferdefotos lässt `storage/horses` in Ruhe.
+
+`storage/horses` wird nie als Verzeichnis getauscht, sondern Datei für Datei:
+Im Docker-Setup des Kerns ist es ein eigenes Volume (`horses_data`), und ein
+Mountpoint lässt sich nicht umbenennen. Unter `storage-horses/` gelten
+dieselben Pfad- und Namensregeln wie unter `uploads/`; Punktdateien werden
+beim Export ausgelassen und beim Import still verworfen.
+
+Nach dem Umschalten stellt der Import **alle** Schutzdateien des Kerns unter
+`public/uploads` wieder her, wo sie fehlen — seit 1.3.0 auch
+`public/uploads/horses/.htaccess` (Audit N1), die liegengebliebene
+Pferdefotos am alten Ort sperrt. Vorlage ist der Stand des Ziels vor dem
+Import (`public/uploads.import-alt`), sonst eine eingebaute Mindestfassung.
+Lässt sich eine nicht schreiben, sagen es Abschlussmeldung und Protokoll.
+
+Scheitert die Dateiphase (die Datenbank ist dann schon eingespielt), meldet
+der Import „Datenbank importiert, Dateien unvollständig“ samt der
+Sicherungen, statt mit einer Fehlerseite zu enden.
 
 ### Archivformat
 
-Geschrieben wird Format **2** (mit `auswahl`/`vollstaendig` im Manifest),
-gelesen werden **1 und 2**: Ein Archiv aus v0.7 ist immer ein Vollarchiv, das
-lässt sich beim Lesen einsetzen. Umgekehrt gilt das nicht — eine v0.7-Instanz
-weist ein Format-2-Archiv ab, und das ist richtig: Sie würde ein Teilarchiv wie
-einen vollständigen Stand einspielen und alles Nicht-Enthaltene wegwerfen.
+Geschrieben wird Format **3** (seit 1.3.0: `storage-horses/`,
+`geheimnisse.json`, Fingerabdruck), gelesen werden **1, 2 und 3**: Ein Archiv
+aus v0.7 ist immer ein Vollarchiv, das lässt sich beim Lesen einsetzen.
+Archive der Formate 1 und 2 enthalten keine Pferdefotos aus `storage/horses`;
+die Vorschau weist darauf hin. Umgekehrt gilt das nicht — datenmigration bis
+1.2.x weist ein Format-3-Archiv ab, und das ist richtig: Es würde die
+Pferdefotos still übergehen (so wie eine v0.7-Instanz ein Teilarchiv wie einen
+vollständigen Stand einspielen würde).
 
 ## Grenzen (bewusst)
 
 - **Gleiche Kern-Version Pflicht.** Versionsübergreifender Import braucht
   einen Schema-Migrationslauf im Kern (siehe Feature-Request im Framework-Repo).
 - `config/db_config.php`, `APP_KEY`, TLS/Proxy sind Instanz-Infrastruktur und
-  wandern nicht mit.
-- `storage/` wandert nicht mit. Dort liegen Protokolle (`storage/logs`) und
-  Addon-Ablagen; ein pauschales Mitnehmen nähme die Logdateien der Quellinstanz
-  mit auf das Ziel.
+  wandern nicht mit. Was mit dem `APP_KEY` verschlüsselt ist, siehe „Anderer
+  `APP_KEY`“ oben.
+- `storage/` wandert nicht mit — **außer** `storage/horses` (Pferdefotos,
+  seit 1.3.0). Dort liegen sonst Protokolle (`storage/logs`) und
+  Addon-Ablagen; ein pauschales Mitnehmen nähme die Logdateien der
+  Quellinstanz mit auf das Ziel.
 - Addons wandern nicht mit (nur ihre Daten): Quell-Addons auf dem Ziel
   nachinstallieren; die Vorschau warnt bei Abweichungen. Der Kern deaktiviert
   nach dem Import automatisch alles, was lokal nicht identisch vorliegt
@@ -255,7 +326,9 @@ betreffen.
 
 Das Register `owns` in der `plugin.json` nennt `var/datenmigration`. Dort
 liegen Export-Archive **und die Sicherungs-Dumps vor jedem Import** — also
-vollständige Kopien der Datenbank samt Benutzertabelle. Genau das darf beim
+vollständige Kopien der Datenbank samt Benutzertabelle — und unter
+`ersetzte-dateien-…` die beim Import überschriebenen oder entfernten Dateien
+und Pferdefotos. Genau das darf beim
 Deinstallieren nicht liegenbleiben; der Kern zeigt vorher, wie viele Dateien es
 sind (Framework#338).
 
@@ -264,7 +337,10 @@ sind (Framework#338).
 Archivformat ustar (`.tar.gz`, wenn zlib da ist) mit eigenem, streamendem
 Schreiber/Leser — bewusst ohne `ext-zip`, das im mitgelieferten Dockerfile
 des Kerns fehlt (siehe „keine externen Abhängigkeiten“,
-`docs/plugin-development.md`).
+`docs/plugin-development.md`). Ohne zlib liest der Leser ein `.tar` per
+`fread()` (bis 1.2.0 endete das mit einem Fatal Error, Audit N22); ein
+`.tar.gz` wird dann mit dem Hinweis abgewiesen, es vorher zu entpacken
+(`gunzip`) oder zlib nachzuinstallieren.
 
 Der Dump läuft über `DatabaseDumper::dumpTo()` (Framework#231/#342) in eine
 Zwischendatei und von dort in das Archiv: streamend, konstanter Speicherbedarf

@@ -1,10 +1,10 @@
 {
     "slug": "datenmigration",
     "name": "Datenmigration (Instanz-Umzug)",
-    "version": "1.2.0",
-    "core_compatibility": ">=0.8.0-beta.1",
+    "version": "1.3.0",
+    "core_compatibility": ">=0.8.0",
     "core_supported_max": "0.9",
-    "description": "Umzug einer Instanz auf eine andere: Export von Datenbank, Uploads und Manifest als ein Archiv - mit Auswahl, was mitgeht (Benutzerkonten und Zugangsdaten bleiben per Vorgabe zurück) -, geprüfter Import auf der Zielinstanz (Versionsabgleich, Vorschau, Sicherungs-Dump vor dem Anwenden, Teilarchive werden zusammengeführt statt ersetzt).",
+    "description": "Umzug einer Instanz auf eine andere: Export von Datenbank, Uploads, Pferdefotos und Manifest als ein Archiv - mit Auswahl, was mitgeht (Benutzerkonten und Zugangsdaten bleiben per Vorgabe zurück) -, geprüfter Import auf der Zielinstanz (Versionsabgleich, Vorschau, Sicherungs-Dump vor dem Anwenden, Teilarchive werden zusammengeführt statt ersetzt).",
     "author": "Hengstverzeichnis_Addons",
     "hooks": [
         "admin.dashboard_tiles"
