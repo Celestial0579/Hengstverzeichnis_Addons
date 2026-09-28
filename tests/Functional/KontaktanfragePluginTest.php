@@ -102,8 +102,9 @@ class KontaktanfragePluginTest extends FunctionalTestCase {
         $mitFormular = $visitor->get("/kontakt?id={$kontaktId}");
         $this->assertStringContainsString('Kontakt aufnehmen', $mitFormular->body);
         $this->assertStringContainsString('name="webseite"', $mitFormular->body, 'Honeypot-Feld fehlt.');
-        $this->assertStringContainsString(
-            '<label for="captcha">',
+        // Mit Formular-Kontext heisst das Feld `captcha-<kontext>` (Audit N3).
+        $this->assertMatchesRegularExpression(
+            '/<label for="captcha(?:-[a-z0-9_-]+)?">/',
             $mitFormular->body,
             'Das öffentliche Formular muss den Spam-Schutz des Kerns einbinden (#351).'
         );
@@ -979,7 +980,7 @@ class KontaktanfragePluginTest extends FunctionalTestCase {
 
     /** Loest die ausgeschriebene Rechenaufgabe ueber die Bedeutung der Zahlwoerter. */
     private function loeseAufgabe(HttpResponse $seite): int {
-        preg_match('/<label for="captcha">.*?<strong>([^<]+)<\/strong>/su', $seite->body, $treffer);
+        preg_match('/<label for="captcha(?:-[a-z0-9_-]+)?">.*?<strong>([^<]+)<\/strong>/su', $seite->body, $treffer);
         $this->assertNotEmpty(
             $treffer,
             "Konnte die Spam-Aufgabe nicht aus dem Formular lesen, Body: {$seite->body}"

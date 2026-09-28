@@ -164,8 +164,15 @@ class CaptchaAnbieterPluginTest extends FunctionalTestCase {
             $formular->body,
             'Der Besucher muss im Formular erfahren, wohin seine Daten gehen.'
         );
+        // Die eingebaute Aufgabe hiesse hier `captcha-dsgvo` (Kontext-ID, Audit
+        // N3); ihr Feldname `captcha` ist unabhängig davon immer derselbe.
         $this->assertStringNotContainsString(
-            'id="captcha"',
+            'name="captcha"',
+            $formular->body,
+            'Bei gewähltem Drittanbieter darf die eingebaute Rechenaufgabe nicht zusätzlich erscheinen.'
+        );
+        $this->assertStringNotContainsString(
+            'id="captcha-dsgvo"',
             $formular->body,
             'Bei gewähltem Drittanbieter darf die eingebaute Rechenaufgabe nicht zusätzlich erscheinen.'
         );

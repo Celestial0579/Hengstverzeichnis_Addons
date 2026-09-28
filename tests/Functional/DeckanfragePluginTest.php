@@ -840,7 +840,7 @@ class DeckanfragePluginTest extends FunctionalTestCase {
         $token = $seite->formField('csrf_token') ?? '';
         $this->assertNotSame('', $token);
 
-        preg_match('/<label for="captcha">.*?<strong>([^<]+)<\/strong>/su', $seite->body, $treffer);
+        preg_match('/<label for="captcha(?:-[a-z0-9_-]+)?">.*?<strong>([^<]+)<\/strong>/su', $seite->body, $treffer);
         $this->assertNotEmpty(
             $treffer,
             "Konnte die Sicherheitsfrage nicht aus dem Formular lesen, Body: {$seite->body}"
