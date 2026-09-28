@@ -85,8 +85,16 @@ class MitgliedsstatusPluginTest extends FunctionalTestCase {
         $klar = $this->kontaktMitBestandswert($admin, "MSKlar-{$unique}", 'Mitglied');
         $variante = $this->kontaktMitBestandswert($admin, "MSVariante-{$unique}", 'nicht-mitglied');
         $unklar = $this->kontaktMitBestandswert($admin, "MSUnklar-{$unique}", 'Nichtmitglied NO');
+        // Nur Leerraum (Audit N32): TRIM() hätte den Tab durchgelassen, die
+        // Zeile wäre offen gewesen und auf der Verwaltungsseite unsichtbar.
+        $leerraum = $this->kontaktMitBestandswert($admin, "MSLeerraum-{$unique}", "\t");
 
         $this->aktivieren($admin, true);
+
+        $this->assertNull(
+            $this->zeile($leerraum),
+            'Ein Wert aus nur Leerraum hat keinen Inhalt und darf nicht als offen übernommen werden.'
+        );
 
         // 2. Übernahme: abgebildet, was sich ohne Raten abbilden lässt.
         $this->assertZeile($klar, 'mitglied', false, 'Mitglied', false);
@@ -425,6 +433,233 @@ class MitgliedsstatusPluginTest extends FunctionalTestCase {
         $this->assertSame(200, $seite->statusCode);
     }
 
+    /**
+     * Audit N32: Anzeige (GROUP BY) und Zuordnen (WHERE) wenden dieselbe
+     * Randleerraum-Regel an. Vorher gruppierte die Liste roh und das Zuordnen
+     * verglich die gekürzte Eingabe roh - ' X' und 'X\t' standen in der
+     * Liste, liessen sich aber nie zuordnen.
+     *
+     * Die Gross/Klein-Variante sichert die Annahme ab, dass REGEXP_REPLACE die
+     * Kollation der Spalte behält: Sie muss weiter mit in dieselbe Gruppe
+     * fallen und mit zugeordnet werden.
+     */
+    public function testZuordnenFasstWortlauteMitRandleerraumZusammen(): void {
+        $admin = $this->authenticatedClient();
+        $unique = uniqid();
+        $this->aktivieren($admin, true);
+
+        // Eindeutiger Wortlaut: Andere Tests lassen 'Nichtmitglied NO' offen
+        // stehen, die Zählung hier soll nur die eigenen Zeilen sehen.
+        $wortlaut = "Nichtmitglied NO-{$unique}";
+        $varianten = [
+            ' ' . $wortlaut,
+            $wortlaut . "\t",
+            $wortlaut . "\r\n",
+            mb_strtolower($wortlaut, 'UTF-8'),
+        ];
+
+        $ids = [];
+        foreach ($varianten as $i => $altwert) {
+            $id = $this->createContact($admin, "MSRand{$i}-{$unique}");
+            $this->db()->prepare(
+                "INSERT INTO `plugin_mitgliedsstatus_kontakt` (contact_id, status, oeffentlich, altwert, offen, geaendert_von)
+                 VALUES (?, 'keine_angabe', 0, ?, 1, 'Test')"
+            )->execute([$id, $altwert]);
+            $ids[$id] = $altwert;
+        }
+
+        $seite = $admin->get(self::VERWALTUNG)->body;
+        $muster = '/<strong>' . preg_quote(htmlspecialchars($wortlaut, ENT_QUOTES, 'UTF-8'), '/')
+            . '<\/strong> <span[^>]*>\((\d+) Kontakte\)/iu';
+        $this->assertSame(
+            1,
+            preg_match_all($muster, $seite, $treffer),
+            'Die vier Varianten müssen als EINE Zeile erscheinen.'
+        );
+        $this->assertSame('4', $treffer[1][0], 'Die Zeile muss alle vier Kontakte zählen.');
+
+        preg_match_all('/name="wortlaut" value="([^"]*)"/u', $seite, $felder);
+        $eigene = array_values(array_filter(
+            $felder[1],
+            static fn(string $v): bool => mb_stripos($v, $unique) !== false
+        ));
+        $this->assertCount(1, $eigene);
+        $this->assertSame(
+            trim($eigene[0]),
+            $eigene[0],
+            'Das hidden-Feld darf keinen Randleerraum tragen - sonst verändert ihn der Browser unterwegs.'
+        );
+
+        $antwort = $admin->post(self::VERWALTUNG . '/zuordnen', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'wortlaut' => $wortlaut,
+            'status' => 'nichtmitglied',
+        ]);
+        $this->assertSame(self::VERWALTUNG . '?ms=zugeordnet', $antwort->location());
+
+        foreach ($ids as $id => $altwert) {
+            $zeile = $this->zeile($id);
+            $this->assertNotNull($zeile);
+            $this->assertSame(0, (int) $zeile['offen'], 'Variante ' . json_encode($altwert) . ' ist noch offen.');
+            $this->assertSame('nichtmitglied', (string) $zeile['status']);
+
+            $hex = $this->db()->prepare('SELECT HEX(altwert) FROM `plugin_mitgliedsstatus_kontakt` WHERE contact_id = ?');
+            $hex->execute([$id]);
+            $this->assertSame(
+                strtoupper(bin2hex($altwert)),
+                (string) $hex->fetchColumn(),
+                'Der gesicherte Wortlaut muss byte-genau erhalten bleiben.'
+            );
+        }
+    }
+
+    /**
+     * Audit N78: Direkter Sprung aus v0.7. `contacts` hatte die Spalte nie,
+     * die Werte stehen nur im stillgelegten Altbestand `persons_pre_contacts`,
+     * und der Kern-Schritt 395 hat keinen Marker gesetzt. Dann ist der
+     * Altbestand die Quelle.
+     *
+     * Ausgenommen: reiner Leerraum, IDs ohne Kontakt (gelöscht/zusammengeführt)
+     * und vom Kern anonymisierte Kontakte.
+     */
+    public function testUebernimmtAusV07Altbestand(): void {
+        $admin = $this->authenticatedClient();
+        $unique = uniqid();
+        $f = $this->sprungFixture($admin, $unique);
+
+        $marker395 = $this->marker395();
+        try {
+            $this->marker395Setzen(null);
+            $this->altbestandAnlegen($f['altbestand']);
+
+            $this->aktivieren($admin, true);
+
+            $marker = json_decode((string) $this->marker(), true);
+            $this->assertIsArray($marker);
+            $this->assertSame('persons_pre_contacts', $marker['quelle'] ?? null, 'Der Bericht muss die Quelle nennen.');
+            $this->assertArrayNotHasKey('grund', $marker);
+            $this->assertSame(2, $marker['gesamt'] ?? null);
+            $this->assertSame(1, $marker['zugeordnet'] ?? null);
+            $this->assertSame(1, $marker['offen'] ?? null);
+            $this->assertSame(0, $marker['bestand'] ?? null);
+
+            $this->assertZeile($f['a'], 'mitglied', false, 'Mitglied', false);
+            $this->assertZeile($f['b'], 'keine_angabe', false, 'Nichtmitglied NO', true);
+            $this->assertNull($this->zeile($f['c']), 'Ein anonymisierter Kontakt darf nichts zurückbekommen.');
+            $this->assertNull($this->zeile($f['d']), 'Reiner Leerraum ist kein Wortlaut.');
+            $this->assertSame(
+                0,
+                (int) $this->db()->query(
+                    'SELECT COUNT(*) FROM `plugin_mitgliedsstatus_kontakt` WHERE contact_id = ' . $f['fremd']
+                )->fetchColumn(),
+                'Eine ID ohne Kontakt darf keine Zeile erzeugen.'
+            );
+
+            $seite = $admin->get(self::VERWALTUNG)->body;
+            $this->assertStringContainsString('stillgelegten Altbestand der v0.7', $seite);
+            $this->assertStringContainsString('Nichtmitglied NO', $seite, 'Der offene Wortlaut gehört in die Liste.');
+
+            $this->assertContains('Bestandswerte übernommen', $this->protokollAktionen());
+        } finally {
+            $this->altbestandEntfernen();
+            $this->marker395Setzen($marker395);
+        }
+    }
+
+    /**
+     * Gegenprobe zu testUebernimmtAusV07Altbestand(): Steht der 395-Marker,
+     * lief die Instanz über 0.8/0.9 und hatte die Spalte in `contacts`.
+     * `persons_pre_contacts` ist dann der Stand der #336-Übernahme und
+     * womöglich überholt - nichts davon darf stumm zurückkommen.
+     */
+    public function testAltbestandNachSchritt395WirdNichtUebernommen(): void {
+        $admin = $this->authenticatedClient();
+        $unique = uniqid();
+        $f = $this->sprungFixture($admin, $unique);
+
+        $marker395 = $this->marker395();
+        try {
+            $this->marker395Setzen(gmdate('c'));
+            $this->altbestandAnlegen($f['altbestand']);
+
+            $this->aktivieren($admin, true);
+
+            $marker = json_decode((string) $this->marker(), true);
+            $this->assertIsArray($marker);
+            $this->assertSame('keine-spalte', $marker['grund'] ?? null);
+            $this->assertArrayNotHasKey('quelle', $marker);
+            $this->assertNull($this->zeile($f['a']));
+            $this->assertNull($this->zeile($f['b']));
+        } finally {
+            $this->altbestandEntfernen();
+            $this->marker395Setzen($marker395);
+        }
+    }
+
+    /**
+     * Wer nach dem Sprung noch 1.0.0 installiert hatte, trägt den Marker
+     * "keine-spalte" ohne `quelle`. 1.1.0 holt die Übernahme dann EINMAL nach
+     * - sonst liefe der Kern-Hinweis "auf ≥ 1.1.0 aktualisieren" ins Leere.
+     * Dabei wird nur eingefügt: Eine von Hand gepflegte Zeile bleibt.
+     *
+     * Danach blockiert der Marker mit `quelle` jedes weitere Nachholen
+     * (testUebernahmeLaeuftNurEinmal für die zweite Quelle).
+     */
+    public function testKeineSpalteMarkerAus100WirdAusAltbestandNachgeholt(): void {
+        $admin = $this->authenticatedClient();
+        $unique = uniqid();
+        $f = $this->sprungFixture($admin, $unique);
+
+        $marker395 = $this->marker395();
+        try {
+            $this->marker395Setzen(null);
+            $this->altbestandAnlegen($f['altbestand']);
+
+            // Der Zustand nach 1.0.0: Marker "keine-spalte" ohne quelle, und
+            // A inzwischen von Hand gepflegt.
+            $this->db()->prepare(
+                "INSERT INTO settings (setting_key, setting_value) VALUES ('plugin_mitgliedsstatus_uebernahme', ?)"
+            )->execute([json_encode(
+                ['zeitpunkt' => date('c'), 'gesamt' => 0, 'zugeordnet' => 0, 'offen' => 0, 'grund' => 'keine-spalte']
+            )]);
+            $this->db()->prepare(
+                "INSERT INTO `plugin_mitgliedsstatus_kontakt` (contact_id, status, oeffentlich, offen, geaendert_von)
+                 VALUES (?, 'nichtmitglied', 1, 0, 'Hand')"
+            )->execute([$f['a']]);
+
+            $this->aktivieren($admin, true);
+
+            $this->assertZeile($f['a'], 'nichtmitglied', true, '', false);
+            $this->assertZeile($f['b'], 'keine_angabe', false, 'Nichtmitglied NO', true);
+
+            $marker = json_decode((string) $this->marker(), true);
+            $this->assertIsArray($marker);
+            $this->assertSame('persons_pre_contacts', $marker['quelle'] ?? null);
+            $this->assertSame(1, $marker['bestand'] ?? null);
+            $this->assertSame(2, $marker['gesamt'] ?? null);
+            $this->assertSame(1, $marker['offen'] ?? null);
+            $this->assertSame(0, $marker['zugeordnet'] ?? null);
+
+            // Nur einmal: B von Hand entscheiden, A's Zeile entfernen. Ein
+            // erneuter Lauf würde A wieder einfügen - der Marker mit quelle
+            // muss das verhindern, und B bleibt, wie entschieden.
+            $this->statusSpeichern($admin, $f['b'], 'nichtmitglied', false);
+            $this->db()->prepare('DELETE FROM `plugin_mitgliedsstatus_kontakt` WHERE contact_id = ?')
+                ->execute([$f['a']]);
+            $markerVorher = $this->marker();
+
+            $this->aktivieren($admin, false);
+            $this->aktivieren($admin, true);
+
+            $this->assertNull($this->zeile($f['a']), 'Mit quelle im Marker darf nichts nachgeholt werden.');
+            $this->assertZeile($f['b'], 'nichtmitglied', false, 'Nichtmitglied NO', false);
+            $this->assertSame($markerVorher, $this->marker());
+        } finally {
+            $this->altbestandEntfernen();
+            $this->marker395Setzen($marker395);
+        }
+    }
+
     // ------------------------------------------------------------------
     // Helfer
     // ------------------------------------------------------------------
@@ -512,6 +747,85 @@ class MitgliedsstatusPluginTest extends FunctionalTestCase {
         $this->assertSame($oeffentlich ? 1 : 0, (int) $zeile['oeffentlich'], "Freigabe von Kontakt #{$kontaktId}");
         $this->assertSame($altwert, (string) ($zeile['altwert'] ?? ''), "Bestandswortlaut von Kontakt #{$kontaktId}");
         $this->assertSame($offen ? 1 : 0, (int) $zeile['offen'], "Offen-Kennzeichen von Kontakt #{$kontaktId}");
+    }
+
+    /**
+     * Der Sprungzustand aus v0.7: Addon aus, kein Marker, `contacts` ohne
+     * Spalte. Dazu fünf Altbestandszeilen:
+     *  a 'Mitglied', b 'Nichtmitglied NO', c anonymisiert, d nur Tab,
+     *  fremd: eine ID ohne Kontakt.
+     *
+     * @return array{a:int, b:int, c:int, d:int, fremd:int, altbestand: array<int, string>}
+     */
+    private function sprungFixture(HttpClient $admin, string $unique): array {
+        $this->aktivieren($admin, true);
+        $this->aktivieren($admin, false);
+        $this->markerLoeschen();
+        if ($this->kernSpalteDa()) {
+            $this->db()->exec('ALTER TABLE `contacts` DROP COLUMN `membership_status`');
+        }
+
+        $a = $this->createContact($admin, "MSAltA-{$unique}");
+        $b = $this->createContact($admin, "MSAltB-{$unique}");
+        $c = $this->createContact($admin, "MSAltC-{$unique}");
+        $d = $this->createContact($admin, "MSAltD-{$unique}");
+        // Exakt der Wortlaut aus GdprController::anonymizePerson() im Kern.
+        $this->db()->prepare('UPDATE contacts SET name = ? WHERE id = ?')
+            ->execute(['Anonymisierte Person (#' . $c . ')', $c]);
+        $fremd = (int) $this->db()->query('SELECT COALESCE(MAX(id), 0) + 1000 FROM contacts')->fetchColumn();
+
+        return [
+            'a' => $a, 'b' => $b, 'c' => $c, 'd' => $d, 'fremd' => $fremd,
+            'altbestand' => [
+                $a => 'Mitglied',
+                $b => 'Nichtmitglied NO',
+                $c => 'Mitglied',
+                $d => "\t",
+                $fremd => 'Mitglied',
+            ],
+        ];
+    }
+
+    /** @param array<int, string> $werte ID => membership_status */
+    private function altbestandAnlegen(array $werte): void {
+        $this->assertSame(
+            0,
+            $this->db()->query("SHOW TABLES LIKE 'persons_pre_contacts'")->rowCount(),
+            'Vorbedingung: Die Testinstanz hat keinen eigenen Altbestand.'
+        );
+        $this->db()->exec(
+            'CREATE TABLE `persons_pre_contacts` (
+                `id` INT NOT NULL PRIMARY KEY,
+                `name` VARCHAR(100) NULL,
+                `membership_status` VARCHAR(100) NULL DEFAULT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+        );
+        $einfuegen = $this->db()->prepare(
+            'INSERT INTO `persons_pre_contacts` (id, name, membership_status) VALUES (?, ?, ?)'
+        );
+        foreach ($werte as $id => $wert) {
+            $einfuegen->execute([$id, "Alt #{$id}", $wert]);
+        }
+    }
+
+    private function altbestandEntfernen(): void {
+        $this->db()->exec('DROP TABLE IF EXISTS `persons_pre_contacts`');
+    }
+
+    private function marker395(): ?string {
+        $stmt = $this->db()->prepare('SELECT setting_value FROM settings WHERE setting_key = ?');
+        $stmt->execute(['migration_395_membership_status_faellt']);
+        $wert = $stmt->fetchColumn();
+        return $wert === false ? null : (string) $wert;
+    }
+
+    private function marker395Setzen(?string $wert): void {
+        $this->db()->prepare('DELETE FROM settings WHERE setting_key = ?')
+            ->execute(['migration_395_membership_status_faellt']);
+        if ($wert !== null) {
+            $this->db()->prepare('INSERT INTO settings (setting_key, setting_value) VALUES (?, ?)')
+                ->execute(['migration_395_membership_status_faellt', $wert]);
+        }
     }
 
     private function marker(): ?string {

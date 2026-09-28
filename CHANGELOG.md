@@ -139,6 +139,28 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ### Behoben
 
+- **`mitgliedsstatus` (1.1.0): Übernahme aus dem v0.7-Altbestand** (Audit
+  N78). Fehlt `contacts.membership_status`, weil die Instanz direkt von v0.7
+  gehoben wurde, übernimmt das Addon die Werte aus `persons_pre_contacts`.
+  Das gilt auch dann, wenn 1.0.0 die Übernahme schon mit „keine Spalte“
+  abgeschlossen hatte. Es gelten dieselben Kontakt-IDs. Gelöschte und
+  anonymisierte Kontakte sind ausgenommen, bereits gepflegte Angaben im Addon
+  werden nicht überschrieben. Der Bericht nennt die Quelle.
+  - Nur beim direkten Sprung: Hat der Kern-Schritt 395 die Spalte in
+    `contacts` gelöscht (Marker `migration_395_membership_status_faellt`),
+    ist der Altbestand ein womöglich überholter Stand und wird nicht
+    übernommen.
+  - Der Marker `plugin_mitgliedsstatus_uebernahme` trägt jetzt die Felder
+    `quelle` und (beim Altbestand) `bestand`. Der Kern liest `grund` und
+    `quelle` für seinen Dashboard-Hinweis; das Format ist in der README
+    dokumentiert.
+- **`mitgliedsstatus` (1.1.0): Wortlaute mit Leerraum am Rand ließen sich nicht
+  zuordnen** (Audit N32). Übernahme, Anzeige und Zuordnen verwenden jetzt
+  dieselbe Regel. ' Nichtmitglied NO' und 'Nichtmitglied NO' erscheinen als
+  eine Zeile und werden gemeinsam zugeordnet. Der gesicherte Wortlaut bleibt
+  Zeichen für Zeichen erhalten. Werte, die nur aus Leerraum bestehen, werden
+  nicht mehr als offen übernommen.
+
 - **`inzuchtkoeffizient`/`anpaarungs-empfehlung` (1.2.1): Inzuchtkoeffizient
   bei Linienzucht zu niedrig** (Audit M29). Der gemeinsame Rechenkern
   `WrightCoi` brach jeden Abstammungspfad am ersten gemeinsamen Vorfahren ab.
