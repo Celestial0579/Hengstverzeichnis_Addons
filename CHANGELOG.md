@@ -54,6 +54,23 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   ohne `users` werden weiter eingespielt; die Tabellen werden dabei
   übersprungen. Der Standardexport enthält damit weniger Tabellen als bisher.
 
+- **`datenmigration` (1.3.0): Der Vollimport stellt auch
+  `public/uploads/horses/.htaccess` wieder her** (Audit N1, Framework#366).
+  Bisher schrieb der Import nach dem Verzeichnistausch nur die Schutzdatei im
+  Wurzelverzeichnis von `public/uploads` zurück. Pferdefotos, die noch am
+  alten Ort lagen, waren danach wieder statisch abrufbar – am
+  Sichtbarkeitsschutz von `/media/horse-image` vorbei. Jetzt werden alle
+  Schutzdateien des Kerns wiederhergestellt, wo sie fehlen: aus dem Stand
+  des Ziels vor dem Import, sonst aus einer eingebauten Mindestfassung.
+  Lässt sich eine nicht schreiben, nennen Abschlussmeldung und Protokoll sie.
+
+- **`datenmigration` (1.3.0): Das Exportpasswort schützt mitgenommene
+  Zugangsdaten** (Audit M25) mit PBKDF2-SHA256 (600 000 Runden) und
+  AES-256-GCM, Mindestlänge 12 Zeichen. Das Passwort wird weder protokolliert
+  noch auf Zwischenseiten mitgeführt. Beim Import begrenzt das Addon die
+  Rundenzahl eines fremden Archivs und prüft den Aufbau der Datei, bevor es
+  etwas ändert.
+
 - **`mitglieder-konten` (1.0.1): Das Recht „Mitglieder-Konten anlegen“ führt
   nicht mehr zu Administrator-Konten.** Die Gruppe für neue Konten wurde
   ungeprüft gespeichert, und die Auswahl bot auch „Administrator“ und jede
@@ -226,6 +243,53 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   Fremdschlüssel über `weiche_verweise` in ihrer `plugin.json` angeben
   (nur für eigene `plugin_`-Tabellen aus `owns.tables`).
 
+- **`datenmigration` (1.3.0): Pferdefotos ziehen beim Umzug mit** (Audit
+  M26, Framework#366). Seit Kern 0.8 liegen die Pferdefotos unter
+  `storage/horses`, außerhalb von `public/uploads`, und fehlten deshalb nach
+  jedem Umzug. Sie gehen jetzt mit der Gruppe „Dateien“ als
+  `storage-horses/…` ins Archiv und werden beim Import mit derselben Pfad- und
+  Namensprüfung wie `uploads/` wiederhergestellt.
+  - Ein Vollarchiv ersetzt den Inhalt von `storage/horses`, ein Teilarchiv
+    führt zusammen. Überschriebene und – beim Vollarchiv – nur auf dem Ziel
+    vorhandene Fotos werden unter `var/datenmigration/ersetzte-dateien-…/storage-horses`
+    gesichert.
+  - Getauscht wird Datei für Datei, nicht das Verzeichnis. Das funktioniert
+    auch, wenn `storage/horses` ein eigenes Docker-Volume ist.
+  - Die `.gitkeep` des Kerns geht nicht ins Archiv; ein fremdes Archiv mit
+    Punktdateien unter `storage-horses/` scheitert nicht daran.
+  - Wird „Pferde“ ohne „Dateien“ exportiert, weist eine Zwischenseite darauf
+    hin, dass die Fotos fehlen werden.
+
+- **`datenmigration` (1.3.0): Zugangsdaten bleiben nach einem Umzug auf einen
+  anderen `APP_KEY` brauchbar** (Audit M25). SMTP- und Backup-Passwörter,
+  Addon-Secrets und TOTP-Geheimnisse sind an den `APP_KEY` gebunden und waren
+  auf einer neuen Instanz bisher still unbrauchbar.
+  - Das Manifest trägt jetzt einen Fingerabdruck des `APP_KEY` und die Namen
+    der verschlüsselten Einstellungen.
+  - Mit einem optionalen Exportpasswort werden die Werte mitgenommen und
+    beim Import mit dem `APP_KEY` des Ziels neu verschlüsselt.
+  - Ohne Exportpasswort nennt die Vorschau die betroffenen Einstellungen.
+    Nach ausdrücklicher Bestätigung werden sie geleert, statt unlesbaren
+    Chiffretext stehen zu lassen. Geleert wird nur, was sich auf dem Ziel
+    tatsächlich nicht entschlüsseln lässt; ein manipuliertes Manifest kann
+    keine Klartext-Einstellung leeren.
+  - TOTP ohne Exportpasswort bleibt unangetastet (fail-closed), Passkeys
+    lassen sich grundsätzlich nicht umschlüsseln. Beide müssen neu
+    eingerichtet werden; die Vorschau nennt die Zahl.
+  - Bei älteren Archiven ohne Fingerabdruck zählt der Import nicht
+    entschlüsselbare Werte und nennt die Zahl.
+
+- **`datenmigration` (1.3.0): Archive lassen sich auch ohne die
+  PHP-Erweiterung zlib einlesen** (Audit N22). Bisher endete ohne zlib jedes
+  Archiv mit einem Fatal Error. Ein `.tar` wird jetzt gelesen, ein `.tar.gz`
+  mit einer verständlichen Meldung abgewiesen. Ein unlesbares Archiv führt
+  beim Anwenden nicht zu einer Fehlerseite.
+
+- **`datenmigration` (1.3.0): Scheitert nach dem Datenbank-Import das
+  Übernehmen der Dateien, sagt der Import das** („Datenbank importiert,
+  Dateien unvollständig“, mit den Sicherungen) und protokolliert es, statt mit
+  einer Fehlerseite zu enden.
+
 - **`kontaktanfrage` (1.1.1): Keine Weiterleitung an einen Kontakt, der
   jünger ist als die Anfrage** (Audit N23). Wurde eine Kontaktkennung neu
   vergeben, ging die Anfrage an eine fremde Person. Solche Anfragen erscheinen
@@ -336,6 +400,21 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 - **`datenmigration` 1.2.0, `kontaktanfrage` 1.1.1.** `core_compatibility`
   und `core_supported_max` bleiben unverändert (Linie 0.9).
+
+- **`datenmigration` 1.3.0: Archivformat 3, `core_compatibility` `>=0.8.0`.**
+  Neue Archive enthalten `storage-horses/` und gegebenenfalls
+  `geheimnisse.json`. datenmigration bis 1.2.x weist sie ab, statt die
+  Pferdefotos still zu übergehen. Archive der Formate 1 und 2 bleiben
+  einspielbar; die Vorschau weist darauf hin, dass sie keine Pferdefotos aus
+  `storage/horses` enthalten. Die Untergrenze steigt von `>=0.8.0-beta.1` auf
+  `>=0.8.0`, weil `App\Helper\HorseImagePath` erst mit dem Tag v0.8.0 kam
+  (im `KernMindestversionTest` eingetragen). `core_supported_max` bleibt
+  `0.9`.
+
+  **Für Betreiber:** Ein Vollarchiv mit Dateien ersetzt jetzt auch den Inhalt
+  von `storage/horses`. Bei abweichendem `APP_KEY` verlangt der Import das
+  Exportpasswort oder die Zustimmung zum Leeren der Zugangsdaten. Archive
+  werden um die Pferdefotos größer.
 
 - **Neuer Manifest-Test: Die Kern-Untergrenze muss zu den genutzten Kern-APIs
   passen.** `tests/Manifest/KernMindestversionTest.php` sammelt je Addon die

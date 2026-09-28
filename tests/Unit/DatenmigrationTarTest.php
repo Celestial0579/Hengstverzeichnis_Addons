@@ -30,9 +30,12 @@ class DatenmigrationTarTest extends TestCase {
         rmdir($this->dir);
     }
 
-    /** @return array<string, string> name => inhalt */
-    private function readAll(string $path): array {
-        $reader = new TarReader($path);
+    /**
+     * @param bool|null $gzip Lesemodus des TarReader (null = wie im Betrieb)
+     * @return array<string, string> name => inhalt
+     */
+    private function readAll(string $path, ?bool $gzip = null): array {
+        $reader = new TarReader($path, $gzip);
         $result = [];
         $reader->each(function (string $name, int $size, callable $read) use (&$result) {
             $data = '';
@@ -81,6 +84,96 @@ class DatenmigrationTarTest extends TestCase {
         $entries = $this->readAll($archive);
         $this->assertArrayHasKey('database.sql', $entries);
         $this->assertStringContainsString("O''Brien", $entries['database.sql']);
+    }
+
+    /**
+     * Audit N22: Ohne zlib öffnete der Leser per fopen(), las aber per
+     * gzread() - jedes Archiv endete mit einem Fatal Error. Der fread-Pfad
+     * muss dasselbe liefern wie der gzread-Pfad, byte-genau, auch für
+     * Binärdaten und den langen ustar-Pfad.
+     */
+    public function testLesenOhneZlibPerFread(): void {
+        $binary = random_bytes(4096 + 77);
+        $src = $this->dir . '/quelle.bin';
+        file_put_contents($src, $binary);
+        $deep = 'storage-horses/' . str_repeat('unterverzeichnis-mit-namen/', 5) . 'foto.jpg';
+        $this->assertGreaterThan(100, strlen($deep));
+
+        $archive = $this->dir . '/ohne-zlib.tar';
+        $tar = TarWriter::create($archive);
+        $tar->addString('manifest.json', '{"format":3}');
+        $tar->addFile('uploads/bild.bin', $src);
+        $tar->addString($deep, 'foto');
+        $tar->close();
+
+        $entries = $this->readAll($archive, false);
+        $this->assertSame(['manifest.json', 'uploads/bild.bin', $deep], array_keys($entries));
+        $this->assertSame('{"format":3}', $entries['manifest.json']);
+        $this->assertSame($binary, $entries['uploads/bild.bin']);
+        $this->assertSame('foto', $entries[$deep]);
+    }
+
+    /** Audit N22: Ein .tar.gz ohne zlib wird mit einer verständlichen Meldung abgewiesen. */
+    public function testGzipArchivOhneZlibWirdVerstaendlichAbgewiesen(): void {
+        if (!function_exists('gzopen')) {
+            $this->markTestSkipped('zlib nicht verfügbar - ein .tar.gz lässt sich hier nicht erzeugen');
+        }
+        $archive = $this->dir . '/komprimiert.tar.gz';
+        $tar = TarWriter::create($archive);
+        $tar->addString('manifest.json', '{"format":3}');
+        $tar->close();
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageMatches('/zlib/');
+        new TarReader($archive, false);
+    }
+
+    /**
+     * Audit N22 unter echten Bedingungen: ein PHP-Prozess, in dem die
+     * zlib-Funktionen fehlen (disable_functions). Nur so fällt ein
+     * übersehenes gzread() auf - mit zlib ist es ein Alias von fread() und
+     * der Fehler unsichtbar.
+     */
+    public function testImProzessOhneZlibLesbarUndGzipAbgewiesen(): void {
+        $archive = $this->dir . '/prozess.tar';
+        $tar = TarWriter::create($archive);
+        $tar->addString('manifest.json', '{"format":3}');
+        $tar->addString('storage-horses/foto.jpg', str_repeat('x', 1500));
+        $tar->close();
+
+        $skript = $this->dir . '/lesen.php';
+        file_put_contents($skript, '<?php
+            require ' . var_export(__DIR__ . '/../../vendor/autoload.php', true) . ';
+            require ' . var_export(__DIR__ . '/../../plugins/datenmigration/Plugin.php', true) . ';
+            if (function_exists("gzopen") || function_exists("gzread")) { echo "zlib-aktiv"; exit(1); }
+            $r = new \\Plugin\\Datenmigration\\TarReader($argv[1]);
+            $r->each(function (string $n, int $s, callable $read) {
+                $d = ""; while (($c = $read()) !== "") { $d .= $c; }
+                echo $n, "=", strlen($d), ";";
+            });
+            $r->close();
+            if (isset($argv[2])) {
+                try { new \\Plugin\\Datenmigration\\TarReader($argv[2]); echo "gzip-angenommen"; }
+                catch (\\RuntimeException $e) { echo "|", $e->getMessage(); }
+            }
+        ');
+
+        $gz = null;
+        if (function_exists('gzencode')) {
+            $gz = $this->dir . '/prozess.tar.gz';
+            file_put_contents($gz, gzencode((string) file_get_contents($archive)));
+        }
+        $befehl = escapeshellarg(PHP_BINARY) . ' -d disable_functions=gzopen,gzread,gzclose,gzwrite,gzeof '
+            . escapeshellarg($skript) . ' ' . escapeshellarg($archive) . ($gz !== null ? ' ' . escapeshellarg($gz) : '')
+            . ' 2>&1';
+        exec($befehl, $ausgabe, $code);
+        $text = implode("\n", $ausgabe);
+        $this->assertSame(0, $code, $text);
+        $this->assertStringStartsWith('manifest.json=12;storage-horses/foto.jpg=1500;', $text);
+        if ($gz !== null) {
+            $this->assertStringContainsString('|Das Archiv ist gzip-komprimiert', $text);
+            $this->assertStringContainsString('zlib', $text);
+        }
     }
 
     public function testLangePfadeUeberUstarPrefix(): void {

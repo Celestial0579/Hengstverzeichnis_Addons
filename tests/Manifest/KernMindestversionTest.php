@@ -62,6 +62,9 @@ class KernMindestversionTest extends TestCase {
         'App\Helper\MediaUrl::horseMediaImage' => ['0.9.0-beta.4', 'Framework#339'],
         // Kontoanlage an genau einer Stelle, Kern-CHANGELOG [0.9.0-beta.3].
         'App\Service\UserProvisioning' => ['0.9.0-beta.3', 'Framework#384'],
+        // Pferdefotos ausserhalb des Webroots (storage/horses). Nicht in den
+        // 0.8.0-Betas, erster Tag damit: v0.8.0 (per git geprueft).
+        'App\Helper\HorseImagePath' => ['0.8.0', 'Framework#366'],
     ];
 
     private const CONSTRAINT_PATTERN = '/^(>=|<=|>|<|=)?\s*(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)$/';

@@ -7,10 +7,16 @@
 //   manifest.json   Kern-Version, Seitenname, Plugin-Bestand, Zählstände,
 //                   und seit #121 die AUSWAHL (welche Gruppen im Archiv sind)
 //   database.sql    DB-Dump der ausgewählten Tabellen (App\Service\DatabaseDumper)
-//   uploads/...     hochgeladene Dateien aus public/uploads (Pferdebilder,
-//                   Logos, Galerie) - die im Kern-Backup bewusst fehlen
+//   uploads/...     hochgeladene Dateien aus public/uploads (Logos, Galerie,
+//                   Dokumente) - die im Kern-Backup bewusst fehlen
 //                   (siehe BackupService: "Kann bei Bedarf als eigenständige
 //                   Erweiterung nachgezogen werden")
+//   storage-horses/...  seit 1.3.0 (Format 3, Audit M26) die Pferdefotos aus
+//                   storage/horses - sie liegen seit Kern 0.8 außerhalb des
+//                   Webroots (Framework#366) und fehlten nach jedem Umzug
+//   geheimnisse.json  seit 1.3.0 (Audit M25), nur mit Exportpasswort: die mit
+//                   dem APP_KEY verschlüsselten Zugangsdaten, umverschlüsselt
+//                   mit dem Exportpasswort (siehe Geheimnisumschlag)
 //
 // AUSWAHL STATT ALLES-ODER-NICHTS (#121). Bis v0.7 nahm der Export
 // zwangsläufig jede Tabelle mit - also auch `users` mit den Passwort-Hashes,
@@ -47,7 +53,13 @@
 // Übersicht listet alles in diesem Verzeichnis zum Prüfen/Anwenden auf.
 //
 // Nicht Teil des Umzugs (bewusst): config/db_config.php, APP_KEY und
-// TLS/Proxy-Konfiguration - das ist Instanz-Infrastruktur, keine Daten.
+// TLS/Proxy-Konfiguration - das ist Instanz-Infrastruktur, keine Daten. Was
+// mit dem APP_KEY verschlüsselt in der Datenbank liegt (SMTP- und
+// Backup-Zugangsdaten, Addon-Secrets, TOTP-Geheimnisse), ist dagegen an ihn
+// gebunden: Das Manifest trägt deshalb seit 1.3.0 einen Fingerabdruck des
+// Schlüssels, und bei einem abweichenden Schlüssel verlangt der Import das
+// Exportpasswort oder die ausdrückliche Zustimmung, nicht entschlüsselbare
+// Zugangsdaten zu leeren (Audit M25, siehe MigrationController::schluesselLage()).
 //
 // Installation: Verzeichnis nach plugins/ kopieren, unter /admin/plugins
 // aktivieren, Berechtigungen "Datenmigration -> Export/Import" zuweisen.
@@ -56,10 +68,12 @@ namespace Plugin\Datenmigration;
 
 use App\Controllers\BaseController;
 use App\Database;
+use App\Helper\HorseImagePath;
 use App\Plugin\HookManager;
 use App\Plugin\PluginAudit;
 use App\Plugin\PluginPage;
 use App\Router;
+use App\Security\Crypto;
 use App\Service\AuditLogger;
 use App\Service\DatabaseDumper;
 use PDO;
@@ -162,7 +176,7 @@ class Plugin {
  */
 final class Exportauswahl {
 
-    /** Dateien (public/uploads) - die einzige Gruppe ohne Tabellen. */
+    /** Dateien (public/uploads, storage/horses) - die einzige Gruppe ohne Tabellen. */
     public const GRUPPE_DATEIEN = 'dateien';
 
     /** Auffangbecken für Tabellen, die keine Zuordnung haben (s. o.). */
@@ -241,9 +255,10 @@ final class Exportauswahl {
             'hinweis' => null,
         ],
         self::GRUPPE_DATEIEN => [
-            'label' => 'Dateien (public/uploads)',
-            'text' => 'Pferdebilder, Logos, Galerie-Medien und Dokumente. Die Dateien liegen im '
-                . 'Dateisystem und lassen sich nicht nach Tabellen aufteilen - sie gehen '
+            'label' => 'Dateien (public/uploads und Pferdefotos)',
+            'text' => 'Logos, Galerie-Medien und Dokumente aus public/uploads sowie die Pferdefotos, '
+                . 'die seit Kern 0.8 außerhalb des Webroots unter storage/horses liegen. Die Dateien '
+                . 'liegen im Dateisystem und lassen sich nicht nach Tabellen aufteilen - sie gehen '
                 . 'vollständig mit oder gar nicht.',
             'vorgabe' => true,
             'hinweis' => null,
@@ -641,7 +656,8 @@ final class UploadNamePolicy {
      * Sie zu übernehmen hieße, den Ausführungsschutz vom Inhalt des Archivs
      * bestimmen zu lassen; den Import daran scheitern zu lassen hieße, dass
      * kein einziger echter Export mehr einspielbar wäre. Also: überspringen
-     * und den Schutz nach dem Umschalten aus dem Kern-Bestand neu schreiben
+     * und den Schutz nach dem Umschalten neu schreiben - aus dem Stand der
+     * Zielinstanz vor dem Import, sonst aus der eingebauten Mindestfassung
      * (siehe MigrationController::restoreUploadsProtection()).
      */
     public static function istWebserverSteuerdatei(string $rel): bool {
@@ -815,16 +831,41 @@ final class TarWriter {
  * reguläre Dateien geliefert; alles andere (Symlinks, Devices, ...) wird
  * übersprungen - ein Migrationsarchiv enthält nichts dergleichen, und so
  * kann ein manipuliertes Archiv darüber auch nichts einschleusen.
+ *
+ * OHNE ZLIB (Audit N22): Der Lesemodus wird beim Öffnen festgelegt und gilt
+ * für read() und close() gleichermaßen. Bis 1.2.0 öffnete der Leser ohne
+ * zlib per fopen(), las aber immer per gzread() - jedes Archiv, auch ein
+ * unkomprimiertes .tar, endete mit einem Fatal Error. Jetzt liest er ein .tar
+ * per fread() und weist ein .tar.gz (gzip-Magic 1f 8b) mit einer Meldung ab,
+ * die sagt, was zu tun ist.
  */
 final class TarReader {
 
     /** @var resource */
     private $handle;
 
-    public function __construct(string $path) {
-        $handle = function_exists('gzopen') ? gzopen($path, 'rb') : fopen($path, 'rb');
+    /** Lesemodus: gzread()/gzclose() oder fread()/fclose(). */
+    private bool $gzip;
+
+    /**
+     * @param bool|null $gzip null = zlib nutzen, wenn vorhanden. true ohne
+     *                        zlib wird zu false (es gibt dann kein gzread).
+     *                        false erzwingt den fread-Pfad (Tests).
+     */
+    public function __construct(string $path, ?bool $gzip = null) {
+        $this->gzip = ($gzip ?? true) && function_exists('gzopen');
+        $handle = $this->gzip ? gzopen($path, 'rb') : fopen($path, 'rb');
         if ($handle === false) {
             throw new \RuntimeException("Archiv nicht lesbar: {$path}");
+        }
+        if (!$this->gzip) {
+            if (fread($handle, 2) === "\x1f\x8b") {
+                fclose($handle);
+                throw new \RuntimeException('Das Archiv ist gzip-komprimiert (.tar.gz), auf diesem Server fehlt aber '
+                    . 'die PHP-Erweiterung zlib. Entweder das Archiv vorher entpacken (gunzip) und als .tar '
+                    . 'ablegen oder zlib nachinstallieren.');
+            }
+            rewind($handle);
         }
         $this->handle = $handle;
     }
@@ -891,13 +932,15 @@ final class TarReader {
     }
 
     public function close(): void {
-        function_exists('gzclose') ? gzclose($this->handle) : fclose($this->handle);
+        $this->gzip ? gzclose($this->handle) : fclose($this->handle);
     }
 
     private function read(int $bytes): string {
         $data = '';
         while (strlen($data) < $bytes) {
-            $chunk = gzread($this->handle, $bytes - strlen($data));
+            $chunk = $this->gzip
+                ? gzread($this->handle, $bytes - strlen($data))
+                : fread($this->handle, $bytes - strlen($data));
             if ($chunk === false || $chunk === '') {
                 break;
             }
@@ -1770,6 +1813,149 @@ final class Wartung {
 
 
 // ---------------------------------------------------------------------------
+// Zugangsdaten über einen APP_KEY-Wechsel tragen (Audit M25)
+// ---------------------------------------------------------------------------
+
+/**
+ * Verpackt die mit dem APP_KEY verschlüsselten Zugangsdaten einer Instanz
+ * unter einem Exportpasswort - für den Umzug auf eine Instanz mit anderem
+ * APP_KEY.
+ *
+ * DAS PROBLEM. App\Security\Crypto verschlüsselt mit einem aus dem APP_KEY
+ * abgeleiteten Schlüssel: das SMTP-Passwort, die Zugangsdaten der
+ * Backup-Ziele, die Secrets der Addons (captcha-*, mitglieder-konten) und die
+ * TOTP-Geheimnisse der Konten. Der APP_KEY wandert bewusst nicht mit. Auf
+ * einer Zielinstanz mit eigenem Schlüssel lag danach unlesbarer Chiffretext
+ * in der Datenbank - ohne jede Meldung, bis die erste Mail nicht rausging.
+ *
+ * DIE ANTWORT ist ein optionales Exportpasswort. Die Werte werden auf der
+ * Quelle entschlüsselt und als EIN Umschlag in `geheimnisse.json` gelegt:
+ * PBKDF2-SHA256 (600 000 Runden, 16 Byte Salt) für den Schlüssel,
+ * AES-256-GCM mit 12 Byte IV und fester AAD für den Inhalt - nur openssl,
+ * das Crypto ohnehin verlangt. Der Import entpackt ihn und verschlüsselt die
+ * Werte mit dem APP_KEY des Ziels neu.
+ *
+ * Das Passwort ist die einzige Hürde vor Klartext-Zugangsdaten - deshalb
+ * mindestens 12 Zeichen, eine hohe Rundenzahl, und beim Entpacken eine
+ * Obergrenze für `iter` (ein fremdes Archiv soll den Server nicht mit
+ * 10^9 Runden beschäftigen). Das Passwort selbst erscheint nirgends: nicht
+ * im Archiv, nicht im Audit-Log, nicht in einer Fehlermeldung, nicht als
+ * verstecktes Formularfeld.
+ *
+ * Ohne Framework-Bezug, damit tests/Unit sie ohne Datenbank prüfen kann.
+ */
+final class Geheimnisumschlag {
+
+    public const MIN_PASSWORT = 12;
+    public const ITERATIONEN = 600000;
+    public const MIN_ITERATIONEN = 100000;
+    public const MAX_ITERATIONEN = 5000000;
+
+    /** Zusätzliche authentifizierte Daten: bindet das Chiffrat an diesen Zweck. */
+    private const AAD = 'datenmigration-geheimnisse-v1';
+
+    /** Spaltenbreite von settings.setting_key. */
+    private const MAX_SCHLUESSEL = 50;
+
+    private function __construct() {}
+
+    /**
+     * @param array{settings: array<string, string>, users_totp: array<int, string>} $daten
+     * @param int $iter Rundenzahl - nur Tests nehmen weniger (Untergrenze gilt trotzdem)
+     * @throws \InvalidArgumentException bei zu kurzem Passwort oder ungültigen Daten
+     */
+    public static function verpacken(array $daten, string $passwort, int $iter = self::ITERATIONEN): string {
+        if (mb_strlen($passwort, 'UTF-8') < self::MIN_PASSWORT) {
+            throw new \InvalidArgumentException('Das Exportpasswort muss mindestens ' . self::MIN_PASSWORT
+                . ' Zeichen lang sein.');
+        }
+        if ($iter < self::MIN_ITERATIONEN || $iter > self::MAX_ITERATIONEN) {
+            throw new \InvalidArgumentException('Unzulässige Rundenzahl.');
+        }
+        $klar = json_encode(self::struktur($daten, \InvalidArgumentException::class), JSON_UNESCAPED_UNICODE);
+        if ($klar === false) {
+            throw new \InvalidArgumentException('Zugangsdaten lassen sich nicht als JSON schreiben.');
+        }
+        $salt = random_bytes(16);
+        $iv = random_bytes(12);
+        $schluessel = hash_pbkdf2('sha256', $passwort, $salt, $iter, 32, true);
+        $tag = '';
+        $chiffrat = openssl_encrypt($klar, 'aes-256-gcm', $schluessel, OPENSSL_RAW_DATA, $iv, $tag, self::AAD, 16);
+        if ($chiffrat === false) {
+            throw new \RuntimeException('Verschlüsselung der Zugangsdaten fehlgeschlagen.');
+        }
+        return (string) json_encode([
+            'v' => 1,
+            'kdf' => 'pbkdf2-sha256',
+            'iter' => $iter,
+            'salt' => base64_encode($salt),
+            'iv' => base64_encode($iv),
+            'tag' => base64_encode($tag),
+            'daten' => base64_encode($chiffrat),
+        ]);
+    }
+
+    /**
+     * @return array{settings: array<string, string>, users_totp: array<int, string>}
+     * @throws \RuntimeException bei falschem Passwort, Manipulation oder ungültigem Aufbau
+     */
+    public static function entpacken(string $json, string $passwort): array {
+        $u = json_decode($json, true);
+        if (!is_array($u) || ($u['v'] ?? null) !== 1 || ($u['kdf'] ?? null) !== 'pbkdf2-sha256') {
+            throw new \RuntimeException('geheimnisse.json hat ein unbekanntes Format.');
+        }
+        $iter = $u['iter'] ?? null;
+        if (!is_int($iter) || $iter < self::MIN_ITERATIONEN || $iter > self::MAX_ITERATIONEN) {
+            throw new \RuntimeException('geheimnisse.json nennt eine unzulässige Rundenzahl.');
+        }
+        $roh = [];
+        foreach (['salt' => 16, 'iv' => 12, 'tag' => 16, 'daten' => null] as $feld => $laenge) {
+            $wert = is_string($u[$feld] ?? null) ? base64_decode($u[$feld], true) : false;
+            if ($wert === false || ($laenge !== null && strlen($wert) !== $laenge)) {
+                throw new \RuntimeException("geheimnisse.json ist beschädigt ({$feld}).");
+            }
+            $roh[$feld] = $wert;
+        }
+        $schluessel = hash_pbkdf2('sha256', $passwort, $roh['salt'], $iter, 32, true);
+        $klar = openssl_decrypt($roh['daten'], 'aes-256-gcm', $schluessel, OPENSSL_RAW_DATA, $roh['iv'], $roh['tag'], self::AAD);
+        if ($klar === false) {
+            throw new \RuntimeException('Exportpasswort falsch oder Geheimnis-Datei beschädigt.');
+        }
+        return self::struktur(json_decode($klar, true), \RuntimeException::class);
+    }
+
+    /**
+     * Prüft den Aufbau: settings als Name => Wert (Name höchstens 50 Zeichen,
+     * wie die Spalte), users_totp als Konto-ID => Geheimnis. Ein falscher
+     * Aufbau wird hier abgewiesen und nicht erst mitten im Import zu einem
+     * TypeError - dann schon unter Wartungsmodus.
+     *
+     * @param class-string<\Throwable> $fehler
+     * @return array{settings: array<string, string>, users_totp: array<int, string>}
+     */
+    private static function struktur(mixed $daten, string $fehler): array {
+        if (!is_array($daten) || !is_array($daten['settings'] ?? null) || !is_array($daten['users_totp'] ?? null)) {
+            throw new $fehler('Die Zugangsdaten haben einen ungültigen Aufbau.');
+        }
+        $aus = ['settings' => [], 'users_totp' => []];
+        foreach ($daten['settings'] as $name => $wert) {
+            if (!is_string($name) || $name === '' || strlen($name) > self::MAX_SCHLUESSEL || !is_string($wert)) {
+                throw new $fehler('Die Zugangsdaten haben einen ungültigen Aufbau (Einstellungen).');
+            }
+            $aus['settings'][$name] = $wert;
+        }
+        foreach ($daten['users_totp'] as $id => $wert) {
+            if (!is_int($id) || $id <= 0 || !is_string($wert)) {
+                throw new $fehler('Die Zugangsdaten haben einen ungültigen Aufbau (TOTP).');
+            }
+            $aus['users_totp'][$id] = $wert;
+        }
+        return $aus;
+    }
+}
+
+
+// ---------------------------------------------------------------------------
 // Controller
 // ---------------------------------------------------------------------------
 
@@ -1780,8 +1966,15 @@ class MigrationController extends BaseController {
      *
      * 2 seit #121: Das Manifest führt jetzt zusätzlich `auswahl` (welche
      * Gruppen im Archiv sind) und `vollstaendig`.
+     *
+     * 3 seit 1.3.0: Pferdefotos unter `storage-horses/` (Audit M26), dazu im
+     * Manifest `horses_count`, `app_key_fingerabdruck`, `verschluesselt` und
+     * `geheimnisse` (Audit M25) und gegebenenfalls der Eintrag
+     * `geheimnisse.json`. Ein älteres Addon soll ein solches Archiv
+     * ABWEISEN, statt die Pferdefotos still zu übergehen - deshalb ein neues
+     * Format statt optionaler Einträge.
      */
-    public const FORMAT = 2;
+    public const FORMAT = 3;
 
     /**
      * Formate, die dieses Addon LIEST.
@@ -1796,9 +1989,73 @@ class MigrationController extends BaseController {
      * ab, und das ist richtig - sie würde ein Teilarchiv wie einen
      * vollständigen Stand einspielen und alles Nicht-Enthaltene wegwerfen.
      *
+     * Formate 1 und 2 enthalten keine Pferdefotos aus storage/horses und
+     * keinen Schlüssel-Fingerabdruck; die Vorschau sagt beides.
+     *
      * @var array<int, int>
      */
-    public const LESBARE_FORMATE = [1, 2];
+    public const LESBARE_FORMATE = [1, 2, 3];
+
+    /** Präfix der Pferdefotos im Archiv (Audit M26). */
+    private const PRAEFIX_FOTOS = 'storage-horses/';
+
+    /** Obergrenze für manifest.json und geheimnisse.json. */
+    private const MAX_KOPFEINTRAG = 1048576;
+
+    /**
+     * Die Schutzdateien, die der Kern unter public/uploads mitliefert
+     * (relativer Pfad => eingebaute Mindestfassung), Audit N1.
+     *
+     * Bis 1.2.0 stellte der Import nur die .htaccess im Wurzelverzeichnis
+     * wieder her. Nach dem Verzeichnistausch eines Vollarchivs fehlte damit
+     * `horses/.htaccess` - und Pferdefotos, die dort noch aus der Zeit vor
+     * Kern 0.8 lagen, waren wieder statisch abrufbar, am Sichtbarkeitsschutz
+     * von /media/horse-image vorbei (Framework#366).
+     *
+     * @var array<string, string>
+     */
+    private const SCHUTZDATEIEN = [
+        '.htaccess' => self::HTACCESS_UPLOADS,
+        'horses/.htaccess' => self::HTACCESS_HORSES,
+    ];
+
+    /** Mindestfassung von public/uploads/.htaccess, angeglichen an die Kern-Datei. */
+    private const HTACCESS_UPLOADS = <<<'HTACCESS'
+    # Wiederhergestellt nach einem Datenmigrations-Import.
+    # Kein PHP in diesem Verzeichnis - hier liegen ausschliesslich Daten.
+    Options -Indexes -ExecCGI
+
+    <FilesMatch "\.(php|php\d*|phtml|pl|py|jsp|asp|sh|cgi|phar|inc)$">
+        SetHandler default-handler
+        Require all denied
+    </FilesMatch>
+
+    <IfModule mod_php7.c>
+        php_flag engine off
+    </IfModule>
+
+    <IfModule mod_php.c>
+        php_flag engine off
+    </IfModule>
+
+    <IfModule mod_headers.c>
+        <FilesMatch "\.(jpe?g|png|gif|webp)$">
+            Header set Cross-Origin-Resource-Policy "same-origin"
+            Header set X-Content-Type-Options "nosniff"
+        </FilesMatch>
+    </IfModule>
+
+    HTACCESS;
+
+    /** Mindestfassung von public/uploads/horses/.htaccess (Framework#366). */
+    private const HTACCESS_HORSES = <<<'HTACCESS'
+    # Wiederhergestellt nach einem Datenmigrations-Import (#366).
+    # Pferdefotos liegen unter storage/horses und werden ausschliesslich ueber
+    # /media/horse-image ausgeliefert, nie statisch aus diesem Verzeichnis.
+    # Gilt nur fuer Apache; nginx/Caddy: location ^~ /uploads/horses/ { deny all; }
+    Require all denied
+
+    HTACCESS;
 
     public function __construct() {
         parent::__construct();
@@ -1859,6 +2116,16 @@ class MigrationController extends BaseController {
 
     private function uploadsDir(): string {
         return $this->rootDir() . '/public/uploads';
+    }
+
+    /**
+     * Ablage der Pferdefotos (Audit M26) - außerhalb des Webroots, seit Kern
+     * 0.8.0 (daher core_compatibility >=0.8.0). Im Docker-Setup des Kerns ein
+     * eigenes Volume (horses_data): Der Import tauscht deshalb nie das
+     * Verzeichnis, sondern nur seinen Inhalt (siehe ersetzeInhalt()).
+     */
+    private function horsesDir(): string {
+        return HorseImagePath::dir();
     }
 
     /** Ablage für Archive und Sicherungs-Dumps - außerhalb von public/. */
@@ -2215,6 +2482,18 @@ class MigrationController extends BaseController {
             $content .= '<p class="alert alert-success">Archiv eingespielt. Ersetzt wurden nur die Tabellen, die '
                 . 'die Vorschau nach Prüfung des Dumps mit „wird ersetzt“ geführt hat; alle übrigen blieben '
                 . 'unverändert. Benutzerkonten waren nicht darunter - Ihre Sitzung gilt deshalb weiter.</p>';
+            $unlesbar = (int) ($_GET['unlesbar'] ?? 0);
+            if ($unlesbar > 0) {
+                $content .= '<p class="alert alert-warning">⚠ ' . $unlesbar . ' eingespielte(r) verschlüsselte(r) '
+                    . 'Wert(e) lassen sich mit dem APP_KEY dieser Instanz nicht entschlüsseln (Zugangsdaten wie SMTP, '
+                    . 'Backup-Ziele oder Addon-Secrets). Bitte neu eintragen oder den APP_KEY der Quelle übernehmen; '
+                    . 'Einzelheiten im Protokoll.</p>';
+            }
+            if (($_GET['schutz'] ?? '') === 'fehlt') {
+                $content .= '<p class="alert alert-error">Mindestens eine Schutzdatei unter public/uploads '
+                    . '(.htaccess) ließ sich nicht wiederherstellen - Einzelheiten im Protokoll. Bitte von Hand '
+                    . 'aus dem Kern zurückkopieren.</p>';
+            }
         }
 
         if ($canExport) {
@@ -2284,6 +2563,11 @@ class MigrationController extends BaseController {
             $content .= '<p class="alert alert-error">Es war nichts ausgewählt - ein leeres Archiv hilft niemandem. '
                 . 'Bitte mindestens eine Gruppe anhaken.</p>';
         }
+        if ($fehler === 'passwort') {
+            $content .= '<p class="alert alert-error">Das Exportpasswort ist zu kurz (mindestens '
+                . Geheimnisumschlag::MIN_PASSWORT . ' Zeichen) oder die Wiederholung stimmt nicht überein. '
+                . 'Es wurde kein Archiv erstellt.</p>';
+        }
         $content .= '<p>Angehakt ist, was in das Archiv kommt. Die Voreinstellung lässt <strong>Benutzer, Gruppen, '
             . 'Rechte</strong> weg: Das ist die einzige Gruppe, deren Inhalt dem Empfänger Zugang zu Ihrer Instanz '
             . 'verschafft (Passwort-Hashes, TOTP-Geheimnisse, Backup-Codes, API-Schlüssel). Alles Übrige sind Daten, '
@@ -2303,7 +2587,8 @@ class MigrationController extends BaseController {
             }
 
             if ($key === Exportauswahl::GRUPPE_DATEIEN) {
-                $umfang = number_format(count($this->collectUploads()), 0, ',', '.') . ' Datei(en)';
+                $umfang = number_format(count($this->collectUploads()), 0, ',', '.') . ' Datei(en) in public/uploads, '
+                    . number_format(count($this->collectHorseImages()), 0, ',', '.') . ' Pferdefoto(s)';
             } else {
                 $zeilen = 0;
                 foreach ($tabellen as $t) {
@@ -2332,9 +2617,39 @@ class MigrationController extends BaseController {
             $content .= '</div>';
         }
 
+        $content .= $this->passwortAbschnitt(false);
         $content .= '<button type="submit" class="btn">Archiv erstellen und herunterladen</button></form>';
         $content .= '<p><a href="/plugin/datenmigration/uebersicht">Zurück</a></p></div>';
         PluginPage::render('Datenmigration - Export', $content);
+    }
+
+    /**
+     * Der optionale Abschnitt "Verschlüsselte Zugangsdaten mitnehmen"
+     * (Audit M25). Die Felder werden immer leer ausgeliefert - das Passwort
+     * geht nie als Wert oder verstecktes Feld zurück an den Browser.
+     */
+    private function passwortAbschnitt(bool $erneut): string {
+        $min = Geheimnisumschlag::MIN_PASSWORT;
+        $pflicht = $erneut ? ' required' : '';
+        return '<fieldset class="form-group"><legend><strong>Verschlüsselte Zugangsdaten mitnehmen</strong> '
+            . '(optional)</legend>'
+            . '<p><small>SMTP- und Backup-Zugangsdaten, die Secrets von Addons und die TOTP-Geheimnisse der Konten '
+            . 'sind mit dem APP_KEY dieser Instanz verschlüsselt. Der APP_KEY wandert nicht mit - auf einer '
+            . 'Zielinstanz mit eigenem Schlüssel sind diese Werte ohne Exportpasswort unbrauchbar. Mit einem '
+            . 'Exportpasswort werden sie zusätzlich unter diesem Passwort verschlüsselt ins Archiv gelegt und beim '
+            . 'Import mit dem Schlüssel des Ziels neu verschlüsselt. Wer Archiv und Passwort hat, hat diese '
+            . 'Zugangsdaten - das Passwort also getrennt vom Archiv weitergeben. Mindestens ' . $min
+            . ' Zeichen; leer lassen, wenn nichts davon mitsoll.</small></p>'
+            . ($erneut ? '<p class="alert alert-warning">⚠ Aus Sicherheitsgründen wird das Exportpasswort nicht '
+                . 'zwischengespeichert - bitte hier erneut eingeben.</p>'
+                . '<input type="hidden" name="mit_passwort" value="1">' : '')
+            . '<div class="form-group"><label for="export_passwort">Exportpasswort</label>'
+            . '<input type="password" name="export_passwort" id="export_passwort" class="form-control" '
+            . 'autocomplete="new-password" minlength="' . $min . '"' . $pflicht . '></div>'
+            . '<div class="form-group"><label for="export_passwort_wdh">Exportpasswort wiederholen</label>'
+            . '<input type="password" name="export_passwort_wdh" id="export_passwort_wdh" class="form-control" '
+            . 'autocomplete="new-password" minlength="' . $min . '"' . $pflicht . '></div>'
+            . '</fieldset>';
     }
 
     public function export(): void {
@@ -2348,6 +2663,18 @@ class MigrationController extends BaseController {
         $auswahl = Exportauswahl::bereinige($_POST['gruppen'] ?? []);
         if ($auswahl === []) {
             header('Location: /plugin/datenmigration/export?fehler=leer');
+            exit;
+        }
+
+        // Exportpasswort zuerst (Audit M25): Ein Tippfehler in der
+        // Wiederholung darf nicht erst nach der Warnseite auffallen. Das
+        // Passwort selbst geht nie in eine URL, ein Formularfeld oder ein
+        // Protokoll.
+        $passwort = (string) ($_POST['export_passwort'] ?? '');
+        if ($passwort !== (string) ($_POST['export_passwort_wdh'] ?? '')
+            || ($passwort !== '' && mb_strlen($passwort, 'UTF-8') < Geheimnisumschlag::MIN_PASSWORT)
+            || ($passwort === '' && ($_POST['mit_passwort'] ?? '') === '1')) {
+            header('Location: /plugin/datenmigration/export?fehler=passwort&' . http_build_query(['gruppen' => $auswahl]));
             exit;
         }
 
@@ -2366,13 +2693,30 @@ class MigrationController extends BaseController {
         // Gegenseite meldet nichts, er spielt die verwaisten Verweise
         // klaglos ein (siehe abhaengigkeitsWarnungen()).
         $warnungen = $this->abhaengigkeitsWarnungen($tabellen);
+        $mitDateien = in_array(Exportauswahl::GRUPPE_DATEIEN, $auswahl, true);
+        $fotos = $mitDateien || in_array('pferde', $auswahl, true) ? $this->collectHorseImages() : [];
+        if (!$mitDateien && in_array('pferde', $auswahl, true) && $fotos !== []) {
+            // Die Pferdefotos hängen an der Gruppe "Dateien" (Audit M26):
+            // Pferde ohne Dateien ist ein Archiv mit Pferden ohne Fotos.
+            $warnungen[] = number_format(count($fotos), 0, ',', '.') . ' Pferdefoto(s) aus storage/horses gehen nur '
+                . 'mit der Gruppe „' . Exportauswahl::label(Exportauswahl::GRUPPE_DATEIEN) . '“ mit. Ohne sie '
+                . 'kommen die Pferde auf der Zielinstanz ohne ihre Fotos an.';
+        }
         if ($warnungen !== [] && ($_POST['trotzdem'] ?? '') !== '1') {
-            $this->renderExportWarnung($auswahl, $warnungen);
+            $this->renderExportWarnung($auswahl, $warnungen, $passwort !== '');
             return;
         }
 
-        $mitDateien = in_array(Exportauswahl::GRUPPE_DATEIEN, $auswahl, true);
         $uploadFiles = $mitDateien ? $this->collectUploads() : [];
+        $horseFiles = $mitDateien ? $fotos : [];
+
+        // Was mit dem APP_KEY verschlüsselt im Archiv liegt - im Manifest nur
+        // Namen und Zahlen, die Werte selbst nur mit Exportpasswort.
+        $geheim = $this->sammleVerschluesselteWerte($tabellen);
+        $geheimnisse = $passwort !== '' && ($geheim['settings'] !== [] || $geheim['users_totp'] !== [])
+            ? Geheimnisumschlag::verpacken($geheim, $passwort)
+            : null;
+        unset($passwort);
 
         $tabellenZaehler = [];
         foreach ($tabellen as $t) {
@@ -2392,6 +2736,16 @@ class MigrationController extends BaseController {
             'auswahl' => $auswahl,
             'vollstaendig' => $vollstaendig,
             'uploads_count' => count($uploadFiles),
+            'horses_count' => count($horseFiles),
+            // Audit M25: Woran die Zielinstanz erkennt, ob ihr APP_KEY der
+            // der Quelle ist - ein HMAC, aus dem sich der Schlüssel nicht
+            // zurückgewinnen lässt.
+            'app_key_fingerabdruck' => self::appKeyFingerabdruck(),
+            'verschluesselt' => [
+                'settings' => array_keys($geheim['settings']),
+                'users_totp' => count($geheim['users_totp']),
+            ],
+            'geheimnisse' => $geheimnisse !== null,
         ];
 
         $ext = function_exists('gzopen') ? '.tar.gz' : '.tar';
@@ -2432,8 +2786,14 @@ class MigrationController extends BaseController {
             $tar = TarWriter::create($path);
             $tar->addString('manifest.json', json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
             $tar->addFile('database.sql', $dumpDatei);
+            if ($geheimnisse !== null) {
+                $tar->addString('geheimnisse.json', $geheimnisse);
+            }
             foreach ($uploadFiles as $rel => $abs) {
                 $tar->addFile('uploads/' . $rel, $abs);
+            }
+            foreach ($horseFiles as $rel => $abs) {
+                $tar->addFile(self::PRAEFIX_FOTOS . $rel, $abs);
             }
             $tar->close();
         } finally {
@@ -2445,7 +2805,12 @@ class MigrationController extends BaseController {
             'Export-Archiv erstellt',
             $filename,
             ($vollstaendig ? 'Vollarchiv' : 'Teilarchiv') . ': ' . implode(', ', $auswahl)
-                . ' - ' . count($tabellen) . ' Tabelle(n), ' . count($uploadFiles) . ' Upload-Datei(en)'
+                . ' - ' . count($tabellen) . ' Tabelle(n), ' . count($uploadFiles) . ' Upload-Datei(en), '
+                . count($horseFiles) . ' Pferdefoto(s)'
+                . ($geheimnisse !== null
+                    ? ', Zugangsdaten mit Exportpasswort mitgenommen (' . count($geheim['settings'])
+                        . ' Einstellung(en), ' . count($geheim['users_totp']) . ' TOTP-Geheimnis(se))'
+                    : '')
         );
 
         header('Content-Type: ' . ($ext === '.tar.gz' ? 'application/gzip' : 'application/x-tar'));
@@ -2466,7 +2831,7 @@ class MigrationController extends BaseController {
      * @param array<int, string> $auswahl
      * @param array<int, string> $warnungen
      */
-    private function renderExportWarnung(array $auswahl, array $warnungen): void {
+    private function renderExportWarnung(array $auswahl, array $warnungen, bool $mitPasswort): void {
         $e = fn ($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
         $csrf = $e(Router::generateCsrfToken());
 
@@ -2487,6 +2852,9 @@ class MigrationController extends BaseController {
         foreach ($auswahl as $key) {
             $content .= '<input type="hidden" name="gruppen[]" value="' . $e($key) . '">';
         }
+        // Das Passwort wird NICHT als verstecktes Feld weitergereicht
+        // (Audit M25) - es stünde sonst im Quelltext dieser Seite.
+        $content .= $this->passwortAbschnitt($mitPasswort);
         $content .= '<button type="submit" class="btn">Archiv trotzdem so erstellen</button></form>';
 
         // http_build_query trennt mit "&"; in einem HTML-Attribut gehört
@@ -2498,7 +2866,28 @@ class MigrationController extends BaseController {
 
     /** @return array<string, string> relativer Pfad => absoluter Pfad */
     private function collectUploads(): array {
-        $base = $this->uploadsDir();
+        return $this->collectFiles($this->uploadsDir());
+    }
+
+    /**
+     * Die Pferdefotos aus storage/horses (Audit M26) - OHNE Punktdateien.
+     *
+     * Der Kern liefert `storage/horses/.gitkeep` aus. Im Archiv lehnte der
+     * Import sie als Punktdatei ab (UploadNamePolicy::assertAllowed()), und
+     * jeder Vollimport mit Dateien bräche daran ab.
+     *
+     * @return array<string, string>
+     */
+    private function collectHorseImages(): array {
+        return $this->collectFiles($this->horsesDir(), true);
+    }
+
+    /**
+     * Alle regulären Dateien unter $base (keine Symlinks), sortiert.
+     *
+     * @return array<string, string> relativer Pfad => absoluter Pfad
+     */
+    private function collectFiles(string $base, bool $ohnePunktdateien = false): array {
         if (!is_dir($base)) {
             return [];
         }
@@ -2507,13 +2896,123 @@ class MigrationController extends BaseController {
             new \RecursiveDirectoryIterator($base, \FilesystemIterator::SKIP_DOTS)
         );
         foreach ($it as $file) {
-            if ($file->isFile() && !$file->isLink()) {
-                $rel = substr($file->getPathname(), strlen($base) + 1);
-                $files[$rel] = $file->getPathname();
+            if (!$file->isFile() || $file->isLink()) {
+                continue;
             }
+            if ($ohnePunktdateien && str_starts_with($file->getFilename(), '.')) {
+                continue;
+            }
+            $rel = substr($file->getPathname(), strlen($base) + 1);
+            $files[$rel] = $file->getPathname();
         }
         ksort($files);
         return $files;
+    }
+
+    // -- Zugangsdaten und APP_KEY (Audit M25) --------------------------------
+
+    /**
+     * Fingerabdruck des APP_KEY: ein HMAC über einen festen Text, aus dem sich
+     * der Schlüssel nicht zurückgewinnen lässt. null ohne APP_KEY.
+     */
+    public static function appKeyFingerabdruck(): ?string {
+        return defined('APP_KEY') && (string) \constant('APP_KEY') !== ''
+            ? hash_hmac('sha256', 'datenmigration:app-key-fingerabdruck:v1', (string) \constant('APP_KEY'))
+            : null;
+    }
+
+    /**
+     * Die mit dem APP_KEY verschlüsselten Werte der exportierten Tabellen, im
+     * Klartext.
+     *
+     * settings: jeder Wert, den Crypto::decrypt() öffnet - die Erkennung ist
+     * generisch und erfasst damit auch die Secrets von Addons, die dieses
+     * Addon nicht kennt; das GCM-Tag schließt Fehltreffer aus.
+     * users.totp_secret: nur entschlüsselbare Werte. Klartext-Altwerte aus
+     * der Zeit vor der Verschlüsselung funktionieren ohnehin mit jedem
+     * Schlüssel.
+     *
+     * Ohne APP_KEY wirft Crypto - dann wird nichts gesammelt.
+     *
+     * @param array<int, string> $tabellen
+     * @return array{settings: array<string, string>, users_totp: array<int, string>}
+     */
+    private function sammleVerschluesselteWerte(array $tabellen): array {
+        $aus = ['settings' => [], 'users_totp' => []];
+        $db = Database::getInstance();
+        try {
+            if (in_array('settings', $tabellen, true)) {
+                foreach ($db->query('SELECT setting_key, setting_value FROM settings ORDER BY setting_key')->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                    $wert = (string) ($r['setting_value'] ?? '');
+                    $klar = $wert !== '' ? Crypto::decrypt($wert) : null;
+                    if ($klar !== null) {
+                        $aus['settings'][(string) $r['setting_key']] = $klar;
+                    }
+                }
+            }
+            if (in_array('users', $tabellen, true)) {
+                $sql = "SELECT id, totp_secret FROM users WHERE totp_secret IS NOT NULL AND totp_secret <> '' ORDER BY id";
+                foreach ($db->query($sql)->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                    $klar = Crypto::decrypt((string) $r['totp_secret']);
+                    if ($klar !== null) {
+                        $aus['users_totp'][(int) $r['id']] = $klar;
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            return ['settings' => [], 'users_totp' => []];
+        }
+        return $aus;
+    }
+
+    /**
+     * Passt der APP_KEY dieser Instanz zu dem der Quelle?
+     *
+     *   gleich     - Fingerabdrücke stimmen überein, nichts zu tun;
+     *   unbekannt  - das Archiv hat keinen Fingerabdruck (Format 1/2) oder
+     *                diese Instanz keinen APP_KEY: nur ein Hinweis;
+     *   abweichend - verschlüsselte Werte der Quelle sind hier unlesbar.
+     */
+    private static function schluesselLage(array $manifest): string {
+        $quelle = $manifest['app_key_fingerabdruck'] ?? null;
+        $ziel = self::appKeyFingerabdruck();
+        if (!is_string($quelle) || preg_match('/^[0-9a-f]{64}$/D', $quelle) !== 1 || $ziel === null) {
+            return 'unbekannt';
+        }
+        return hash_equals($ziel, $quelle) ? 'gleich' : 'abweichend';
+    }
+
+    /**
+     * Was ein abweichender APP_KEY bei DIESEM Archiv betrifft - für Vorschau
+     * und Anwenden aus derselben Rechnung. Maßgeblich ist, welche Tabellen der
+     * geprüfte Dump tatsächlich ersetzt; die Namen und Zahlen stammen aus dem
+     * Manifest und werden nur angezeigt bzw. beim Leeren gegen den
+     * tatsächlichen Wert geprüft (siehe schluesselAngleichen()).
+     *
+     * @return array{lage:string, settings:array<int, string>, totp:int, passkeys:int, geheimnisse:bool, betroffen:bool}
+     */
+    private static function schluesselBedarf(array $manifest, DumpBefund $befund): array {
+        $ersetzt = array_flip($befund->ersetzt());
+        $v = is_array($manifest['verschluesselt'] ?? null) ? $manifest['verschluesselt'] : [];
+        $settings = [];
+        if (isset($ersetzt['settings']) && is_array($v['settings'] ?? null)) {
+            foreach ($v['settings'] as $name) {
+                if (is_string($name) && $name !== '' && strlen($name) <= 50) {
+                    $settings[] = $name;
+                }
+            }
+            $settings = array_values(array_unique($settings));
+        }
+        $totp = isset($ersetzt['users']) ? max(0, (int) ($v['users_totp'] ?? 0)) : 0;
+        $passkeys = isset($ersetzt['user_passkeys']) ? (int) ($befund->tabellen['user_passkeys']['zeilen'] ?? 0) : 0;
+        return [
+            'lage' => self::schluesselLage($manifest),
+            'settings' => $settings,
+            'totp' => $totp,
+            'passkeys' => $passkeys,
+            'geheimnisse' => ($manifest['geheimnisse'] ?? false) === true,
+            'betroffen' => $settings !== [] || $totp > 0 || $passkeys > 0,
+        ];
     }
 
     // -- Import: Hochladen --------------------------------------------------
@@ -2584,6 +3083,13 @@ class MigrationController extends BaseController {
             ? $this->importRisiken($befund, $fks, $local['tables'], $this->spaltenNullbar())
             : ['trennbar' => [], 'hinweise' => []];
         $benutzerErsetzt = $pruefung['problem'] === null && self::benutzerbezogenErsetzt($befund, $fkKarte);
+        $bedarf = self::schluesselBedarf($manifest, $befund);
+        $format = (int) ($manifest['format'] ?? 0);
+        if ($format > 0 && $format < 3 && in_array(Exportauswahl::GRUPPE_DATEIEN, $auswahl, true)) {
+            $warnings[] = 'Archiv im älteren Format ' . $format . ': Es enthält keine Pferdefotos aus storage/horses '
+                . '(die liegen dort seit Kern 0.8). Die Pferdefotos dieser Instanz bleiben unverändert; fehlende '
+                . 'Fotos der Quelle sind von Hand nach storage/horses zu kopieren oder mit einem neuen Export zu holen.';
+        }
 
         $csrf = htmlspecialchars(Router::generateCsrfToken(), ENT_QUOTES, 'UTF-8');
         $file = htmlspecialchars(basename($path), ENT_QUOTES, 'UTF-8');
@@ -2619,7 +3125,11 @@ class MigrationController extends BaseController {
             . '<tr><td>Kern-Version</td><td>' . $e($manifest['core_version'] ?? '?') . '</td><td>' . $e($local['core_version']) . '</td></tr>'
             . '<tr><td>Erstellt</td><td>' . $e($manifest['created_at'] ?? '?') . '</td><td>-</td></tr>'
             . '<tr><td>Umfang</td><td>' . ($vollstaendig ? 'Vollarchiv' : 'Teilarchiv') . '</td><td>-</td></tr>'
-            . '<tr><td>Upload-Dateien</td><td>' . $e($manifest['uploads_count'] ?? '?') . '</td><td>-</td></tr></table></div>';
+            . '<tr><td>Upload-Dateien</td><td>' . $e($manifest['uploads_count'] ?? '?') . '</td><td>-</td></tr>'
+            . '<tr><td>Pferdefotos (storage/horses)</td><td>' . $e($manifest['horses_count'] ?? 'nicht enthalten')
+            . '</td><td>' . $e(count($this->collectHorseImages())) . '</td></tr></table></div>';
+
+        $content .= $this->schluesselHinweis($bedarf, $e);
 
         // "Quelle" sind die im Dump gezählten Zeilen, nicht die Angabe des
         // Manifests - die Vorschau soll zeigen, was tatsächlich eingespielt
@@ -2687,6 +3197,7 @@ class MigrationController extends BaseController {
                     . 'Archivs mit derselben Kennung. Richtig nur, wenn das Archiv von dieser Instanz stammt.</label>'
                     . '</fieldset>';
             }
+            $content .= $this->schluesselFelder($bedarf);
             $content .= '<div class="form-group"><label><input type="checkbox" name="bestaetigt" value="1" required> '
                 . $zusage . ' '
                 . 'Ein Sicherungs-Dump wird vorher nach <code>var/datenmigration/</code> geschrieben.</label></div>'
@@ -2694,6 +3205,73 @@ class MigrationController extends BaseController {
         }
         $content .= '<p><a href="/plugin/datenmigration/uebersicht">Zurück</a></p></div>';
         PluginPage::render('Datenmigration - Import prüfen', $content);
+    }
+
+    /**
+     * Die Warnbox zum APP_KEY (Audit M25). Nennt, was betroffen ist, und
+     * immer auch die Alternative: den APP_KEY der Quelle übernehmen.
+     *
+     * @param array{lage:string, settings:array<int, string>, totp:int, passkeys:int, geheimnisse:bool, betroffen:bool} $bedarf
+     */
+    private function schluesselHinweis(array $bedarf, \Closure $e): string {
+        if ($bedarf['lage'] === 'unbekannt') {
+            return '<p class="alert alert-warning">⚠ Ob diese Instanz denselben APP_KEY hat wie die Quelle, lässt sich '
+                . 'nicht feststellen (älteres Archivformat oder kein APP_KEY). Mit dem APP_KEY verschlüsselte '
+                . 'Zugangsdaten der Quelle - SMTP, Backup-Ziele, Addon-Secrets, TOTP - sind bei einem anderen '
+                . 'Schlüssel nach dem Import unbrauchbar; der Abschlussbericht nennt die Zahl nicht entschlüsselbarer '
+                . 'Werte.</p>';
+        }
+        if ($bedarf['lage'] !== 'abweichend' || !$bedarf['betroffen']) {
+            return '';
+        }
+        $teile = [];
+        if ($bedarf['settings'] !== []) {
+            $teile[] = '<li>Einstellungen: <code>' . implode('</code>, <code>', array_map($e, $bedarf['settings']))
+                . '</code>' . ($bedarf['geheimnisse']
+                    ? ' - mit dem Exportpasswort werden sie neu verschlüsselt, ohne werden sie geleert und sind neu '
+                        . 'einzutragen.'
+                    : ' - sie werden geleert und sind neu einzutragen.') . '</li>';
+        }
+        if ($bedarf['totp'] > 0) {
+            $teile[] = '<li>' . $e($bedarf['totp']) . ' Konto/Konten mit TOTP-Zwei-Faktor'
+                . ($bedarf['geheimnisse']
+                    ? ' - mit dem Exportpasswort werden die Geheimnisse neu verschlüsselt; ohne bleiben sie '
+                    : ' - die Geheimnisse bleiben ')
+                . 'unlesbar stehen: Die Betroffenen melden sich mit einem Backup-Code an und richten TOTP neu ein, '
+                . 'oder ein Administrator setzt ihren zweiten Faktor zurück.</li>';
+        }
+        if ($bedarf['passkeys'] > 0) {
+            $teile[] = '<li>' . $e($bedarf['passkeys']) . ' Passkey(s) - sie sind an den APP_KEY gebunden und lassen '
+                . 'sich nicht umschlüsseln. Sie bleiben stehen, funktionieren aber nicht mehr und müssen neu '
+                . 'registriert werden; bis dahin hilft ein anderer Faktor oder der Admin-Reset.</li>';
+        }
+        return '<div class="alert alert-warning"><p>⚠ <strong>Diese Instanz hat einen anderen APP_KEY als die '
+            . 'Quelle.</strong> Mit dem APP_KEY verschlüsselte Werte des Archivs sind hier unlesbar:</p><ul>'
+            . implode('', $teile) . '</ul><p>Alternative: den APP_KEY der Quelle auf dieser Instanz übernehmen '
+            . '(Umgebungsvariable bzw. config) - dann bleiben alle Werte gültig und hier ist nichts zu tun.</p></div>';
+    }
+
+    /**
+     * Die Eingaben zum APP_KEY im Import-Formular: Exportpasswort und/oder die
+     * Zustimmung, ohne Passwort fortzufahren. Das Passwort wird nie
+     * vorbelegt.
+     *
+     * @param array{lage:string, settings:array<int, string>, totp:int, passkeys:int, geheimnisse:bool, betroffen:bool} $bedarf
+     */
+    private function schluesselFelder(array $bedarf): string {
+        if ($bedarf['lage'] !== 'abweichend' || !$bedarf['betroffen']) {
+            return '';
+        }
+        $html = '<fieldset class="form-group"><legend><strong>Anderer APP_KEY</strong> - bitte entscheiden:</legend>';
+        if ($bedarf['geheimnisse']) {
+            $html .= '<div class="form-group"><label for="export_passwort">Exportpasswort des Archivs</label>'
+                . '<input type="password" name="export_passwort" id="export_passwort" class="form-control" '
+                . 'autocomplete="off"></div><p><small>oder:</small></p>';
+        }
+        $html .= '<label><input type="checkbox" name="ohne_geheimnisse" value="1"'
+            . ($bedarf['geheimnisse'] ? '' : ' required') . '> Ohne Exportpasswort fortfahren – die genannten '
+            . 'Zugangsdaten werden geleert</label></fieldset>';
+        return $html;
     }
 
     /**
@@ -2716,19 +3294,21 @@ class MigrationController extends BaseController {
 
     /**
      * Liest ein Archiv in EINEM Durchlauf: database.sql durch den Prüfer
-     * (und, beim Anwenden, zugleich in die Zwischendatei), Uploads - beim
-     * Anwenden - in das Nebenverzeichnis. Mehrfache Einträge database.sql
-     * oder manifest.json werden abgewiesen: tar erlaubt sie, und dann sähen
-     * Vorschau und Anwenden womöglich verschiedene Einträge.
+     * (und, beim Anwenden, zugleich in die Zwischendatei), Uploads und
+     * Pferdefotos - beim Anwenden - in ihre Nebenverzeichnisse. Mehrfache
+     * Einträge database.sql oder manifest.json werden abgewiesen: tar erlaubt
+     * sie, und dann sähen Vorschau und Anwenden womöglich verschiedene
+     * Einträge.
      *
      * @param resource|null $zwischen
-     * @return array{uebersprungen:int, dateien:int}
+     * @return array{uebersprungen:int, dateien:int, fotos:int}
      */
-    private function leseArchiv(string $path, DumpPruefer $pruefer, $zwischen = null, ?string $uploadsNew = null): array {
-        $stand = ['sql' => 0, 'manifest' => 0, 'uebersprungen' => 0, 'dateien' => 0];
+    private function leseArchiv(string $path, DumpPruefer $pruefer, $zwischen = null, ?string $uploadsNew = null,
+                                ?string $horsesNew = null): array {
+        $stand = ['sql' => 0, 'manifest' => 0, 'uebersprungen' => 0, 'dateien' => 0, 'fotos' => 0];
         $reader = new TarReader($path);
         try {
-            $reader->each(function (string $name, int $size, callable $read) use (&$stand, $pruefer, $zwischen, $uploadsNew) {
+            $reader->each(function (string $name, int $size, callable $read) use (&$stand, $pruefer, $zwischen, $uploadsNew, $horsesNew) {
                 if ($name === 'database.sql') {
                     if (++$stand['sql'] > 1) {
                         throw new \RuntimeException('database.sql steht mehrfach im Archiv - so schreibt dieses Addon kein Archiv.');
@@ -2748,43 +3328,22 @@ class MigrationController extends BaseController {
                 if ($name === 'manifest.json' && ++$stand['manifest'] > 1) {
                     throw new \RuntimeException('manifest.json steht mehrfach im Archiv - so schreibt dieses Addon kein Archiv.');
                 }
-                if ($uploadsNew !== null && str_starts_with($name, 'uploads/')) {
-                    $rel = substr($name, strlen('uploads/'));
-                    // Pfadhärtung: keine Traversal, keine absoluten Pfade.
-                    if ($rel === '' || str_contains($rel, '..') || str_starts_with($rel, '/') || str_contains($rel, "\0")) {
-                        throw new \RuntimeException("Unzulässiger Pfad im Archiv: {$name}");
+                foreach ([['uploads/', $uploadsNew, 'dateien'], [self::PRAEFIX_FOTOS, $horsesNew, 'fotos']] as [$praefix, $basis, $zaehler]) {
+                    if ($basis === null || !str_starts_with($name, $praefix)) {
+                        continue;
                     }
-                    // ... und keine ausführbaren Dateien. Die Pfadhärtung
-                    // darüber prüfte, WOHIN geschrieben wird, aber nicht WAS -
-                    // und das Ziel ist am Ende public/uploads. Der Inhalt
-                    // stammt aus einer hochgeladenen Datei, das Recht dafür ist
-                    // an jede Gruppe vergebbar. Ohne diese Prüfung genügte ein
-                    // Archiv mit einer .php darin für Codeausführung.
-                    // Webserver-Steuerdateien werden verworfen, nicht
-                    // übernommen - der Ausführungsschutz des Zielverzeichnisses
-                    // darf nicht aus dem Archiv stammen. Er wird nach dem
-                    // Umschalten neu geschrieben.
-                    if (UploadNamePolicy::istWebserverSteuerdatei($rel)) {
+                    $rel = self::pruefeArchivPfad($name, $praefix);
+                    if ($rel === null) {
                         $stand['uebersprungen']++;
                         while ($read() !== '') { // Datenstrom verwerfen
                         }
                         return;
                     }
-                    UploadNamePolicy::assertAllowed($rel);
-
-                    $target = $uploadsNew . '/' . $rel;
-                    if (!is_dir(dirname($target))) {
-                        mkdir(dirname($target), 0755, true);
-                    }
-                    $out = fopen($target, 'wb');
-                    while (($chunk = $read()) !== '') {
-                        fwrite($out, $chunk);
-                    }
-                    fclose($out);
-                    $stand['dateien']++;
+                    self::schreibeEintrag($basis, $rel, $read);
+                    $stand[$zaehler]++;
                     return;
                 }
-                while ($read() !== '') { // manifest.json u. ä.: konsumieren
+                while ($read() !== '') { // manifest.json, geheimnisse.json u. ä.: konsumieren
                 }
             });
         } finally {
@@ -2793,7 +3352,72 @@ class MigrationController extends BaseController {
         if ($stand['sql'] === 0) {
             throw new \RuntimeException('database.sql fehlt im Archiv.');
         }
-        return ['uebersprungen' => $stand['uebersprungen'], 'dateien' => $stand['dateien']];
+        return ['uebersprungen' => $stand['uebersprungen'], 'dateien' => $stand['dateien'], 'fotos' => $stand['fotos']];
+    }
+
+    /**
+     * Der relative Pfad eines Archiveintrags unter $praefix - geprüft, bevor
+     * irgendetwas geschrieben wird. null heißt: still verwerfen.
+     *
+     * Pfadhärtung: keine Traversal, keine absoluten Pfade, kein NUL. Dann der
+     * Name (UploadNamePolicy): Die Pfadhärtung prüft, WOHIN geschrieben wird,
+     * aber nicht WAS - und das Ziel von uploads/ ist public/uploads. Der
+     * Inhalt stammt aus einer hochgeladenen Datei; ohne diese Prüfung genügte
+     * ein Archiv mit einer .php darin für Codeausführung.
+     *
+     * Verworfen (nicht abgebrochen) werden Webserver-Steuerdateien - der
+     * Ausführungsschutz des Ziels darf nicht aus dem Archiv stammen, er wird
+     * nach dem Umschalten neu geschrieben - und unter storage-horses/ jede
+     * Punktdatei: Der Kern liefert storage/horses/.gitkeep aus, ein fremd
+     * gebautes Archiv darf daran nicht scheitern, und das Ziel schreibt sie
+     * ohnehin nicht (Audit M26).
+     *
+     * @throws \RuntimeException bei unzulässigem Pfad oder Namen
+     */
+    private static function pruefeArchivPfad(string $name, string $praefix): ?string {
+        $rel = substr($name, strlen($praefix));
+        if ($rel === '' || str_contains($rel, '..') || str_starts_with($rel, '/') || str_contains($rel, "\0")) {
+            throw new \RuntimeException("Unzulässiger Pfad im Archiv: {$name}");
+        }
+        if (UploadNamePolicy::istWebserverSteuerdatei($rel)) {
+            return null;
+        }
+        if ($praefix === self::PRAEFIX_FOTOS && str_starts_with(basename($rel), '.')) {
+            return null;
+        }
+        UploadNamePolicy::assertAllowed($rel);
+        return $rel;
+    }
+
+    /**
+     * Schreibt einen Archiveintrag nach $basis/$rel - mit geprüften
+     * Rückgaben: Ein fwrite(), das auf voller Platte weniger schreibt, ergäbe
+     * sonst ein abgeschnittenes Bild, das als übernommen gälte.
+     *
+     * @param callable():string $read
+     */
+    private static function schreibeEintrag(string $basis, string $rel, callable $read): void {
+        $ziel = $basis . '/' . $rel;
+        $verzeichnis = dirname($ziel);
+        if (!is_dir($verzeichnis) && !mkdir($verzeichnis, 0755, true) && !is_dir($verzeichnis)) {
+            throw new \RuntimeException("Verzeichnis nicht anlegbar: {$rel}");
+        }
+        $out = fopen($ziel, 'wb');
+        if ($out === false) {
+            throw new \RuntimeException("Datei nicht schreibbar: {$rel}");
+        }
+        try {
+            while (($chunk = $read()) !== '') {
+                if (fwrite($out, $chunk) !== strlen($chunk)) {
+                    throw new \RuntimeException("Datei nicht vollständig geschrieben (Datenträger voll?): {$rel}");
+                }
+            }
+        } finally {
+            $geschlossen = fclose($out);
+        }
+        if (!$geschlossen) {
+            throw new \RuntimeException("Datei nicht abschließbar: {$rel}");
+        }
     }
 
     /**
@@ -2805,14 +3429,14 @@ class MigrationController extends BaseController {
      * @param array<int, string> $auswahl
      * @param array<string, array<int, string>> $fkKarte eingefroren
      * @param resource|null $zwischen
-     * @return array{befund:DumpBefund, problem:?string, hinweis:?string, stand:array{uebersprungen:int, dateien:int}}
+     * @return array{befund:DumpBefund, problem:?string, hinweis:?string, stand:array{uebersprungen:int, dateien:int, fotos:int}}
      */
     private function pruefeArchiv(string $path, array $manifest, array $auswahl, array $fkKarte, int $paketGrenze,
-                                  $zwischen = null, ?string $uploadsNew = null): array {
+                                  $zwischen = null, ?string $uploadsNew = null, ?string $horsesNew = null): array {
         $pruefer = new DumpPruefer($paketGrenze, Importregel::fuer($auswahl, $fkKarte));
-        $stand = ['uebersprungen' => 0, 'dateien' => 0];
+        $stand = ['uebersprungen' => 0, 'dateien' => 0, 'fotos' => 0];
         try {
-            $stand = $this->leseArchiv($path, $pruefer, $zwischen, $uploadsNew);
+            $stand = $this->leseArchiv($path, $pruefer, $zwischen, $uploadsNew, $horsesNew);
         } catch (\Throwable $e) {
             return [
                 'befund' => $pruefer->befund(),
@@ -3016,46 +3640,59 @@ class MigrationController extends BaseController {
     }
 
     private function readManifest(string $path): array {
-        $json = null;
-        $anzahl = ['manifest.json' => 0, 'database.sql' => 0];
+        return $this->leseKopf($path)['manifest'];
+    }
+
+    /**
+     * Liest in einem Durchlauf die kleinen Einträge des Archivs:
+     * manifest.json (Pflicht) und geheimnisse.json (optional, Audit M25),
+     * beide höchstens 1 MiB.
+     *
+     * Doppelte Einträge werden abgewiesen - auch database.sql: tar erlaubt
+     * sie, beim Lesen gewönne je nach Stelle der erste oder der letzte, und
+     * Vorschau und Anwenden sähen dann verschiedene Inhalte.
+     *
+     * @return array{manifest: array<string, mixed>, geheimnisse: ?string}
+     */
+    private function leseKopf(string $path): array {
+        $gelesen = ['manifest.json' => null, 'geheimnisse.json' => null];
+        $anzahl = ['manifest.json' => 0, 'database.sql' => 0, 'geheimnisse.json' => 0];
         $reader = new TarReader($path);
         try {
-            $reader->each(function (string $name, int $size, callable $read) use (&$json, &$anzahl) {
+            $reader->each(function (string $name, int $size, callable $read) use (&$gelesen, &$anzahl) {
                 if (isset($anzahl[$name])) {
                     $anzahl[$name]++;
                 }
+                $merken = array_key_exists($name, $gelesen) && $gelesen[$name] === null;
+                if ($merken && $size > self::MAX_KOPFEINTRAG) {
+                    throw new \RuntimeException("{$name} unplausibel groß.");
+                }
                 $data = '';
                 while (($chunk = $read()) !== '') {
-                    if ($json === null && $name === 'manifest.json') {
-                        if ($size > 1024 * 1024) {
-                            throw new \RuntimeException('manifest.json unplausibel groß.');
-                        }
+                    if ($merken) {
                         $data .= $chunk;
                     }
                 }
-                if ($name === 'manifest.json' && $json === null) {
-                    $json = $data;
+                if ($merken) {
+                    $gelesen[$name] = $data;
                 }
             });
         } finally {
             $reader->close();
         }
-        // Doppelte Einträge: tar erlaubt sie, beim Lesen gewönne je nach
-        // Stelle der erste oder der letzte - Vorschau und Anwenden sähen dann
-        // verschiedene Inhalte.
         foreach ($anzahl as $eintrag => $n) {
             if ($n > 1) {
                 throw new \RuntimeException("{$eintrag} steht mehrfach im Archiv - so schreibt dieses Addon kein Archiv.");
             }
         }
-        if ($json === null) {
+        if ($gelesen['manifest.json'] === null) {
             throw new \RuntimeException('manifest.json fehlt im Archiv.');
         }
-        $manifest = json_decode($json, true);
+        $manifest = json_decode($gelesen['manifest.json'], true);
         if (!is_array($manifest)) {
             throw new \RuntimeException('manifest.json ist kein gültiges JSON.');
         }
-        return $manifest;
+        return ['manifest' => $manifest, 'geheimnisse' => $gelesen['geheimnisse.json']];
     }
 
     // -- Import: Anwenden ---------------------------------------------------
@@ -3076,12 +3713,15 @@ class MigrationController extends BaseController {
             $this->fail('Archiv nicht gefunden.');
             return;
         }
+        // Unlesbare Archive (auch ein .tar.gz ohne zlib, Audit N22) enden
+        // hier mit einer Meldung, nicht mit einer Fehlerseite.
         try {
-            $manifest = $this->readManifest($path);
+            $kopf = $this->leseKopf($path);
         } catch (\Throwable $e) {
-            $this->fail('Import abgebrochen, nichts verändert: ' . $e->getMessage());
+            $this->fail('Archiv unlesbar, Import abgebrochen, nichts verändert: ' . $e->getMessage());
             return;
         }
+        $manifest = $kopf['manifest'];
         $local = $this->localInventory();
         $problems = $this->compatibilityProblems($manifest, $local);
         if ($problems) {
@@ -3116,9 +3756,15 @@ class MigrationController extends BaseController {
         //    im Webroot: Zwischen dem ersten geschriebenen Eintrag und dem
         //    Umschalten war jede Datei des Archivs unter ihrem eigenen Namen
         //    über den Webserver erreichbar - inklusive einer .php.
+        //
+        //    Die Pferdefotos (storage-horses/, Audit M26) gehen ebenso in ein
+        //    eigenes Nebenverzeichnis unter var/datenmigration.
         $uploadsNew = $this->stageDir() . '/uploads-neu';
+        $horsesNew = $this->stageDir() . '/horses-neu';
         $this->removeDir($uploadsNew);
+        $this->removeDir($horsesNew);
         mkdir($uploadsNew, 0755, true);
+        mkdir($horsesNew, 0750, true);
         $zwischenPfad = $this->stageDir() . '/.import-' . bin2hex(random_bytes(8)) . '.sql';
         register_shutdown_function(static function () use ($zwischenPfad): void {
             if (is_file($zwischenPfad)) {
@@ -3126,12 +3772,15 @@ class MigrationController extends BaseController {
             }
         });
         try {
-            $this->importiere($path, $manifest, $auswahl, $vollstaendig, $local, $fks, $fkKarte, $nullbar,
-                $paketGrenze, $zwischenPfad, $uploadsNew);
+            $this->importiere($path, $manifest, $kopf['geheimnisse'], $auswahl, $vollstaendig, $local, $fks, $fkKarte,
+                $nullbar, $paketGrenze, $zwischenPfad, $uploadsNew, $horsesNew);
         } finally {
             if (is_file($zwischenPfad)) {
                 @unlink($zwischenPfad);
             }
+            // Auf jedem Weg - auch nach fail() - verschwinden die Nebenverzeichnisse.
+            $this->removeDir($uploadsNew);
+            $this->removeDir($horsesNew);
         }
     }
 
@@ -3147,9 +3796,9 @@ class MigrationController extends BaseController {
      * @param array<string, array<int, string>> $fkKarte
      * @param array<string, array<string, bool>> $nullbar
      */
-    private function importiere(string $path, array $manifest, array $auswahl, bool $vollstaendig, array $local,
-                                array $fks, array $fkKarte, array $nullbar, int $paketGrenze,
-                                string $zwischenPfad, string $uploadsNew): void {
+    private function importiere(string $path, array $manifest, ?string $geheimnisDatei, array $auswahl,
+                                bool $vollstaendig, array $local, array $fks, array $fkKarte, array $nullbar,
+                                int $paketGrenze, string $zwischenPfad, string $uploadsNew, string $horsesNew): void {
         $zh = @fopen($zwischenPfad, 'xb');
         if ($zh === false) {
             $this->removeDir($uploadsNew);
@@ -3158,7 +3807,7 @@ class MigrationController extends BaseController {
         }
         @chmod($zwischenPfad, 0600);
         try {
-            $pruefung = $this->pruefeArchiv($path, $manifest, $auswahl, $fkKarte, $paketGrenze, $zh, $uploadsNew);
+            $pruefung = $this->pruefeArchiv($path, $manifest, $auswahl, $fkKarte, $paketGrenze, $zh, $uploadsNew, $horsesNew);
         } finally {
             $geschlossen = fclose($zh);
         }
@@ -3182,6 +3831,36 @@ class MigrationController extends BaseController {
             $this->fail('Import abgebrochen, nichts verändert: Abhängige Zeilen dieser Instanz verweisen auf Tabellen, '
                 . 'die das Archiv ersetzt. Bitte in der Vorschau „trennen“ oder „stehen lassen“ wählen.');
             return;
+        }
+
+        // 2b. Anderer APP_KEY (Audit M25): Exportpasswort oder ausdrückliche
+        //     Zustimmung - geprüft, bevor die Sicherung entsteht. Ein falsches
+        //     Passwort ändert nichts.
+        $bedarf = self::schluesselBedarf($manifest, $befund);
+        $geheimnisse = null;
+        if ($bedarf['lage'] === 'abweichend' && $bedarf['betroffen']) {
+            $passwort = (string) ($_POST['export_passwort'] ?? '');
+            $ohne = ($_POST['ohne_geheimnisse'] ?? '') === '1';
+            if ($bedarf['geheimnisse'] && $geheimnisDatei === null) {
+                $this->fail('Import abgebrochen, nichts verändert: Laut Manifest enthält das Archiv verschlüsselte '
+                    . 'Zugangsdaten (geheimnisse.json), die Datei fehlt aber.');
+                return;
+            }
+            if ($bedarf['geheimnisse'] && $passwort !== '') {
+                try {
+                    $geheimnisse = Geheimnisumschlag::entpacken((string) $geheimnisDatei, $passwort);
+                } catch (\Throwable $e) {
+                    $this->fail('Import abgebrochen, nichts verändert: ' . $e->getMessage());
+                    return;
+                } finally {
+                    unset($passwort);
+                }
+            } elseif (!$ohne) {
+                $this->fail('Import abgebrochen, nichts verändert: Diese Instanz hat einen anderen APP_KEY als die '
+                    . 'Quelle. Bitte in der Vorschau das Exportpasswort angeben oder bestätigen, dass die nicht '
+                    . 'entschlüsselbaren Zugangsdaten geleert werden.');
+                return;
+            }
         }
 
         // 3. Rückweg sichern: Dump der Zielinstanz VOR dem Import.
@@ -3255,6 +3934,8 @@ class MigrationController extends BaseController {
 
         $benutzerErsetzt = self::benutzerbezogenErsetzt($befund, $fkKarte);
         $getrennt = [];
+        $schluesselBericht = [];
+        $unlesbar = 0;
         try {
             $imp = $this->importVerbindung();
 
@@ -3280,12 +3961,18 @@ class MigrationController extends BaseController {
                 $getrennt = $this->trenneAbhaengige($imp, $risiken['trennbar']);
             }
 
+            // Zugangsdaten an den APP_KEY dieser Instanz angleichen (M25) -
+            // noch unter Wartungsmodus und im Rückweg-try.
+            $schluesselBericht = $this->schluesselAngleichen($imp, $bedarf, $geheimnisse);
+            $unlesbar = $this->zaehleUnlesbare($imp, $befund);
+
             if ($benutzerErsetzt) {
                 $this->beendeAlleSitzungen($imp, $maxVorher);
             }
         } catch (\Throwable $e) {
             $imp = null;
             $this->removeDir($uploadsNew);
+            $this->removeDir($horsesNew);
             @unlink($zwischenPfad);
             $rueckwegOk = $this->rueckwegEinspielen($backupName, $e);
             Wartung::nachFehlschlag(
@@ -3304,10 +3991,10 @@ class MigrationController extends BaseController {
         \App\Service\Maintenance::disable();
         @unlink($zwischenPfad);
 
-        // 6. Uploads.
+        // 6. Dateien: public/uploads, storage/horses, Schutzdateien.
         //
-        // Drei Fälle, und der erste ist der, wegen dem dieser Block seit #121
-        // überhaupt eine Fallunterscheidung hat:
+        // Für public/uploads drei Fälle, und der erste ist der, wegen dem
+        // dieser Block seit #121 überhaupt eine Fallunterscheidung hat:
         //
         //   (a) Das Archiv bringt keine Dateien mit (Gruppe "Dateien" war beim
         //       Export nicht angehakt). Dann wird public/uploads NICHT
@@ -3321,43 +4008,85 @@ class MigrationController extends BaseController {
         //       nach var/datenmigration/ersetzte-dateien-…, damit auch dieser
         //       Weg einen Rückweg hat.
         //
-        // Ob Uploads angefasst werden, entscheidet der TATSÄCHLICHE Inhalt des
+        // storage/horses (Audit M26) wird nie als Verzeichnis getauscht -
+        // im Docker-Setup ist es ein eigenes Volume, und rename() eines
+        // Mountpoints scheitert. Stattdessen dateiweise (ersetzeInhalt()).
+        //
+        // Ob Dateien angefasst werden, entscheidet der TATSÄCHLICHE Inhalt des
         // Archivs, nicht das Manifest. Ein Manifest ist eine Behauptung; das
         // Verzeichnis public/uploads zu leeren, weil in einer JSON-Datei
         // "dateien" stand, wäre die teuerste Art, ihr zu glauben.
+        //
+        // Die Datenbank ist hier schon eingespielt. Ein Fehler in dieser
+        // Phase wird deshalb gemeldet und protokolliert (gemischter Stand,
+        // Rückweg über die Sicherungen), statt als Fehlerseite ohne Hinweis
+        // zu enden.
         $dateienImArchiv = $pruefung['stand']['dateien'];
+        $fotosImArchiv = $pruefung['stand']['fotos'];
         $uebersprungen = $pruefung['stand']['uebersprungen'];
         $dateiBericht = 'Uploads unverändert';
-        if ($dateienImArchiv === 0) {
-            $this->removeDir($uploadsNew);
-        } elseif ($vollstaendig) {
-            $uploadsOld = $this->uploadsDir() . '.import-alt';
-            $this->removeDir($uploadsOld);
-            if (is_dir($this->uploadsDir())) {
-                rename($this->uploadsDir(), $uploadsOld);
-            }
-            // rename() über Verzeichnisgrenzen hinweg schlägt fehl, wenn Staging
-            // und Ziel auf verschiedenen Dateisystemen liegen - seit das Staging
-            // in var/ liegt, ist das kein theoretischer Fall mehr (eigenes Volume
-            // für uploads, siehe docker-compose.yml des Kerns). Deshalb mit
-            // Kopier-Rückfall statt eines stillen false.
-            if (!@rename($uploadsNew, $this->uploadsDir())) {
-                $this->copyDir($uploadsNew, $this->uploadsDir());
+        $fotoBericht = 'Pferdefotos unverändert';
+        $schutzProbleme = [];
+        $ersetztDir = $this->stageDir() . '/ersetzte-dateien-' . gmdate('Ymd-His');
+        try {
+            if ($dateienImArchiv === 0) {
                 $this->removeDir($uploadsNew);
+            } elseif ($vollstaendig) {
+                $uploadsOld = $this->uploadsDir() . '.import-alt';
+                $this->removeDir($uploadsOld);
+                if (is_dir($this->uploadsDir())) {
+                    rename($this->uploadsDir(), $uploadsOld);
+                }
+                // rename() über Verzeichnisgrenzen hinweg schlägt fehl, wenn
+                // Staging und Ziel auf verschiedenen Dateisystemen liegen -
+                // seit das Staging in var/ liegt, ist das kein theoretischer
+                // Fall mehr (eigenes Volume für uploads, siehe
+                // docker-compose.yml des Kerns). Deshalb mit Kopier-Rückfall
+                // statt eines stillen false.
+                if (!@rename($uploadsNew, $this->uploadsDir())) {
+                    $this->copyDir($uploadsNew, $this->uploadsDir());
+                    $this->removeDir($uploadsNew);
+                }
+                $dateiBericht = $dateienImArchiv . ' Datei(en) ersetzt (alter Stand: public/uploads.import-alt)';
+            } else {
+                $zusammen = $this->mergeUploads($uploadsNew, $this->uploadsDir(), $ersetztDir);
+                $this->removeDir($uploadsNew);
+                $dateiBericht = $zusammen['neu'] . ' Datei(en) neu, ' . $zusammen['ersetzt'] . ' überschrieben'
+                    . ($zusammen['ersetzt'] > 0 ? ' (Originale: ' . basename($ersetztDir) . ')' : '');
             }
-            $dateiBericht = $dateienImArchiv . ' Datei(en) ersetzt (alter Stand: public/uploads.import-alt)';
-        } else {
-            $ersetztDir = $this->stageDir() . '/ersetzte-dateien-' . gmdate('Ymd-His');
-            $zusammen = $this->mergeUploads($uploadsNew, $this->uploadsDir(), $ersetztDir);
+
+            if ($fotosImArchiv > 0) {
+                $fotos = $this->ersetzeInhalt($horsesNew, $this->horsesDir(), $ersetztDir . '/storage-horses', $vollstaendig);
+                $fotoBericht = $fotosImArchiv . ' Pferdefoto(s): ' . $fotos['neu'] . ' neu, ' . $fotos['ersetzt']
+                    . ' überschrieben' . ($vollstaendig ? ', ' . $fotos['entfernt'] . ' nur hier vorhandene entfernt' : '')
+                    . ($fotos['ersetzt'] + $fotos['entfernt'] > 0
+                        ? ' (gesichert: ' . basename($ersetztDir) . '/storage-horses)' : '');
+            }
+            $this->removeDir($horsesNew);
+        } catch (\Throwable $e) {
             $this->removeDir($uploadsNew);
-            $dateiBericht = $zusammen['neu'] . ' Datei(en) neu, ' . $zusammen['ersetzt'] . ' überschrieben'
-                . ($zusammen['ersetzt'] > 0 ? ' (Originale: ' . basename($ersetztDir) . ')' : '');
+            $this->removeDir($horsesNew);
+            $schutzProbleme = $this->restoreUploadsProtection();
+            error_log('Datenmigration: Dateiphase fehlgeschlagen - ' . $e->getMessage());
+            PluginAudit::log(
+                'datenmigration',
+                'Import: Dateien unvollständig',
+                basename($path),
+                'Datenbank eingespielt (Sicherung: ' . $backupName . '), Dateiphase fehlgeschlagen: ' . $e->getMessage()
+                    . ($schutzProbleme !== [] ? ', Schutzdateien: ' . implode('; ', $schutzProbleme) : '')
+            );
+            if ($benutzerErsetzt) {
+                session_destroy();
+            }
+            $this->fail('Datenbank importiert, Dateien unvollständig – ' . $e->getMessage() . '. Sicherungen unter '
+                . 'var/datenmigration/ (' . $backupName . ', ersetzte-dateien-…) und public/uploads.import-alt.');
+            return;
         }
 
         // Ausführungsschutz wiederherstellen - der Verzeichnistausch hat die
-        // .htaccess des Kerns mitgenommen. Beim Zusammenführen ist sie noch da;
-        // die Methode merkt das selbst und tut dann nichts.
-        $this->restoreUploadsProtection();
+        // Schutzdateien des Kerns mitgenommen (Audit N1: alle, nicht nur die
+        // im Wurzelverzeichnis). Was noch da ist, bleibt unberührt.
+        $schutzProbleme = $this->restoreUploadsProtection();
 
         // Die Audit-Zeile nennt, was TATSÄCHLICH ersetzt wurde - die geprüfte
         // Liste, nicht die Behauptung des Manifests.
@@ -3380,7 +4109,12 @@ class MigrationController extends BaseController {
                 . ($benutzerErsetzt ? ', alle Sitzungen und API-Schlüssel beendet' : '')
                 . ', Sicherung: ' . $backupName
                 . ', ' . $dateiBericht
-                . ($uebersprungen > 0 ? ', ' . $uebersprungen . ' Webserver-Steuerdatei(en) verworfen' : '')
+                . ', ' . $fotoBericht
+                . ($uebersprungen > 0 ? ', ' . $uebersprungen . ' Steuer-/Punktdatei(en) verworfen' : '')
+                . ', APP_KEY: ' . $bedarf['lage']
+                . ($schluesselBericht !== [] ? ' (' . implode(', ', $schluesselBericht) . ')' : '')
+                . ($unlesbar > 0 ? ', ' . $unlesbar . ' verschlüsselte(r) Wert(e) hier nicht entschlüsselbar' : '')
+                . ($schutzProbleme !== [] ? ', Schutzdateien NICHT wiederhergestellt: ' . implode('; ', $schutzProbleme) : '')
         );
 
         // 7. Eigene Sitzung beenden - aber nur, wenn tatsächlich eine
@@ -3394,7 +4128,8 @@ class MigrationController extends BaseController {
             header('Location: /login?import=fertig');
             exit;
         }
-        header('Location: /plugin/datenmigration/uebersicht?hinweis=importiert');
+        $zusatz = ($unlesbar > 0 ? '&unlesbar=' . $unlesbar : '') . ($schutzProbleme !== [] ? '&schutz=fehlt' : '');
+        header('Location: /plugin/datenmigration/uebersicht?hinweis=importiert' . $zusatz);
         exit;
     }
 
@@ -3696,41 +4431,231 @@ class MigrationController extends BaseController {
     }
 
     /**
-     * Schreibt den Ausführungsschutz für public/uploads neu - unabhängig
-     * davon, was im Archiv stand.
+     * Schreibt die Schutzdateien unter public/uploads neu, wo sie fehlen -
+     * unabhängig davon, was im Archiv stand (Audit N1).
      *
      * Der Verzeichnistausch ersetzt public/uploads VOLLSTÄNDIG, also auch die
-     * dort mitgelieferte .htaccess des Kerns, die PHP in diesem Verzeichnis
-     * abschaltet. Ein Archiv ohne diese Datei entfernte den Schutz still; ein
-     * Archiv MIT einer eigenen Fassung hätte ihn ersetzt. Beides ist jetzt
-     * ausgeschlossen: Punktdateien kommen gar nicht erst durch (siehe oben),
-     * und die Schutzdatei wird nach dem Umschalten aus dem Kern-Bestand
-     * zurückgeschrieben.
+     * dort mitgelieferten .htaccess-Dateien des Kerns: die im Wurzelverzeichnis
+     * (kein PHP) und seit Kern 0.8 die unter horses/ (keine statische
+     * Auslieferung von Pferdefotos, Framework#366). Aus dem Archiv kommen sie
+     * nie - Steuerdateien werden beim Einlesen verworfen.
+     *
+     * Vorlage ist, wo vorhanden, die Datei aus public/uploads.import-alt -
+     * also der Stand DIESER Instanz vor dem Import (reguläre Datei, kein
+     * Symlink) -, sonst die eingebaute Mindestfassung. Vorhandene Dateien
+     * werden nie überschrieben. Ein Fehlschlag bricht nichts mehr ab (der
+     * Import ist durch), wird aber gemeldet.
+     *
+     * @return array<int, string> Probleme (leer = alles steht)
      */
-    private function restoreUploadsProtection(): void {
-        $ziel = $this->uploadsDir() . '/.htaccess';
-        if (is_file($ziel)) {
+    private function restoreUploadsProtection(): array {
+        $probleme = [];
+        foreach (self::SCHUTZDATEIEN as $rel => $fassung) {
+            $ziel = $this->uploadsDir() . '/' . $rel;
+            if (is_file($ziel)) {
+                continue;
+            }
+            $verzeichnis = dirname($ziel);
+            if (!is_dir($verzeichnis) && !@mkdir($verzeichnis, 0755, true) && !is_dir($verzeichnis)) {
+                $probleme[] = "public/uploads/{$rel}: Verzeichnis nicht anlegbar";
+                error_log("Datenmigration: Schutzdatei public/uploads/{$rel} nicht wiederhergestellt (Verzeichnis)");
+                continue;
+            }
+            $vorlage = $this->uploadsDir() . '.import-alt/' . $rel;
+            $inhalt = is_file($vorlage) && !is_link($vorlage) ? @file_get_contents($vorlage) : false;
+            if ($inhalt === false) {
+                $inhalt = $fassung;
+            }
+            if (@file_put_contents($ziel, $inhalt) !== strlen($inhalt)) {
+                $probleme[] = "public/uploads/{$rel}: nicht schreibbar";
+                error_log("Datenmigration: Schutzdatei public/uploads/{$rel} nicht wiederhergestellt");
+            }
+        }
+        return $probleme;
+    }
+
+    /**
+     * Ersetzt den INHALT von $ziel durch den von $quelle - dateiweise, das
+     * Verzeichnis selbst bleibt stehen (Audit M26).
+     *
+     * storage/horses ist im Docker-Setup des Kerns ein eigenes Volume
+     * (horses_data): rename() des Verzeichnisses scheiterte am Mountpoint,
+     * und eine Kopie daneben läge im Container-Dateisystem und wäre nach
+     * einem Neustart weg. Deshalb Datei für Datei (rename, sonst copy +
+     * unlink), und jedes überschriebene oder entfernte Original wandert
+     * vorher nach $sicherung - das ist der Rückweg.
+     *
+     * $vollstaendig: Zusätzlich wandern Dateien, die nur das Ziel hat, in die
+     * Sicherung - der Inhalt entspricht danach dem Archiv. Punktdateien
+     * (.gitkeep) bleiben stehen; das Archiv bringt keine mit.
+     *
+     * @return array{neu:int, ersetzt:int, entfernt:int}
+     */
+    private function ersetzeInhalt(string $quelle, string $ziel, string $sicherung, bool $vollstaendig): array {
+        $bilanz = ['neu' => 0, 'ersetzt' => 0, 'entfernt' => 0];
+        if (!is_dir($ziel) && !mkdir($ziel, 0755, true) && !is_dir($ziel)) {
+            throw new \RuntimeException("Verzeichnis konnte nicht angelegt werden: {$ziel}");
+        }
+        $neu = $this->collectFiles($quelle);
+
+        if ($vollstaendig) {
+            foreach ($this->collectFiles($ziel, true) as $rel => $abs) {
+                if (!isset($neu[$rel])) {
+                    self::verschiebe($abs, $sicherung . '/' . $rel);
+                    $bilanz['entfernt']++;
+                }
+            }
+        }
+        foreach ($neu as $rel => $abs) {
+            $zielPfad = $ziel . '/' . $rel;
+            if (is_file($zielPfad)) {
+                self::verschiebe($zielPfad, $sicherung . '/' . $rel);
+                $bilanz['ersetzt']++;
+            } else {
+                $bilanz['neu']++;
+            }
+            self::verschiebe($abs, $zielPfad);
+        }
+        return $bilanz;
+    }
+
+    /** rename(), über Dateisystemgrenzen hinweg copy + unlink. */
+    private static function verschiebe(string $von, string $nach): void {
+        $verzeichnis = dirname($nach);
+        if (!is_dir($verzeichnis) && !mkdir($verzeichnis, 0750, true) && !is_dir($verzeichnis)) {
+            throw new \RuntimeException("Verzeichnis nicht anlegbar: {$verzeichnis}");
+        }
+        if (@rename($von, $nach)) {
             return;
         }
+        if (!copy($von, $nach) || !unlink($von)) {
+            throw new \RuntimeException("Datei nicht verschiebbar: {$von}");
+        }
+    }
 
-        // Bevorzugt die Fassung, die im Kern mitgeliefert wird - sie ist die
-        // gepflegte Quelle. Nur wenn sie fehlt (etwa weil das Verzeichnis
-        // gerade erst entstanden ist), greift die eingebaute Mindestfassung.
-        $vorlage = $this->rootDir() . '/public/uploads.import-alt/.htaccess';
-        if (is_file($vorlage)) {
-            copy($vorlage, $ziel);
-            return;
+    /**
+     * Gleicht die Zugangsdaten an den APP_KEY dieser Instanz an (Audit M25) -
+     * auf der Importverbindung, unter Wartungsmodus, nach dem Dump. Nur bei
+     * abweichendem Schlüssel.
+     *
+     * Angefasst wird ein Wert nur, wenn er wie ein Crypto-Chiffrat aussieht
+     * und sich hier tatsächlich NICHT entschlüsseln lässt
+     * (istFremdesChiffrat()). Damit kann weder ein manipuliertes Manifest
+     * eine Klartext-Einstellung wie site_name leeren - "nicht
+     * entschlüsselbar" allein träfe jeden Klartext -, noch eine
+     * geheimnisse.json einen lesbaren Wert überschreiben oder einem Konto
+     * ohne TOTP eines unterschieben.
+     *
+     *   settings mit Exportpasswort: mit dem APP_KEY des Ziels neu verschlüsselt.
+     *   settings ohne:               geleert (nach ausdrücklicher Zustimmung).
+     *   users.totp_secret mit:       neu verschlüsselt.
+     *   users.totp_secret ohne:      bleibt stehen - Leeren schaltete den
+     *                                zweiten Faktor still ab (fail-open);
+     *                                unlesbar sperrt er dagegen, bis
+     *                                Backup-Code oder Admin-Reset helfen.
+     *   user_passkeys:               bleiben stehen (Handle = HMAC(APP_KEY)),
+     *                                werden nur gezählt - aus demselben Grund.
+     *
+     * @param array{lage:string, settings:array<int, string>, totp:int, passkeys:int, geheimnisse:bool, betroffen:bool} $bedarf
+     * @param array{settings: array<string, string>, users_totp: array<int, string>}|null $geheimnisse
+     * @return array<int, string> Bericht fürs Audit
+     */
+    private function schluesselAngleichen(PDO $db, array $bedarf, ?array $geheimnisse): array {
+        if ($bedarf['lage'] !== 'abweichend' || !$bedarf['betroffen']) {
+            return [];
+        }
+        $lesen = $db->prepare('SELECT setting_value FROM settings WHERE setting_key = ?');
+        $setzen = $db->prepare('UPDATE settings SET setting_value = ? WHERE setting_key = ?');
+        $unlesbar = static fn(mixed $wert): bool => self::istFremdesChiffrat($wert);
+
+        $neu = 0;
+        $geleert = 0;
+        $namen = $bedarf['settings'];
+        if ($geheimnisse !== null) {
+            foreach ($geheimnisse['settings'] as $name => $klar) {
+                if (!in_array($name, $namen, true)) {
+                    continue; // nur, was der Dump tatsächlich ersetzt hat
+                }
+                $lesen->execute([$name]);
+                if ($unlesbar($lesen->fetchColumn())) {
+                    $setzen->execute([Crypto::encrypt($klar), $name]);
+                    $neu++;
+                }
+            }
+        } else {
+            foreach ($namen as $name) {
+                $lesen->execute([$name]);
+                if ($unlesbar($lesen->fetchColumn())) {
+                    $setzen->execute(['', $name]);
+                    $geleert++;
+                }
+            }
         }
 
-        file_put_contents($ziel, <<<'HTACCESS'
-        # Wiederhergestellt nach einem Datenmigrations-Import.
-        # Kein PHP in diesem Verzeichnis - hier liegen ausschliesslich Daten.
-        <FilesMatch "\.(php|phtml|php[0-9]|phar|pl|py|cgi|sh)$">
-            Require all denied
-        </FilesMatch>
-        Options -Indexes -ExecCGI
-        AddType text/plain .php .phtml .phar
-        HTACCESS);
+        $totpNeu = 0;
+        if ($geheimnisse !== null && $bedarf['totp'] > 0) {
+            $totpLesen = $db->prepare('SELECT totp_secret FROM users WHERE id = ?');
+            $totpSetzen = $db->prepare('UPDATE users SET totp_secret = ? WHERE id = ?');
+            foreach ($geheimnisse['users_totp'] as $id => $klar) {
+                $totpLesen->execute([$id]);
+                if ($unlesbar($totpLesen->fetchColumn())) {
+                    $totpSetzen->execute([Crypto::encrypt($klar), $id]);
+                    $totpNeu++;
+                }
+            }
+        }
+
+        $bericht = [];
+        if ($neu > 0 || $totpNeu > 0) {
+            $bericht[] = 'neu verschlüsselt: ' . $neu . ' Einstellung(en), ' . $totpNeu . ' TOTP-Geheimnis(se)';
+        }
+        if ($geleert > 0) {
+            $bericht[] = 'geleert: ' . $geleert . ' Einstellung(en)';
+        }
+        if ($geheimnisse === null && $bedarf['totp'] > 0) {
+            $bericht[] = $bedarf['totp'] . ' TOTP-Geheimnis(se) unlesbar stehen gelassen';
+        }
+        if ($bedarf['passkeys'] > 0) {
+            $bericht[] = $bedarf['passkeys'] . ' Passkey(s) betroffen (neu zu registrieren)';
+        }
+        return $bericht;
+    }
+
+    /**
+     * Ein Wert, der wie ein Crypto-Chiffrat aussieht - striktes base64 und
+     * mindestens IV + Tag lang (12 + 16 Byte) -, sich mit dem APP_KEY dieser
+     * Instanz aber nicht entschlüsseln lässt. Klartext (Seitenname, Farben,
+     * ein TOTP-Altwert in base32 von üblicher Länge) fällt nicht darunter.
+     */
+    private static function istFremdesChiffrat(mixed $wert): bool {
+        if (!is_string($wert) || $wert === '') {
+            return false;
+        }
+        $roh = base64_decode($wert, true);
+        return $roh !== false && strlen($roh) >= 28 && Crypto::decrypt($wert) === null;
+    }
+
+    /**
+     * Wie viele eingespielte Werte sind fremde Chiffrate (siehe
+     * istFremdesChiffrat())? Nur ersetzte Tabellen (settings, users).
+     * Gezählt wird nur - geleert wird hier nichts; die Zahl steht im Audit
+     * und in der Abschlussmeldung.
+     */
+    private function zaehleUnlesbare(PDO $db, DumpBefund $befund): int {
+        $ersetzt = array_flip($befund->ersetzt());
+        $werte = [];
+        try {
+            if (isset($ersetzt['settings'])) {
+                $werte = array_merge($werte, $db->query('SELECT setting_value FROM settings')->fetchAll(PDO::FETCH_COLUMN));
+            }
+            if (isset($ersetzt['users'])) {
+                $werte = array_merge($werte, $db->query('SELECT totp_secret FROM users WHERE totp_secret IS NOT NULL')->fetchAll(PDO::FETCH_COLUMN));
+            }
+            return count(array_filter($werte, static fn(mixed $w): bool => self::istFremdesChiffrat($w)));
+        } catch (\Throwable $e) {
+            // Ohne APP_KEY (Crypto wirft) oder ohne Tabelle: nichts zu zählen.
+            return 0;
+        }
     }
 
     /**

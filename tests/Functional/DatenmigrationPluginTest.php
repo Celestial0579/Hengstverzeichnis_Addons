@@ -8,6 +8,7 @@ use App\Database;
 require_once __DIR__ . '/../../plugins/datenmigration/Plugin.php';
 
 use App\Security\ApiKey;
+use App\Security\Crypto;
 use App\Service\DatabaseDumper;
 use Plugin\Datenmigration\DumpPruefer;
 use Plugin\Datenmigration\Exportauswahl;
@@ -54,9 +55,10 @@ class DatenmigrationPluginTest extends FunctionalTestCase {
      * zurückgemeldeten Namen ab.
      *
      * @param array<int, string> $gruppen
+     * @param array<string, string> $zusatz weitere Formularfelder (Exportpasswort)
      * @return array{name:string, body:string}
      */
-    private function erstelleArchiv(\Tests\Support\HttpClient $admin, array $gruppen): array {
+    private function erstelleArchiv(\Tests\Support\HttpClient $admin, array $gruppen, array $zusatz = []): array {
         $form = $admin->get('/plugin/datenmigration/export');
         $this->assertSame(200, $form->statusCode);
         $antwort = $admin->post('/plugin/datenmigration/export', [
@@ -65,7 +67,7 @@ class DatenmigrationPluginTest extends FunctionalTestCase {
             // Fehlende Gegenstücke werden in erstelleArchiv() bewusst
             // übergangen - die Warnseite hat einen eigenen Test.
             'trotzdem' => '1',
-        ]);
+        ] + $zusatz);
         $this->assertSame(200, $antwort->statusCode, "Export fehlgeschlagen, Body: {$antwort->body}");
         $disposition = (string) $antwort->header('Content-Disposition');
         $this->assertStringContainsString('attachment', $disposition);
@@ -84,6 +86,12 @@ class DatenmigrationPluginTest extends FunctionalTestCase {
     /** @var array<int, string> Dateien, die nach dem Test verschwinden sollen. */
     private array $aufzuraeumen = [];
 
+    /** @var array<string, string|null> Datei => Inhalt vor dem Test (null = gab es nicht) */
+    private array $wiederherstellen = [];
+
+    /** Ursprünglicher settings-Wert, falls ein Test ihn setzt: [Schlüssel => Wert|null]. */
+    private array $einstellungenVorher = [];
+
     protected function tearDown(): void {
         foreach ($this->aufzuraeumen as $datei) {
             if (is_file($datei)) {
@@ -91,7 +99,42 @@ class DatenmigrationPluginTest extends FunctionalTestCase {
             }
         }
         $this->aufzuraeumen = [];
+        foreach ($this->wiederherstellen as $datei => $inhalt) {
+            if ($inhalt === null) {
+                @unlink($datei);
+            } else {
+                if (!is_dir(dirname($datei))) {
+                    mkdir(dirname($datei), 0755, true);
+                }
+                file_put_contents($datei, $inhalt);
+            }
+        }
+        $this->wiederherstellen = [];
+        foreach ($this->einstellungenVorher as $schluessel => $wert) {
+            $db = Database::getInstance();
+            if ($wert === null) {
+                $db->prepare('DELETE FROM settings WHERE setting_key = ?')->execute([$schluessel]);
+            } else {
+                $db->prepare('INSERT INTO settings (setting_key, setting_value) VALUES (?, ?) '
+                    . 'ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)')->execute([$schluessel, $wert]);
+            }
+        }
+        $this->einstellungenVorher = [];
+        foreach (glob($this->stageDir() . '/ersetzte-dateien-*') ?: [] as $d) {
+            exec('rm -rf ' . escapeshellarg($d));
+        }
+        exec('rm -rf ' . escapeshellarg($this->frameworkRoot() . '/public/uploads.import-alt'));
+        foreach ($this->sicherungen() as $b) {
+            @unlink($b);
+        }
         parent::tearDown();
+    }
+
+    /** Merkt den Stand einer Datei, damit tearDown() ihn zurückschreibt. */
+    private function merkeDatei(string $datei): void {
+        if (!array_key_exists($datei, $this->wiederherstellen)) {
+            $this->wiederherstellen[$datei] = is_file($datei) ? (string) file_get_contents($datei) : null;
+        }
     }
 
     /**
@@ -153,6 +196,14 @@ class DatenmigrationPluginTest extends FunctionalTestCase {
         $uploadRel = "horses/migrationstest-{$unique}.txt";
         $uploadAbs = $this->frameworkRoot() . '/public/uploads/' . $uploadRel;
         file_put_contents($uploadAbs, "upload-inhalt-{$unique}");
+        $this->aufzuraeumen[] = $uploadAbs;
+
+        // Audit N1: Die Schutzdatei unter horses/ steht vor dem Import mit
+        // einem erkennbaren Inhalt - nach dem Verzeichnistausch muss genau
+        // dieser Stand der Zielinstanz zurück sein.
+        $horsesSchutz = $this->frameworkRoot() . '/public/uploads/horses/.htaccess';
+        $this->merkeDatei($horsesSchutz);
+        file_put_contents($horsesSchutz, "# Stand der Zielinstanz {$unique}\nRequire all denied\n");
 
         // Das Auswahlformular: Vorgabe ist "alles außer Benutzer" - genau
         // dieser Haken darf nicht vorbelegt sein, sonst ist der Vollexport
@@ -183,7 +234,7 @@ class DatenmigrationPluginTest extends FunctionalTestCase {
         $this->assertArrayHasKey('uploads/' . $uploadRel, $entries);
         $manifest = json_decode($entries['manifest.json'], true);
         $this->assertIsArray($manifest);
-        $this->assertSame(2, $manifest['format']);
+        $this->assertSame(3, $manifest['format']);
         $this->assertTrue($manifest['vollstaendig']);
         // CORE_VERSION ist nur im App-Subprozess definiert; dass die Version
         // zur Zielinstanz passt, weist die Vorschau unten nach (kein
@@ -230,6 +281,12 @@ class DatenmigrationPluginTest extends FunctionalTestCase {
         $this->assertSame(0, (int) $gone, 'Verfälschter Stand hat den Import überlebt');
         $this->assertTrue(file_exists($uploadAbs), 'Upload-Datei nach Import nicht wiederhergestellt');
         $this->assertSame("upload-inhalt-{$unique}", file_get_contents($uploadAbs));
+
+        // Audit N1: ALLE Schutzdateien stehen wieder, horses/.htaccess mit dem
+        // Stand der Zielinstanz vor dem Import (aus public/uploads.import-alt).
+        $this->assertFileExists($this->frameworkRoot() . '/public/uploads/.htaccess');
+        $this->assertFileExists($horsesSchutz, 'public/uploads/horses/.htaccess fehlt nach dem Vollimport');
+        $this->assertSame("# Stand der Zielinstanz {$unique}\nRequire all denied\n", file_get_contents($horsesSchutz));
 
         // Sicherungs-Dump wurde vor dem Anwenden geschrieben.
         $backups = glob($stageDir . '/sicherung-vor-import-*') ?: [];
@@ -415,7 +472,7 @@ class DatenmigrationPluginTest extends FunctionalTestCase {
         $entries = $this->archivEintraege($pfad);
 
         $manifest = json_decode($entries['manifest.json'], true);
-        $this->assertSame(2, $manifest['format']);
+        $this->assertSame(3, $manifest['format']);
         $this->assertFalse($manifest['vollstaendig']);
         $this->assertSame(['pferde', 'kontakte'], $manifest['auswahl']);
         $this->assertArrayHasKey('horses', $manifest['tables']);
@@ -592,8 +649,10 @@ class DatenmigrationPluginTest extends FunctionalTestCase {
         $this->assertTrue(file_exists($nurZiel), 'Der Teilimport hat eine Datei gelöscht, die nur das Ziel hatte');
         $this->assertSame('nur-auf-dem-ziel', file_get_contents($nurZiel));
 
-        // Der Ausführungsschutz des Upload-Verzeichnisses steht weiterhin.
+        // Der Ausführungsschutz des Upload-Verzeichnisses steht weiterhin -
+        // auch der unter horses/ (Audit N1).
         $this->assertTrue(file_exists($this->frameworkRoot() . '/public/uploads/.htaccess'));
+        $this->assertTrue(file_exists($this->frameworkRoot() . '/public/uploads/horses/.htaccess'));
 
         // Das überschriebene Original ist der Rückweg - es liegt in der Ablage.
         $gesichert = glob($this->stageDir() . "/ersetzte-dateien-*/horses/merge-archiv-{$unique}.txt") ?: [];
@@ -1312,5 +1371,412 @@ class DatenmigrationPluginTest extends FunctionalTestCase {
             $db->exec('DROP TABLE IF EXISTS `plugin_dmtest_kind`');
             $db->prepare('DELETE FROM horses WHERE id = ?')->execute([$pferdId]);
         }
+    }
+
+    /**
+     * Audit N22: Ein unlesbares Archiv (beschädigt, oder ein .tar.gz auf
+     * einem Server ohne zlib) endet beim Anwenden mit einer Meldung, nicht
+     * mit einer Fehlerseite - und ändert nichts.
+     */
+    public function testUnlesbaresArchivEndetBeimAnwendenMitMeldung(): void {
+        $admin = $this->aktiviertesAddon();
+        $name = 'kaputt-' . uniqid() . '.tar';
+        file_put_contents($this->stageDir() . '/' . $name, str_repeat('kein tar ', 200));
+        $this->aufzuraeumen[] = $this->stageDir() . '/' . $name;
+
+        $sicherungenVorher = $this->sicherungen();
+        $apply = $admin->post('/plugin/datenmigration/import/anwenden', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'datei' => $name,
+            'bestaetigt' => '1',
+        ]);
+        $this->assertSame(200, $apply->statusCode);
+        $this->assertStringContainsString('Archiv unlesbar', $apply->body);
+        $this->assertStringContainsString('nichts verändert', $apply->body);
+        $this->assertSame($sicherungenVorher, $this->sicherungen());
+        $this->assertFalse($this->wartungAktiv());
+    }
+
+    // -- Pferdefotos und Schutzdateien (Audit M26, N1) ----------------------
+
+    private function horsesDir(): string {
+        return $this->frameworkRoot() . '/storage/horses';
+    }
+
+    /**
+     * Audit M26: Seit Kern 0.8 liegen die Pferdefotos unter storage/horses,
+     * außerhalb von public/uploads - und fehlten nach jedem Umzug. Ein
+     * Vollarchiv nimmt sie jetzt mit und ersetzt beim Import den INHALT von
+     * storage/horses: Fotos, die nur das Ziel hatte, wandern in die
+     * Sicherung, die .gitkeep des Kerns bleibt stehen und geht auch nicht ins
+     * Archiv (der Import lehnte sie als Punktdatei ab).
+     *
+     * Zugleich Audit N1 ohne Vorlage: public/uploads/horses/.htaccess fehlt
+     * vor dem Import - danach steht die eingebaute Fassung.
+     */
+    public function testVollarchivNimmtPferdefotosAusStorageMit(): void {
+        $admin = $this->aktiviertesAddon();
+        $unique = uniqid();
+        $foto = $this->horsesDir() . "/horse_test_{$unique}.jpg";
+        $nurZiel = $this->horsesDir() . "/horse_nurziel_{$unique}.jpg";
+        $this->aufzuraeumen[] = $foto;
+        $this->aufzuraeumen[] = $nurZiel;
+        $this->assertFileExists($this->horsesDir() . '/.gitkeep', 'Vorbedingung: der Kern liefert storage/horses/.gitkeep aus');
+        file_put_contents($foto, "jpeg-{$unique}");
+
+        $schutz = $this->frameworkRoot() . '/public/uploads/horses/.htaccess';
+        $this->merkeDatei($schutz);
+        @unlink($schutz);
+
+        $archiv = $this->erstelleArchiv($admin, Exportauswahl::schluessel());
+        $pfad = sys_get_temp_dir() . '/dm-fotos-' . $unique . (str_ends_with($archiv['name'], '.gz') ? '.tar.gz' : '.tar');
+        file_put_contents($pfad, $archiv['body']);
+        $eintraege = $this->archivEintraege($pfad);
+        unlink($pfad);
+
+        $this->assertArrayHasKey("storage-horses/horse_test_{$unique}.jpg", $eintraege);
+        $this->assertSame("jpeg-{$unique}", $eintraege["storage-horses/horse_test_{$unique}.jpg"]);
+        $this->assertArrayNotHasKey('storage-horses/.gitkeep', $eintraege);
+        $manifest = json_decode($eintraege['manifest.json'], true);
+        $this->assertSame(3, $manifest['format']);
+        $this->assertGreaterThanOrEqual(1, $manifest['horses_count']);
+
+        // Nach dem Export: das Foto verschwindet (muss zurückkommen), ein
+        // Foto nur auf dem Ziel entsteht (muss in die Sicherung wandern).
+        unlink($foto);
+        file_put_contents($nurZiel, 'nur-auf-dem-ziel');
+
+        $name = $this->legeAb($archiv['body'], 'fotos');
+        $preview = $admin->get('/plugin/datenmigration/import/pruefen?datei=' . urlencode($name));
+        $this->assertStringContainsString('Pferdefotos (storage/horses)', $preview->body);
+        $apply = $admin->post('/plugin/datenmigration/import/anwenden', [
+            'csrf_token' => $preview->formField('csrf_token') ?? '',
+            'datei' => $name,
+            'bestaetigt' => '1',
+        ] + $this->pflichtwahl($preview));
+        $this->assertSame('/login?import=fertig', $apply->location(), "Import fehlgeschlagen, Body: {$apply->body}");
+
+        $this->assertFileExists($foto, 'Pferdefoto nach dem Vollimport nicht wiederhergestellt');
+        $this->assertSame("jpeg-{$unique}", file_get_contents($foto));
+        $this->assertFileDoesNotExist($nurZiel, 'Ein Foto, das nur das Ziel hatte, ist nach dem Vollimport noch da');
+        $gesichert = glob($this->stageDir() . "/ersetzte-dateien-*/storage-horses/horse_nurziel_{$unique}.jpg") ?: [];
+        $this->assertCount(1, $gesichert, 'Das entfernte Foto liegt nicht in der Sicherung');
+        $this->assertSame('nur-auf-dem-ziel', file_get_contents($gesichert[0]));
+        $this->assertFileExists($this->horsesDir() . '/.gitkeep', '.gitkeep des Kerns wurde entfernt');
+
+        // Audit N1: Beide Schutzdateien stehen, horses/.htaccess in der
+        // eingebauten Fassung, denn es gab keine Vorlage.
+        $this->assertFileExists($this->frameworkRoot() . '/public/uploads/.htaccess');
+        $this->assertFileExists($schutz, 'public/uploads/horses/.htaccess nach dem Vollimport nicht wiederhergestellt');
+        $inhalt = (string) file_get_contents($schutz);
+        $this->assertStringContainsString('Wiederhergestellt nach einem Datenmigrations-Import (#366)', $inhalt);
+        $this->assertStringContainsString('Require all denied', $inhalt);
+    }
+
+    /**
+     * Teilarchiv mit Pferdefotos: zusammenführen. Das gleichnamige Foto des
+     * Ziels wird überschrieben und vorher gesichert, ein Foto nur auf dem Ziel
+     * bleibt.
+     */
+    public function testTeilarchivFuehrtPferdefotosZusammen(): void {
+        $admin = $this->aktiviertesAddon();
+        $unique = uniqid();
+        $foto = $this->horsesDir() . "/horse_merge_{$unique}.jpg";
+        $nurZiel = $this->horsesDir() . "/horse_merge_nurziel_{$unique}.jpg";
+        $this->aufzuraeumen[] = $foto;
+        $this->aufzuraeumen[] = $nurZiel;
+        file_put_contents($foto, 'stand-aus-dem-archiv');
+
+        $archiv = $this->erstelleArchiv($admin, ['pferde', Exportauswahl::GRUPPE_DATEIEN]);
+        $name = $this->legeAb($archiv['body'], 'fotos-teil');
+        file_put_contents($foto, 'neuerer-stand-des-ziels');
+        file_put_contents($nurZiel, 'nur-auf-dem-ziel');
+
+        $preview = $admin->get('/plugin/datenmigration/import/pruefen?datei=' . urlencode($name));
+        $apply = $admin->post('/plugin/datenmigration/import/anwenden', [
+            'csrf_token' => $preview->formField('csrf_token') ?? '',
+            'datei' => $name,
+            'bestaetigt' => '1',
+        ] + $this->pflichtwahl($preview));
+        $this->assertSame('/plugin/datenmigration/uebersicht?hinweis=importiert', $apply->location(),
+            "Teilimport fehlgeschlagen, Body: {$apply->body}");
+
+        $this->assertSame('stand-aus-dem-archiv', file_get_contents($foto));
+        $this->assertSame('nur-auf-dem-ziel', file_get_contents($nurZiel), 'Das Teilarchiv hat ein Foto nur des Ziels angefasst');
+        $gesichert = glob($this->stageDir() . "/ersetzte-dateien-*/storage-horses/horse_merge_{$unique}.jpg") ?: [];
+        $this->assertCount(1, $gesichert, 'Kein Rückweg für das überschriebene Foto');
+        $this->assertSame('neuerer-stand-des-ziels', file_get_contents($gesichert[0]));
+    }
+
+    /**
+     * storage-horses/ geht durch dieselbe Pfad- und Namensprüfung wie
+     * uploads/: Traversal und ausführbare Endungen brechen ab, bevor sich
+     * etwas ändert. Eine Punktdatei (.gitkeep) wird dagegen still verworfen -
+     * ein fremd gebautes Archiv mit ihr darf nicht scheitern.
+     */
+    public function testStorageHorsesPfadhaertung(): void {
+        $admin = $this->aktiviertesAddon();
+        $unique = uniqid();
+        $quelle = $this->exportiere($admin, ['pferde']);
+        $kopf = [['manifest.json', json_encode($quelle['manifest'])], ['database.sql', $quelle['sql']]];
+
+        $boese = [
+            "storage-horses/../../public/dm-trav-{$unique}.jpg" => 'Unzulässiger Pfad',
+            "storage-horses/shell-{$unique}.php.jpg" => 'Ausführbare Dateiendung',
+        ];
+        // Falls die Prüfung versagt, sollen die Dateien trotzdem nicht liegen bleiben.
+        $this->aufzuraeumen[] = $this->horsesDir() . "/shell-{$unique}.php.jpg";
+        $this->aufzuraeumen[] = $this->frameworkRoot() . "/public/dm-trav-{$unique}.jpg";
+        $this->aufzuraeumen[] = $this->frameworkRoot() . "/var/public/dm-trav-{$unique}.jpg";
+        foreach ($boese as $eintrag => $meldung) {
+            $name = $this->baueArchiv('fotos-boese', array_merge($kopf, [[$eintrag, 'x']]));
+            $sicherungenVorher = $this->sicherungen();
+            $apply = $admin->post('/plugin/datenmigration/import/anwenden', [
+                'csrf_token' => $this->currentCsrfToken($admin),
+                'datei' => $name,
+                'bestaetigt' => '1',
+                'abhaengige' => 'stehen_lassen',
+            ]);
+            $this->assertStringContainsString('nichts verändert', $apply->body, $eintrag);
+            $this->assertStringContainsString($meldung, $apply->body, $eintrag);
+            $this->assertSame($sicherungenVorher, $this->sicherungen(), "{$eintrag}: Sicherung geschrieben");
+            $this->assertFalse($this->wartungAktiv());
+        }
+        foreach (['/public', '/var', '/storage', '/storage/horses'] as $ort) {
+            $this->assertSame([], glob($this->frameworkRoot() . $ort . "/*{$unique}*") ?: [], "Datei unter {$ort} geschrieben");
+        }
+        $this->assertDirectoryDoesNotExist($this->stageDir() . '/horses-neu', 'Nebenverzeichnis nicht aufgeräumt');
+
+        $ok = $this->horsesDir() . "/horse_ok_{$unique}.jpg";
+        $this->aufzuraeumen[] = $ok;
+        $name = $this->baueArchiv('fotos-gitkeep', array_merge($kopf, [
+            ['storage-horses/.gitkeep', ''],
+            ["storage-horses/horse_ok_{$unique}.jpg", 'ok'],
+        ]));
+        $preview = $admin->get('/plugin/datenmigration/import/pruefen?datei=' . urlencode($name));
+        $apply = $admin->post('/plugin/datenmigration/import/anwenden', [
+            'csrf_token' => $preview->formField('csrf_token') ?? '',
+            'datei' => $name,
+            'bestaetigt' => '1',
+        ] + $this->pflichtwahl($preview));
+        $this->assertSame('/plugin/datenmigration/uebersicht?hinweis=importiert', $apply->location(),
+            "Archiv mit storage-horses/.gitkeep abgewiesen, Body: {$apply->body}");
+        $this->assertSame('ok', file_get_contents($ok));
+        $this->assertFileExists($this->horsesDir() . '/.gitkeep');
+    }
+
+    // -- Zugangsdaten und APP_KEY (Audit M25) --------------------------------
+
+    private const EXPORTPASSWORT = 'Umzugs-Passwort-2026!';
+
+    /**
+     * Setzt eine Einstellung verschlüsselt - mit demselben APP_KEY wie der
+     * Server (bootstrap.php/Umgebung), direkt in der Datenbank. Liefert den
+     * Chiffretext.
+     */
+    private function setzeVerschluesselt(string $schluessel, string $klar): string {
+        if (!defined('APP_KEY') && is_string(getenv('APP_KEY')) && getenv('APP_KEY') !== '') {
+            define('APP_KEY', getenv('APP_KEY'));
+        }
+        $db = Database::getInstance();
+        if (!array_key_exists($schluessel, $this->einstellungenVorher)) {
+            $stmt = $db->prepare('SELECT setting_value FROM settings WHERE setting_key = ?');
+            $stmt->execute([$schluessel]);
+            $vorher = $stmt->fetchColumn();
+            $this->einstellungenVorher[$schluessel] = $vorher === false ? null : (string) $vorher;
+        }
+        $wert = Crypto::encrypt($klar);
+        $db->prepare('INSERT INTO settings (setting_key, setting_value) VALUES (?, ?) '
+            . 'ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)')->execute([$schluessel, $wert]);
+        return $wert;
+    }
+
+    private function einstellung(string $schluessel): ?string {
+        $stmt = Database::getInstance()->prepare('SELECT setting_value FROM settings WHERE setting_key = ?');
+        $stmt->execute([$schluessel]);
+        $wert = $stmt->fetchColumn();
+        return $wert === false ? null : (string) $wert;
+    }
+
+    /**
+     * Ein Chiffrat im Format von Crypto, aber unter einem ANDEREN Schlüssel -
+     * so, wie es aus einer Quelle mit fremdem APP_KEY käme. Von Hand gebaut,
+     * weil Crypto::getKey() sich nicht übersteuern lässt.
+     */
+    private static function fremdesChiffrat(string $klar): string {
+        $iv = random_bytes(12);
+        $tag = '';
+        $ct = openssl_encrypt($klar, 'aes-256-gcm', hash('sha256', 'fremd', true), OPENSSL_RAW_DATA, $iv, $tag);
+        return base64_encode($iv . $tag . $ct);
+    }
+
+    /**
+     * Baut aus einem Export das Archiv einer Quelle mit FREMDEM APP_KEY:
+     * anderer Fingerabdruck, die Einstellung im Dump unter fremdem Schlüssel.
+     * geheimnisse.json bleibt die des echten Exports.
+     *
+     * @param callable(array<string, mixed>):array<string, mixed>|null $manifestAendern
+     */
+    private function fremdesArchiv(string $body, string $chiffrat, ?callable $manifestAendern = null): string {
+        $pfad = sys_get_temp_dir() . '/dm-fremd-' . uniqid() . (str_starts_with($body, "\x1f\x8b") ? '.tar.gz' : '.tar');
+        file_put_contents($pfad, $body);
+        $eintraege = $this->archivEintraege($pfad);
+        unlink($pfad);
+
+        $manifest = json_decode($eintraege['manifest.json'], true);
+        $this->assertMatchesRegularExpression('/^[0-9a-f]{64}$/', (string) $manifest['app_key_fingerabdruck']);
+        $manifest['app_key_fingerabdruck'] = str_repeat('0', 64);
+        if ($manifestAendern !== null) {
+            $manifest = $manifestAendern($manifest);
+        }
+        $sql = str_replace($chiffrat, self::fremdesChiffrat('fremd-geheim'), $eintraege['database.sql'], $ersetzt);
+        $this->assertSame(1, $ersetzt, 'Chiffrat nicht im Dump gefunden');
+
+        $neu = [['manifest.json', (string) json_encode($manifest)], ['database.sql', $sql]];
+        if (isset($eintraege['geheimnisse.json'])) {
+            $neu[] = ['geheimnisse.json', $eintraege['geheimnisse.json']];
+        }
+        return $this->baueArchiv('fremder-schluessel', $neu);
+    }
+
+    /** @param array<string, string> $zusatz */
+    private function wendeAn(\Tests\Support\HttpClient $admin, string $name, array $zusatz = []): \Tests\Support\HttpResponse {
+        $preview = $admin->get('/plugin/datenmigration/import/pruefen?datei=' . urlencode($name));
+        return $admin->post('/plugin/datenmigration/import/anwenden', [
+            'csrf_token' => $preview->formField('csrf_token') ?? '',
+            'datei' => $name,
+            'bestaetigt' => '1',
+        ] + $zusatz + $this->pflichtwahl($preview));
+    }
+
+    /**
+     * Gleicher APP_KEY: Das Manifest trägt den Fingerabdruck und nennt die
+     * verschlüsselten Einstellungen (nur Namen); die Rundreise braucht kein
+     * Passwort, und das Passwort-Feld erscheint gar nicht.
+     */
+    public function testGleicherSchluesselBrauchtKeinExportpasswort(): void {
+        $admin = $this->aktiviertesAddon();
+        $unique = uniqid();
+        $chiffrat = $this->setzeVerschluesselt('smtp_pass', "smtp-{$unique}");
+
+        $quelle = $this->exportiere($admin, ['einstellungen']);
+        $this->assertMatchesRegularExpression('/^[0-9a-f]{64}$/', (string) $quelle['manifest']['app_key_fingerabdruck']);
+        $this->assertContains('smtp_pass', $quelle['manifest']['verschluesselt']['settings']);
+        $this->assertFalse($quelle['manifest']['geheimnisse']);
+        $this->assertStringNotContainsString("smtp-{$unique}", $quelle['sql']);
+
+        $name = $this->legeAb($quelle['body'], 'gleicher-schluessel');
+        $preview = $admin->get('/plugin/datenmigration/import/pruefen?datei=' . urlencode($name));
+        $this->assertStringNotContainsString('anderen APP_KEY', $preview->body);
+        $this->assertStringNotContainsString('name="export_passwort"', $preview->body);
+
+        $this->setzeVerschluesselt('smtp_pass', 'zwischenstand');
+        $apply = $this->wendeAn($admin, $name);
+        $this->assertSame('/plugin/datenmigration/uebersicht?hinweis=importiert', $apply->location(), $apply->body);
+        $this->assertSame($chiffrat, $this->einstellung('smtp_pass'));
+        $this->assertSame("smtp-{$unique}", Crypto::decrypt((string) $this->einstellung('smtp_pass')));
+    }
+
+    /**
+     * Fremder APP_KEY MIT Exportpasswort: Die Zugangsdaten reisen in
+     * geheimnisse.json und werden beim Import mit dem Schlüssel des Ziels neu
+     * verschlüsselt. Ein falsches Passwort ändert nichts - keine Sicherung,
+     * keine Einstellung.
+     */
+    public function testFremderSchluesselMitExportpasswortVerschluesseltNeu(): void {
+        $admin = $this->aktiviertesAddon();
+        $unique = uniqid();
+        $klar = "smtp-{$unique}";
+        $chiffrat = $this->setzeVerschluesselt('smtp_pass', $klar);
+
+        // Tippfehler in der Wiederholung und zu kurze Passwörter erzeugen kein Archiv.
+        foreach ([[self::EXPORTPASSWORT, self::EXPORTPASSWORT . 'x'], ['kurz', 'kurz']] as [$pw, $wdh]) {
+            $form = $admin->get('/plugin/datenmigration/export');
+            $abgewiesen = $admin->post('/plugin/datenmigration/export', [
+                'csrf_token' => $form->formField('csrf_token') ?? '',
+                'gruppen' => ['einstellungen'],
+                'trotzdem' => '1',
+                'export_passwort' => $pw,
+                'export_passwort_wdh' => $wdh,
+            ]);
+            $this->assertStringStartsWith('/plugin/datenmigration/export?fehler=passwort', (string) $abgewiesen->location());
+            $this->assertStringNotContainsString($pw, (string) $abgewiesen->location());
+        }
+
+        $archiv = $this->erstelleArchiv($admin, ['einstellungen'], [
+            'export_passwort' => self::EXPORTPASSWORT,
+            'export_passwort_wdh' => self::EXPORTPASSWORT,
+        ]);
+        $pfad = sys_get_temp_dir() . '/dm-geheim-' . $unique . (str_ends_with($archiv['name'], '.gz') ? '.tar.gz' : '.tar');
+        file_put_contents($pfad, $archiv['body']);
+        $eintraege = $this->archivEintraege($pfad);
+        unlink($pfad);
+        $this->assertArrayHasKey('geheimnisse.json', $eintraege);
+        $this->assertTrue(json_decode($eintraege['manifest.json'], true)['geheimnisse']);
+        foreach ($eintraege as $eintrag => $inhalt) {
+            $this->assertStringNotContainsString($klar, $inhalt, "Klartext in {$eintrag}");
+            $this->assertStringNotContainsString(self::EXPORTPASSWORT, $inhalt, "Exportpasswort in {$eintrag}");
+        }
+
+        $name = $this->fremdesArchiv($archiv['body'], $chiffrat);
+        $preview = $admin->get('/plugin/datenmigration/import/pruefen?datei=' . urlencode($name));
+        $this->assertStringContainsString('anderen APP_KEY', $preview->body);
+        $this->assertStringContainsString('<code>smtp_pass</code>', $preview->body);
+        $this->assertStringContainsString('name="export_passwort"', $preview->body);
+        $this->assertStringContainsString('Ohne Exportpasswort fortfahren', $preview->body);
+        $this->assertStringContainsString('Import anwenden</button>', $preview->body);
+
+        $sicherungenVorher = $this->sicherungen();
+        $falsch = $this->wendeAn($admin, $name, ['export_passwort' => 'ganz-falsches-Passwort']);
+        $this->assertStringContainsString('nichts verändert', $falsch->body);
+        $this->assertStringContainsString('Exportpasswort falsch', $falsch->body);
+        $this->assertSame($sicherungenVorher, $this->sicherungen(), 'Falsches Passwort: Sicherung geschrieben');
+        $this->assertSame($chiffrat, $this->einstellung('smtp_pass'), 'Falsches Passwort: Einstellung verändert');
+
+        $ohne = $this->wendeAn($admin, $name);
+        $this->assertStringContainsString('nichts verändert', $ohne->body);
+        $this->assertSame($chiffrat, $this->einstellung('smtp_pass'));
+
+        $apply = $this->wendeAn($admin, $name, ['export_passwort' => self::EXPORTPASSWORT]);
+        $this->assertSame('/plugin/datenmigration/uebersicht?hinweis=importiert', $apply->location(), $apply->body);
+        $neu = (string) $this->einstellung('smtp_pass');
+        $this->assertNotSame($chiffrat, $neu);
+        $this->assertSame($klar, Crypto::decrypt($neu), 'smtp_pass nach dem Import nicht mit dem Schlüssel des Ziels lesbar');
+    }
+
+    /**
+     * Fremder APP_KEY OHNE Exportpasswort: nur mit ausdrücklicher Zustimmung,
+     * und dann wird nur geleert, was sich hier wirklich nicht entschlüsseln
+     * lässt. Ein manipuliertes Manifest, das zusätzlich site_name als
+     * "verschlüsselt" führt, leert den Seitennamen nicht.
+     */
+    public function testFremderSchluesselOhnePasswortLeertNurUnlesbareEinstellungen(): void {
+        $admin = $this->aktiviertesAddon();
+        $unique = uniqid();
+        $chiffrat = $this->setzeVerschluesselt('smtp_pass', "smtp-{$unique}");
+        $seitenname = $this->einstellung('site_name');
+        $this->assertNotSame('', (string) $seitenname);
+
+        $archiv = $this->erstelleArchiv($admin, ['einstellungen']);
+        $name = $this->fremdesArchiv($archiv['body'], $chiffrat, static function (array $m): array {
+            $m['verschluesselt']['settings'][] = 'site_name';
+            return $m;
+        });
+
+        $preview = $admin->get('/plugin/datenmigration/import/pruefen?datei=' . urlencode($name));
+        $this->assertStringContainsString('anderen APP_KEY', $preview->body);
+        $this->assertStringContainsString('Ohne Exportpasswort fortfahren', $preview->body);
+        $this->assertStringNotContainsString('name="export_passwort"', $preview->body);
+
+        $sicherungenVorher = $this->sicherungen();
+        $abgewiesen = $this->wendeAn($admin, $name);
+        $this->assertStringContainsString('nichts verändert', $abgewiesen->body);
+        $this->assertSame($sicherungenVorher, $this->sicherungen());
+        $this->assertSame($chiffrat, $this->einstellung('smtp_pass'));
+
+        $apply = $this->wendeAn($admin, $name, ['ohne_geheimnisse' => '1']);
+        $this->assertSame('/plugin/datenmigration/uebersicht?hinweis=importiert', $apply->location(), $apply->body);
+        $this->assertSame('', $this->einstellung('smtp_pass'), 'Nicht entschlüsselbares smtp_pass wurde nicht geleert');
+        $this->assertSame($seitenname, $this->einstellung('site_name'), 'Das manipulierte Manifest hat site_name geleert');
     }
 }
