@@ -110,6 +110,28 @@ class FarbvererbungPluginTest extends FunctionalTestCase {
         $this->assertSame(200, $calcResponse->statusCode);
         $this->assertStringContainsString('100,00 %', $calcResponse->body);
         $this->assertStringContainsString('Rotfalbe (Rødblakk)', $calcResponse->body);
+        $this->assertStringNotContainsString('Doppelte Cream-Dosis', $calcResponse->body,
+            'Ohne Cream-Eltern gibt es keine Cr-Cr-Zeile, auch keine mit 0,00 %.');
+
+        // 2a. Cream-Vererbung (Audit N25): Hell- und Gelbfalbe tragen genau
+        // EINE Cream-Dosis. Gelbfalbe × Rotfalbe ist exakt halb/halb (bisher
+        // 75 % / 25 %), Gelbfalbe × Gelbfalbe weist Cr Cr gesondert aus.
+        $halb = $admin->get('/plugin/farbvererbung/rechner?sire_color=gulblakk&dam_color=rodblakk');
+        $this->assertSame(200, $halb->statusCode);
+        $this->assertStringContainsString('50,00 %', $halb->body);
+        $this->assertStringNotContainsString('75,00 %', $halb->body);
+        $this->assertStringNotContainsString('Doppelte Cream-Dosis', $halb->body);
+
+        $doppelt = $admin->get('/plugin/farbvererbung/rechner?sire_color=gulblakk&dam_color=gulblakk');
+        $this->assertSame(200, $doppelt->statusCode);
+        $this->assertStringContainsString('25,00 %', $doppelt->body);
+        $this->assertStringContainsString('Doppelte Cream-Dosis', $doppelt->body);
+
+        // 'doppelcream' ist ein Ergebnis, keine wählbare Elternfarbe.
+        $ungueltig = $admin->get('/plugin/farbvererbung/rechner?sire_color=doppelcream&dam_color=gulblakk');
+        $this->assertSame(200, $ungueltig->statusCode);
+        $this->assertStringNotContainsString('Voraussichtliche Fohlenfarbe', $ungueltig->body,
+            'Eine Ergebnis-Kategorie darf nicht als Elternfarbe durchgehen.');
 
         // 2b. Nachschlage-Element "Farben im Register" (#74): statt des
         // früheren Komplettbestands eine gedeckelte Tabelle (nur Pferde MIT

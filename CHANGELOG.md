@@ -139,6 +139,43 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ### Behoben
 
+- **`inzuchtkoeffizient`/`anpaarungs-empfehlung` (1.2.1): Inzuchtkoeffizient
+  bei Linienzucht zu niedrig** (Audit M29). Der gemeinsame Rechenkern
+  `WrightCoi` brach jeden Abstammungspfad am ersten gemeinsamen Vorfahren ab.
+  Dadurch fehlten Pfade zu tiefer liegenden gemeinsamen Vorfahren, die auf der
+  anderen Seite auf einem eigenen Weg erreichbar sind.
+  - Beispiel: Bei beidseitiger Linienzucht auf einen Hengst und dessen Vater
+    zeigte das Register 12,50 % statt 15,63 %.
+  - Ein anderer Fall landete mit 3,13 % statt 6,25 % unter der Warnschwelle
+    der Anpaarungs-Empfehlung.
+
+  Jetzt gilt Wrights Pfadregel vollständig: Ein Pfadpaar zählt, sobald es
+  außer dem gemeinsamen Vorfahren kein Pferd doppelt enthält. Detailseite,
+  Verpaarungsrechner und Empfehlungs-Ranking zeigen bei Linienzucht dadurch
+  höhere, korrekte Werte; Reihenfolge und Markierungen der Empfehlung können
+  sich verschieben.
+
+  **Für Betreiber:** Bitte beide Addons gemeinsam aktualisieren. Sind beide
+  aktiv, rechnet immer die Fassung aus `anpaarungs-empfehlung` (alphabetische
+  Ladereihenfolge). Eine veraltete Fassung meldet sich jetzt im
+  Fehlerprotokoll („Veralteter WrightCoi-Rechenkern geladen“).
+
+- **`inzuchtkoeffizient` (1.2.1): Per Lebensnummer oder Name verknüpfte
+  Eltern zählen** (Audit M28). Der Abschnitt auf der Pferde-Detailseite las
+  die Eltern nur aus den festen Verknüpfungen. Nach einem CSV-Import, der
+  Eltern nur per UELN oder Name einträgt, zeigte er 0,00 % oder fehlte ganz,
+  obwohl der Stammbaum daneben die Eltern anzeigte. Er verwendet jetzt
+  dieselben, nur aus veröffentlichten Pferden aufgelösten Eltern wie der
+  Stammbaum.
+
+- **`farbvererbung` (1.3.0): Cream-Vererbung im Farbrechner korrigiert**
+  (Audit N25). Hell- und Gelbfalbe tragen genau eine Cream-Dosis. Der Rechner
+  behandelte sie bisher, als könnten sie auch zwei Dosen tragen, und zählte
+  doppelt verdünnte Fohlen als Hell- bzw. Gelbfalbe. Gelbfalbe × Rotfalbe
+  ergibt jetzt korrekt 50 % / 50 % statt 75 % / 25 %. Bei Cream × Cream
+  erscheinen Fohlen mit doppelter Cream-Dosis in einer eigenen Zeile
+  „Doppelte Cream-Dosis (Cr Cr)“.
+
 - **`datenmigration` (1.2.0): Große Instanzen lassen sich importieren**
   (Audit N21). Der Dump ging als ein einziges Datenbankpaket an den Server
   und scheiterte ab 16 MiB an `max_allowed_packet`. Die Meldung behauptete
@@ -286,6 +323,12 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   Methode im gepinnten Framework existiert. Wer ein Addon auf ein neues
   Kern-API umstellt, trägt dessen Einführungsversion in die Tabelle ein. Wird
   die Anhebung von `core_compatibility` vergessen, wird der Lauf rot.
+
+- **`inzuchtkoeffizient` 1.2.1, `anpaarungs-empfehlung` 1.2.1,
+  `farbvererbung` 1.3.0.** `core_compatibility` und `core_supported_max`
+  bleiben unverändert (Linie 0.9). Manuell installierte Addons (Herkunft kein
+  Release-Tag) müssen nach dem Update unter `/admin/plugins` erneut
+  freigegeben werden.
 
 ## [0.9.0] – 2026-08-27
 

@@ -38,6 +38,16 @@ if (!class_exists(WrightCoi::class, false)) {
     require_once __DIR__ . '/WrightCoi.php';
 }
 
+// Mischstand erkennen (Audit M29): Der PluginManager lädt die Addons
+// alphabetisch - sind beide aktiv, rechnet immer die Kopie aus
+// anpaarungs-empfehlung. Stammt die geladene Klasse aus einer Fassung vor
+// Revision 2 (Pfade endeten am ersten gemeinsamen Vorfahren), bliebe ein
+// Update nur eines der beiden Addons sonst ohne jeden Hinweis wirkungslos.
+// Nachladen lässt sich eine Klasse nicht - also wenigstens sichtbar machen.
+if (!defined(WrightCoi::class . '::REVISION') || WrightCoi::REVISION < 2) {
+    error_log('[inzuchtkoeffizient] Veralteter WrightCoi-Rechenkern geladen - inzuchtkoeffizient und anpaarungs-empfehlung gemeinsam aktualisieren');
+}
+
 // Altname aus der Zeit der Doppelung (#123): Vor der Zusammenlegung war
 // CoiCalculator eine eigene Klasse mit eigener Rechnung. Der Alias hält
 // bestehende Verweise (u. a. tests/Unit/InzuchtkoeffizientCoiTest.php und der
@@ -77,15 +87,23 @@ class Plugin {
      * PedigreeBuilder memoisiert je build()-Aufruf, die zwei zusätzlichen
      * Aufbauten bleiben günstig. publishedOnly=true wie im Kern: aus
      * unveröffentlichten Daten darf öffentlich nichts hergeleitet werden.
+     *
+     * Die WURZELN der beiden Elternbäume kommen aus dem vom Kern übergebenen
+     * $pedigree (Audit M28), nicht aus sire_id/dam_id: CSV-Import und
+     * Formular-Freitext setzen kein sire_id/dam_id (ImportController,
+     * HorseController::store), und autoLinkMatches() verknüpft erst, wenn
+     * das Elternpferd gespeichert wird. Der Kern löst solche Eltern über
+     * UELN bzw. Namen auf - nur zu veröffentlichten Pferden -, der Stammbaum
+     * daneben zeigt sie also; der COI zeigte bisher 0,00 % oder fehlte.
      */
     public function addDetailSection(array $sections, array $horse, array $horsePersons, ?array $pedigree): array {
         $sireTree = PedigreeBuilder::build(
-            !empty($horse['sire_id']) ? (int) $horse['sire_id'] : null,
+            self::parentRootId($pedigree, $horse, 'sire'),
             self::DETAIL_PARENT_DEPTH,
             true
         );
         $damTree = PedigreeBuilder::build(
-            !empty($horse['dam_id']) ? (int) $horse['dam_id'] : null,
+            self::parentRootId($pedigree, $horse, 'dam'),
             self::DETAIL_PARENT_DEPTH,
             true
         );
@@ -107,6 +125,31 @@ class Plugin {
             . '</p></div>';
 
         return $sections;
+    }
+
+    /**
+     * ID des Elternteils ($side: 'sire' oder 'dam') als Wurzel für dessen
+     * eigenen Baum (Audit M28).
+     *
+     * Mit $pedigree gilt ausschließlich der vom Kern aufgelöste,
+     * publishedOnly-gefilterte Knoten: Ein Platzhalter (nicht auflösbar oder
+     * unveröffentlicht) oder ein fehlender Knoten ergibt null - KEIN Rückfall
+     * auf den Fremdschlüssel, sonst flösse ein unveröffentlichter Elternteil
+     * doch noch ein. Nur ohne $pedigree (Aufrufer, die den Filter mit null
+     * aufrufen) gilt der alte Weg über sire_id/dam_id.
+     *
+     * @param array<string, mixed>|null $pedigree
+     * @param array<string, mixed> $horse
+     */
+    private static function parentRootId(?array $pedigree, array $horse, string $side): ?int {
+        if ($pedigree !== null) {
+            $node = $pedigree[$side] ?? null;
+            return (is_array($node) && !empty($node['id']) && empty($node['is_placeholder']))
+                ? (int) $node['id']
+                : null;
+        }
+
+        return !empty($horse[$side . '_id']) ? (int) $horse[$side . '_id'] : null;
     }
 
     /**

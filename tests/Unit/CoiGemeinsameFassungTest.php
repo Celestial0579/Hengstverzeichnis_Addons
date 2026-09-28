@@ -269,4 +269,28 @@ class CoiGemeinsameFassungTest extends TestCase {
     public function testGemeinsamerRechenkernLiefertDieLehrbuchwerte(?array $sire, ?array $dam, float $erwartet): void {
         $this->assertEqualsWithDelta($erwartet, WrightCoi::fromParentTrees($sire, $dam), 1e-12);
     }
+
+    /**
+     * Audit M29: Linienzucht auf einen Hengst B und dessen Vater A,
+     * beidseitig - über BEIDE Altnamen, damit keiner der beiden Verbraucher
+     * eine abweichende Fassung behält. Richtig 0,15625; bis Revision 2
+     * endeten die Pfade am ersten gemeinsamen Vorfahren (0,125).
+     */
+    public function testLinienzuchtUeberBeideAltnamenGleich(): void {
+        $b = static fn(): array => self::node(2, self::node(1));
+        $sire = self::node(10, $b(), self::node(11));
+        $dam = self::node(20, $b(), self::node(21, self::node(1)));
+
+        $this->assertEqualsWithDelta(0.15625, CoiCalculator::fromParentTrees($sire, $dam), 1e-12);
+        $this->assertEqualsWithDelta(0.15625, CoiEstimator::fromParentTrees($sire, $dam), 1e-12);
+    }
+
+    /**
+     * Das Revisionsmerkmal, an dem die Plugin.php-Dateien einen Mischstand
+     * erkennen (Audit M29). Wer die Pfadregel ändert, hebt es an.
+     */
+    public function testRevisionsmerkmalIstGesetzt(): void {
+        $this->assertTrue(defined(WrightCoi::class . '::REVISION'), 'WrightCoi::REVISION fehlt.');
+        $this->assertGreaterThanOrEqual(2, WrightCoi::REVISION);
+    }
 }

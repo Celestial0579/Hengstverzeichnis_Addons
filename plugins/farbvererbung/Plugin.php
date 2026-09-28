@@ -130,8 +130,13 @@ class Plugin {
  *   - Braunfalbe (Brunblakk): schwarzbasiert + Agouti, kein Cream        -> E_ A_  nn
  *   - Graufalbe  (Grå):       schwarzbasiert ohne Agouti, kein Cream     -> E_ aa  nn
  *   - Rotfalbe   (Rødblakk):  fuchsbasiert, kein Cream                   -> ee     nn
- *   - Hellfalbe  (Ulsblakk):  schwarzbasiert + Cream                     -> E_ __  Cr_
- *   - Gelbfalbe  (Gulblakk):  fuchsbasiert + Cream                       -> ee     Cr_
+ *   - Hellfalbe  (Ulsblakk):  schwarzbasiert + eine Cream-Dosis          -> E_ __  Cr n
+ *   - Gelbfalbe  (Gulblakk):  fuchsbasiert + eine Cream-Dosis            -> ee     Cr n
+ *
+ * Cr Cr (doppelte Cream-Dosis) ist ein eigener, stark aufgehellter Phänotyp
+ * und keine der fünf Falbfarben. Als Elternfarbe ist er deshalb nicht
+ * wählbar; als Fohlenergebnis weist predictFoal() ihn gesondert aus
+ * ('doppelcream', Audit N25).
  *
  * Vorhersage aus zwei ELTERN-PHÄNOTYPEN: Da nur der Phänotyp (nicht der exakte
  * Genotyp) bekannt ist, werden je Locus alle mit dem Phänotyp verträglichen
@@ -157,12 +162,24 @@ class FjordColor {
         'brunblakk' => 'schwarze Basis mit Agouti, ohne Cream (E_ A_ nn)',
         'rodblakk'  => 'fuchsfarbene Basis, ohne Cream (ee nn)',
         'graa'      => 'schwarze Basis ohne Agouti, ohne Cream (E_ aa nn)',
-        'ulsblakk'  => 'schwarze Basis mit einer Cream-Dosis (E_ Cr)',
-        'gulblakk'  => 'fuchsfarbene Basis mit einer Cream-Dosis (ee Cr)',
+        'ulsblakk'  => 'schwarze Basis mit einer Cream-Dosis (E_ Cr n)',
+        'gulblakk'  => 'fuchsfarbene Basis mit einer Cream-Dosis (ee Cr n)',
     ];
 
     /** Reihenfolge für die Anzeige (häufigste zuerst). */
     public const ORDER = ['brunblakk', 'graa', 'rodblakk', 'ulsblakk', 'gulblakk'];
+
+    /**
+     * Schlüssel, die predictFoal() liefert: die fünf Falbfarben plus das
+     * gesondert ausgewiesene Cr-Cr-Ergebnis. isKnown()/options() bleiben bei
+     * den fünf Elternfarben - 'doppelcream' ist keine wählbare Eingabe.
+     */
+    public const RESULT_ORDER = [...self::ORDER, 'doppelcream'];
+
+    /** @var array<string,string> Beschriftungen reiner Ergebnis-Schlüssel */
+    private const RESULT_LABELS = [
+        'doppelcream' => 'Doppelte Cream-Dosis (Cr Cr) – keine der fünf Falbfarben',
+    ];
 
     /** @return array<string,string> key => Anzeigename */
     public static function options(): array {
@@ -178,7 +195,7 @@ class FjordColor {
     }
 
     public static function label(string $key): string {
-        return self::LABELS[$key] ?? $key;
+        return self::LABELS[$key] ?? self::RESULT_LABELS[$key] ?? $key;
     }
 
     public static function genotypeHint(string $key): string {
@@ -212,12 +229,22 @@ class FjordColor {
 
     /** @return float p(n-Allel, also KEIN Cream) */
     private static function pNoCreamAllele(string $key): float {
-        // Cream-Träger (Cr∈{Cr n, Cr Cr} gleich gewichtet) -> p(n)=0.25; sonst nn -> p(n)=1
-        return self::hasCream($key) ? 0.25 : 1.0;
+        // Cream ist unvollständig dominant: Hell- und Gelbfalbe tragen genau
+        // EINE Dosis (Cr n) -> p(n)=0.5. Cr Cr ist ein eigener Phänotyp und
+        // mit der erfassten Farbe nicht verträglich (Modellregel im
+        // Klassenkommentar). Bis Audit N25 stand hier 0.25 - als könnten die
+        // beiden Farben auch Cr Cr sein; doppelt verdünnte Fohlen zählten dann
+        // als Hell- bzw. Gelbfalbe. Sonst nn -> p(n)=1.
+        return self::hasCream($key) ? 0.5 : 1.0;
     }
 
     /**
      * Fohlenfarb-Verteilung aus zwei Eltern-Phänotypen.
+     *
+     * Liefert immer alle Schlüssel aus RESULT_ORDER. 'doppelcream' fasst
+     * Cr Cr über beide Basisfarben zusammen. Da p(n) nur 1,0 oder 0,5 sein
+     * kann, sind die Cream-Anteile exakte Binärbrüche - ein Vergleich
+     * `=== 0.0` ist sicher.
      *
      * @return array<string,float> key => Wahrscheinlichkeit (0..1), Summe 1.0
      */
@@ -228,15 +255,19 @@ class FjordColor {
         $pOffspringAa = self::pAgoutiRecessive($sireKey) * self::pAgoutiRecessive($damKey);
         $pOffspringHasA = 1.0 - $pOffspringAa;
 
-        $pNoCream = self::pNoCreamAllele($sireKey) * self::pNoCreamAllele($damKey);
-        $pCream = 1.0 - $pNoCream;
+        $n1 = self::pNoCreamAllele($sireKey);
+        $n2 = self::pNoCreamAllele($damKey);
+        $pNN = $n1 * $n2;
+        $pCrCr = (1.0 - $n1) * (1.0 - $n2);
+        $pCrN = 1.0 - $pNN - $pCrCr;
 
         return [
-            'brunblakk' => $pOffspringBlack * $pNoCream * $pOffspringHasA,
-            'graa'      => $pOffspringBlack * $pNoCream * $pOffspringAa,
-            'rodblakk'  => $pOffspringRed   * $pNoCream,
-            'ulsblakk'  => $pOffspringBlack * $pCream,
-            'gulblakk'  => $pOffspringRed   * $pCream,
+            'brunblakk'   => $pOffspringBlack * $pNN * $pOffspringHasA,
+            'graa'        => $pOffspringBlack * $pNN * $pOffspringAa,
+            'rodblakk'    => $pOffspringRed   * $pNN,
+            'ulsblakk'    => $pOffspringBlack * $pCrN,
+            'gulblakk'    => $pOffspringRed   * $pCrN,
+            'doppelcream' => $pCrCr,
         ];
     }
 
@@ -392,6 +423,11 @@ class RechnerController extends BaseController {
         if ($result !== null) {
             $content .= '<div class="farbvererbung-result"><strong>Voraussichtliche Fohlenfarbe:</strong><div class="tabelle-scroll"><table>';
             foreach (self::sortResult($result) as $key => $prob) {
+                // Cr Cr nur zeigen, wenn es vorkommen kann - sonst stünde bei
+                // jeder Paarung ohne zwei Cream-Eltern eine 0,00-%-Zeile da.
+                if ($key === 'doppelcream' && $prob === 0.0) {
+                    continue;
+                }
                 $percent = number_format($prob * 100, 2, ',', '.');
                 $width = max(0, min(100, $prob * 100));
                 $content .= '<tr>';
@@ -403,7 +439,9 @@ class RechnerController extends BaseController {
             $content .= '</table></div>';
             $content .= '<p class="farbvererbung-muted">Vereinfachtes Modell: unbekannte Anlageträger-Genotypen werden je Locus '
                 . 'als gleich wahrscheinlich angenommen. Das Dun-(Falb-)Gen gilt bei der Rasse als fest '
-                . 'vorhanden. Werte sind Schätzungen, kein Ersatz für einen Gentest.</p>';
+                . 'vorhanden. Hell- und Gelbfalbe tragen genau eine Cream-Dosis; Fohlen mit doppelter Dosis '
+                . '(Cr Cr) sind keine der fünf Falbfarben und stehen gesondert. '
+                . 'Werte sind Schätzungen, kein Ersatz für einen Gentest.</p>';
             $content .= '</div>';
         }
 

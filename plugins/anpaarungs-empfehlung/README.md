@@ -76,12 +76,23 @@ Näherung `F = Σ (0,5)^(n1+n2+1)` über alle gemeinsamen Vorfahren, ausgewertet
 Elternteil** - dieselbe Tiefensemantik wie der Verpaarungsrechner des
 `inzuchtkoeffizient`-Addons, siehe Addons#72) – **mit
 Wrights Pfadregel**, gerechnet vom gemeinsamen Rechenkern `WrightCoi` (siehe
-oben): Pfade enden am jeweils ersten gemeinsamen Vorfahren, dessen eigene Ahnen
-zählen nicht zusätzlich. Beide Addons liefern für dieselbe Verpaarung denselben
+oben): Ein Pfadpaar zählt, wenn es außer dem gemeinsamen Vorfahren kein Pferd
+doppelt enthält. Ahnen eines gemeinsamen Vorfahren, die nur durch ihn hindurch
+erreichbar sind, zählen nicht zusätzlich. Bei Linienzucht zählen sie dagegen
+mit, wenn eine Seite sie auf eigenem Weg erreicht. Bis Version 1.2.0 endeten
+die Pfade am jeweils ersten gemeinsamen Vorfahren; bei Linienzucht fielen die
+Werte dadurch zu niedrig aus, bis unter die Warnschwelle (Audit M29).
+Beide Addons liefern für dieselbe Verpaarung denselben
 Wert - seit Addons#123 nicht mehr, weil zwei Fassungen zufällig übereinstimmen,
 sondern weil es nur noch eine gibt. Der exakte Wright-Term für
 die Eigen-Ingezüchtetheit gemeinsamer Vorfahren wird – wie dort – nicht
 rekursiv nachberechnet.
+
+**Gemeinsam mit `inzuchtkoeffizient` aktualisieren.** Sind beide Addons aktiv,
+rechnet immer die Kopie des Rechenkerns aus diesem Addon (alphabetische
+Ladereihenfolge des PluginManagers). Eine veraltete Fassung (ohne
+`WrightCoi::REVISION` bzw. mit einer Revision unter 2) meldet sich im
+Fehlerprotokoll.
 
 Die Empfehlung ist eine genetische Kennzahl, keine vollständige züchterische
 Bewertung. Für die Farbprognose siehe das Addon `farbvererbung`.
