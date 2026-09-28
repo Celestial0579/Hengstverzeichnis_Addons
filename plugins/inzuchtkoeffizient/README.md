@@ -31,6 +31,11 @@ Berechtigung `inzuchtkoeffizient.calculate`, die einer Gruppe unter
   auf der Detailseite verschwinden, den der Verpaarungsrechner bei gleicher
   Datenlage noch zählte (#72). Öffentlich gefiltert: unveröffentlichte
   Vorfahren stecken nur als Platzhalter im Baum und fließen nicht in den COI ein.
+  Welche Pferde die Eltern sind, übernimmt der Abschnitt aus dem Stammbaum des
+  Kerns: auch Eltern, die nur per Lebensnummer oder Name eingetragen sind
+  (CSV-Import, Freitext im Formular), sofern sie zu einem veröffentlichten
+  Pferd auflösen (Audit M28). Vorher zählten nur die festen Verknüpfungen,
+  und der Abschnitt zeigte in solchen Fällen 0,00 % oder fehlte.
 - **Verpaarungsrechner:** baut für die zwei ausgewählten Pferde jeweils einen
   eigenen Stammbaum über `App\Service\PedigreeBuilder::build()` auf (wählbare
   Tiefe 1-8) und berechnet daraus den COI des hypothetischen Fohlens - hier
@@ -76,11 +81,23 @@ F = Σ (0,5)^(n1 + n2 + 1)
 
 summiert über alle gemeinsamen Vorfahren, wobei `n1`/`n2` die Anzahl der
 Generationsschritte vom jeweiligen Elternteil zum gemeinsamen Vorfahren sind.
-Dabei gilt **Wrights Pfadregel**: Die Pfade enden am jeweils ersten
-gemeinsamen Vorfahren - dessen eigene Ahnen zählen nicht zusätzlich als
-gemeinsame Vorfahren, denn jeder Pfad zu ihnen enthielte den bereits
-gezählten Vorfahren erneut. (Ohne diese Regel lieferte der Rechenkern früher
-z. B. 48,44 % statt korrekt 25,00 % für das Fohlen zweier Vollgeschwister.)
+Dabei gilt **Wrights Pfadregel**: Ein Pfad Vater → … → gemeinsamer Vorfahre
+→ … → Mutter darf kein Pferd doppelt enthalten. Gezählt wird deshalb jedes
+Pfadpaar, dessen beide Hälften sich nur im gemeinsamen Vorfahren selbst
+schneiden. Ahnen eines gemeinsamen Vorfahren, die nur durch ihn hindurch
+erreichbar sind, zählen damit nicht zusätzlich. (Ohne diese Regel lieferte der
+Rechenkern früher z. B. 48,44 % statt korrekt 25,00 % für das Fohlen zweier
+Vollgeschwister.) Erreicht eine Seite einen solchen Ahnen aber auch auf eigenem
+Weg, zählt er mit. Bis Version 1.2.0 endete jeder Pfad am ersten gemeinsamen
+Vorfahren, und bei Linienzucht fehlten genau diese Pfade: Bei beidseitiger
+Linienzucht auf einen Hengst und dessen Vater zeigte das Register 12,50 %
+statt 15,63 % (Audit M29).
+
+**Gemeinsam mit `anpaarungs-empfehlung` aktualisieren.** Beide Addons bringen
+denselben Rechenkern mit, und geladen wird nur eine Kopie. Der PluginManager
+lädt alphabetisch, sind beide aktiv, rechnet also immer die Fassung aus
+`anpaarungs-empfehlung`. Eine veraltete Fassung (ohne `WrightCoi::REVISION`
+bzw. mit einer Revision unter 2) meldet sich im Fehlerprotokoll.
 Die Lehrbuchfälle sind in `tests/Unit/InzuchtkoeffizientCoiTest.php` als
 Unit-Tests festgehalten.
 Vereinfachung: der exakte Wright-Term `(1 + F_A)` für die Ingezüchtetheit des

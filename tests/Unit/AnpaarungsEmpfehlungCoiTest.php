@@ -266,6 +266,41 @@ class AnpaarungsEmpfehlungCoiTest extends TestCase {
     }
 
     /**
+     * Audit M29, Gegenbeispiel 2 über den echten Empfehlungs-Baum
+     * (kantenbasierter AncestorTreeBuilder): A (1) ist auf der Seite des
+     * Basispferds nur hinter dem gemeinsamen Vorfahren B (2, Sohn von A)
+     * erreichbar, beim Kandidaten direkt. Richtig 0,0625 - genau die
+     * Warnschwelle. Bis Revision 2 kamen 0,03125 heraus, und die Verpaarung
+     * erschien in der Empfehlung als unbedenklich.
+     */
+    public function testLinienzuchtErreichtWarnschwelleUeberAncestorTreeBuilder(): void {
+        $zeile = static fn(?int $sire = null, ?int $dam = null): array => [
+            'name' => null, 'ueln' => null, 'foreign_ueln' => null, 'birth_year' => null, 'color' => null,
+            'sire_id' => $sire, 'sire_name' => null, 'sire_ueln' => null,
+            'dam_id' => $dam, 'dam_name' => null, 'dam_ueln' => null,
+        ];
+        $rows = [
+            1 => $zeile(),
+            2 => $zeile(1),
+            4 => $zeile(2),
+            6 => $zeile(2),
+            10 => $zeile(4),
+            20 => $zeile(1, 6),
+        ];
+        foreach ($rows as $id => $row) {
+            $rows[$id]['name'] = "Pferd {$id}";
+        }
+        $graph = AncestorTreeBuilder::fromRows($rows);
+
+        $coi = CoiEstimator::fromParentTrees($graph->build(10, 6), $graph->build(20, 6));
+        $schwelle = (new \ReflectionClassConstant(EmpfehlungController::class, 'WARN_THRESHOLD'))->getValue();
+
+        $this->assertEqualsWithDelta(0.0625, $coi, 1e-12);
+        $this->assertGreaterThanOrEqual($schwelle, $coi,
+            'Diese Linienzucht muss in der Empfehlung als erhöht markiert werden.');
+    }
+
+    /**
      * Injiziert die SQLite-Attrappe als App\Database-Singleton, damit der
      * unveränderte PedigreeBuilder des Kerns gegen den Testbestand läuft.
      */

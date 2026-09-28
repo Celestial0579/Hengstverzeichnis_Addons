@@ -51,10 +51,12 @@ class InzuchtkoeffizientPluginTest extends FunctionalTestCase {
 
         // Regression zu Issue #25: Die gemeinsamen Vorfahren A und B erhalten
         // selbst je zwei Eltern(-Generationen). Nach Wrights Pfadregel darf das
-        // den COI von E NICHT verändern (die Ahnen von A/B sind nur DURCH A/B
-        // hindurch erreichbar, ihr Beitrag steckt allein im hier bewusst
-        // weggelassenen Term (1+F_A)) - die fehlerhafte Implementierung
-        // summierte sie mit und lieferte 48,44 % statt 25,00 %.
+        // den COI von E NICHT verändern - aber nur, weil die Ahnen von A/B auf
+        // BEIDEN Seiten ausschließlich DURCH A/B hindurch erreichbar sind: Ihr
+        // Beitrag steckt dann allein im hier bewusst weggelassenen Term
+        // (1+F_A). Die fehlerhafte Implementierung summierte sie mit und
+        // lieferte 48,44 % statt 25,00 %. (Ein Ahne, der auf einer Seite auch
+        // auf eigenem Weg erreichbar ist, zählt sehr wohl - Audit M29.)
         $aSireId = $this->createHorse($admin, "A-Vater-{$unique}", ['status' => 'active']);
         $aDamId = $this->createHorse($admin, "A-Mutter-{$unique}", ['status' => 'active']);
         $bSireId = $this->createHorse($admin, "B-Vater-{$unique}", ['status' => 'active']);
@@ -79,6 +81,33 @@ class InzuchtkoeffizientPluginTest extends FunctionalTestCase {
         // 2. Ein Pferd ohne gemeinsame Vorfahren beider Elternseiten (A) hat COI 0,00 %.
         $unrelatedDetail = $visitor->get("/horse?id={$aId}");
         $this->assertStringContainsString('0,00 %', $unrelatedDetail->body);
+
+        // 2b. Audit M28: Ein Fohlen, dessen Vater nur per Lebensnummer
+        //     eingetragen ist (wie nach einem CSV-Import). Der Vater - ein
+        //     Vollbruder von D - wird ZUERST angelegt; das Fohlen danach nur
+        //     mit sire_ueln. HorseController::store übernimmt die Nummer dann
+        //     als Freitext, autoLinkMatches() läuft nur beim Speichern des
+        //     Elternpferds. Der Stammbaum des Kerns löst den Vater auf, der
+        //     COI-Abschnitt las bisher nur sire_id und zeigte 0,00 %.
+        $uelnVater = 'DE' . substr(md5($unique), 0, 13);
+        $c2Id = $this->createHorse($admin, "C2-{$unique}", [
+            'status' => 'active',
+            'ueln' => $uelnVater,
+            'sire_id' => (string) $aId,
+            'dam_id' => (string) $bId,
+        ]);
+        $gId = $this->createHorse($admin, "G-{$unique}", [
+            'status' => 'active',
+            'sire_ueln' => $uelnVater,
+            'dam_id' => (string) $dId,
+        ]);
+        $this->assertNotSame($c2Id, $gId);
+        $uelnFohlen = $visitor->get("/horse?id={$gId}");
+        $this->assertSame(200, $uelnFohlen->statusCode);
+        $this->assertStringContainsString("C2-{$unique}", $uelnFohlen->body,
+            'Voraussetzung: Der Stammbaum des Kerns löst den per UELN eingetragenen Vater auf.');
+        $this->assertStringContainsString('25,00 %', $uelnFohlen->body,
+            'Der COI muss dieselben, per UELN aufgelösten Eltern verwenden wie der Stammbaum (M28).');
 
         // 3. Verpaarungsrechner: Admin hat serverseitig immer alle Berechtigungen.
         // Seit #125 wählt das Formular die Elterntiere über das GEMEINSAME

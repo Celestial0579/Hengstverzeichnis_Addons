@@ -38,8 +38,13 @@ anhand der Farbgenetik des Norwegischen Fjordpferds.
 | Braunfalbe (Brunblakk) | schwarze Basis + Agouti, kein Cream — `E_ A_ nn` |
 | Graufalbe (Grå) | schwarze Basis ohne Agouti, kein Cream — `E_ aa nn` |
 | Rotfalbe (Rødblakk) | fuchsfarbene Basis, kein Cream — `ee nn` |
-| Hellfalbe (Ulsblakk) | schwarze Basis + eine Cream-Dosis — `E_ Cr` |
-| Gelbfalbe (Gulblakk) | fuchsfarbene Basis + eine Cream-Dosis — `ee Cr` |
+| Hellfalbe (Ulsblakk) | schwarze Basis + eine Cream-Dosis — `E_ Cr n` |
+| Gelbfalbe (Gulblakk) | fuchsfarbene Basis + eine Cream-Dosis — `ee Cr n` |
+
+Cream ist unvollständig dominant: Zwei Dosen (`Cr Cr`) ergeben einen eigenen,
+stark aufgehellten Phänotyp, der keine der fünf Falbfarben ist. Als Elternfarbe
+ist er daher nicht wählbar; im Ergebnis des Rechners steht er – nur wenn er
+vorkommen kann – in einer eigenen Zeile „Doppelte Cream-Dosis (Cr Cr)“.
 
 Alle Fjordpferde tragen das Dun-(Falb-)Gen; die Farbunterschiede entstehen aus
 der Grundfarbe (Extension/Agouti) und dem Cream-Gen. Das Grau-Gen (G), das zu
@@ -53,6 +58,13 @@ ist, nimmt der Rechner je Genort alle mit der Farbe verträglichen Genotypen als
 **gleich wahrscheinlich** an. Reale Anlageträger-Häufigkeiten weichen davon ab –
 die Werte sind Schätzungen und ersetzen keinen Gentest. Eindeutige Kreuzungen
 sind exakt (z. B. Rotfalbe × Rotfalbe → 100 % Rotfalbe, da `ee × ee` immer `ee`).
+
+Hell- und Gelbfalbe tragen genau eine Cream-Dosis (`Cr n`), geben Cream also mit
+50 % weiter. Beispiele: Gelbfalbe × Rotfalbe → 50 % Gelbfalbe / 50 % Rotfalbe;
+Gelbfalbe × Gelbfalbe → 50 % Gelbfalbe, 25 % Rotfalbe, 25 % doppelte
+Cream-Dosis. Bis Version 1.2.0 nahm der Rechner an, die beiden Farben könnten
+auch `Cr Cr` sein, und zählte doppelt verdünnte Fohlen als Hell- bzw.
+Gelbfalbe (Gelbfalbe × Rotfalbe ergab dort 75 % / 25 %, Audit N25).
 
 ## Installation
 

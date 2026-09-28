@@ -57,7 +57,19 @@ class InzuchtkoeffizientCoiTest extends TestCase {
         require_once __DIR__ . '/../../plugins/inzuchtkoeffizient/Plugin.php';
     }
 
+    protected function setUp(): void {
+        // Der PedigreeBuilder-Cache ist request-global - in diesem Prozess
+        // also über Testfälle hinweg. Ohne Reset sähe ein Fall die Bäume und
+        // Freitext-Treffer eines vorigen.
+        if (class_exists(PedigreeBuilder::class)) {
+            PedigreeBuilder::resetCache();
+        }
+    }
+
     protected function tearDown(): void {
+        if (class_exists(PedigreeBuilder::class)) {
+            PedigreeBuilder::resetCache();
+        }
         if ($this->createdHorseIds !== []) {
             $placeholders = implode(',', array_fill(0, count($this->createdHorseIds), '?'));
             // FKs stehen auf ON DELETE SET NULL - Löschreihenfolge ist egal,
@@ -125,10 +137,13 @@ class InzuchtkoeffizientCoiTest extends TestCase {
 
     /**
      * Wrights Pfadregel: Die Ahnen eines bereits gezählten gemeinsamen Vorfahren
-     * dürfen NICHT zusätzlich als eigene gemeinsame Vorfahren zählen - jeder Pfad
-     * zu ihnen enthielte den schon gezählten Vorfahren erneut. Genau hier steckte
-     * ein Fehler, der 48,44 % statt 25,00 % lieferte (siehe Klassenkommentar in
-     * plugins/inzuchtkoeffizient/Plugin.php); dieser Fall hält die Korrektur fest.
+     * zählen hier NICHT zusätzlich als eigene gemeinsame Vorfahren - aber nur,
+     * weil 10-13 auf BEIDEN Seiten ausschließlich durch 1 bzw. 2 hindurch
+     * erreichbar sind: Jedes Pfadpaar zu ihnen enthielte 1 bzw. 2 doppelt.
+     * Genau hier steckte ein Fehler, der 48,44 % statt 25,00 % lieferte (siehe
+     * Klassenkommentar in plugins/inzuchtkoeffizient/Plugin.php); dieser Fall
+     * hält die Korrektur fest. Ist ein Ahne auf einer Seite auch auf eigenem
+     * Weg erreichbar, zählt er sehr wohl (siehe die Linienzucht-Fälle, M29).
      */
     public function testAhnenGemeinsamerVorfahrenWerdenNichtDoppeltGezaehlt(): void {
         // Wie der Vollgeschwister-Fall, aber die gemeinsamen Vorfahren 1 und 2
@@ -167,6 +182,74 @@ class InzuchtkoeffizientCoiTest extends TestCase {
      * gelten - sonst entstünde aus zwei "Unbekannt"-Knoten eine Verwandtschaft,
      * und der öffentliche Stammbaum ließe Rückschlüsse auf ausgeblendete Pferde zu.
      */
+    /**
+     * Audit M29, Gegenbeispiel 1: beidseitige Linienzucht auf B (2) und
+     * dessen Vater A (1). Vater 10 = B × 11, Mutter 20 = B × 21, und 21 hat
+     * ebenfalls den Vater A.
+     *
+     *   B:  10-2 / 20-2                -> 0,5^3 = 0,125
+     *   A:  10-2-1 / 20-21-1           -> 0,5^5 = 0,03125 (schneiden sich nur in A)
+     *       10-2-1 / 20-2-1            -> zählt NICHT (B doppelt)
+     *
+     * Richtig 0,15625. Bis Revision 2 endete der Pfad 10-2 an B, der zweite
+     * Term fehlte: 0,125. Ohne die Schnittmengenprüfung am Paar käme
+     * 0,1875 heraus - derselbe Fall deckt also auch die Paar-Bedingung ab.
+     */
+    public function testLinienzuchtUeberVaterDesGemeinsamenVorfahren(): void {
+        $b = fn(): array => self::node(2, self::node(1));
+        $sire = self::node(10, $b(), self::node(11));
+        $dam = self::node(20, $b(), self::node(21, self::node(1)));
+
+        $this->assertEqualsWithDelta(0.15625, CoiCalculator::fromParentTrees($sire, $dam), 1e-12);
+    }
+
+    /**
+     * Audit M29, Gegenbeispiel 2: A (1) ist auf der Vaterseite nur hinter
+     * einem anderen gemeinsamen Vorfahren B (2, Sohn von A) erreichbar, auf
+     * der Mutterseite aber direkt. Vater 10 hat den Vater 4 (Sohn von B),
+     * Mutter 20 = A × 6, 6 ist Tochter von B.
+     *
+     *   B:  10-4-2 / 20-6-2            -> 0,5^5 = 0,03125
+     *   A:  10-4-2-1 / 20-1            -> 0,5^5 = 0,03125
+     *
+     * Richtig 0,0625 (Warnschwelle der Anpaarungs-Empfehlung), bisher 0,03125.
+     */
+    public function testTieferGemeinsamerVorfahreNurHinterAnderemGemeinsamemVorfahren(): void {
+        $b = fn(): array => self::node(2, self::node(1));
+        $sire = self::node(10, self::node(4, $b()));
+        $dam = self::node(20, self::node(1), self::node(6, $b()));
+
+        $this->assertEqualsWithDelta(0.0625, CoiCalculator::fromParentTrees($sire, $dam), 1e-12);
+    }
+
+    /**
+     * Elter mit eigenen Ahnen × eigener Nachkomme: Vater 5 (= 1 × 2) mit
+     * seiner Tochter 6 (= 5 × 3). Der einzige gültige Beitrag ist 5 selbst
+     * (0,5^2). Die Ahnen 1 und 2 sind von der Mutterseite nur durch 5 hindurch
+     * erreichbar - ohne Pfadregel kämen sie hinzu.
+     */
+    public function testElterMitEigenenAhnenUndNachkommeBleibt25Prozent(): void {
+        $sire = self::node(5, self::node(1), self::node(2));
+        $dam = self::node(6, self::node(5, self::node(1), self::node(2)), self::node(3));
+
+        $this->assertEqualsWithDelta(0.25, CoiCalculator::fromParentTrees($sire, $dam), 1e-12);
+    }
+
+    /**
+     * Defensiver Zyklusschutz: Ein fremd gebauter Baum, in dem Pferd 3 sich
+     * über 1 selbst als Vorfahre enthält (3 -> 1 -> 3 -> 1). PedigreeBuilder
+     * verhindert das (#131), eine andere Baumquelle vielleicht nicht. Die
+     * Rechnung terminiert und zählt die Wiederholung nicht: 1 und 2 als
+     * gemeinsame Vorfahren wie bei Vollgeschwistern, 0,25 - ohne Schutz käme
+     * über den Umweg ein zweiter Pfad zu 1 hinzu (0,375).
+     */
+    public function testZyklusImFremdbaumBrichtAb(): void {
+        $sire = self::node(3, self::node(1, self::node(3, self::node(1))), self::node(2));
+        $dam = self::node(4, self::node(1), self::node(2));
+
+        $this->assertEqualsWithDelta(0.25, CoiCalculator::fromParentTrees($sire, $dam), 1e-12);
+    }
+
     public function testPlatzhalterZaehlenNichtAlsGemeinsamerVorfahre(): void {
         $sire = self::node(30, self::placeholder(99), self::node(31));
         $dam = self::node(32, self::placeholder(99), self::node(33));
@@ -216,11 +299,23 @@ class InzuchtkoeffizientCoiTest extends TestCase {
         return $pdo;
     }
 
-    private function insertHorse(PDO $db, string $name, ?int $sireId = null, ?int $damId = null): int {
+    private function insertHorse(
+        PDO $db,
+        string $name,
+        ?int $sireId = null,
+        ?int $damId = null,
+        ?string $ueln = null,
+        ?string $sire_name = null,
+        ?string $sire_ueln = null,
+        ?string $dam_name = null,
+        ?string $dam_ueln = null,
+        int $is_published = 1,
+    ): int {
         $stmt = $db->prepare(
-            'INSERT INTO horses (name, sire_id, dam_id, is_published) VALUES (?, ?, ?, 1)'
+            'INSERT INTO horses (name, sire_id, dam_id, ueln, sire_name, sire_ueln, dam_name, dam_ueln, is_published)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
-        $stmt->execute([$name, $sireId, $damId]);
+        $stmt->execute([$name, $sireId, $damId, $ueln, $sire_name, $sire_ueln, $dam_name, $dam_ueln, $is_published]);
         $id = (int) $db->lastInsertId();
         $this->createdHorseIds[] = $id;
         return $id;
@@ -318,5 +413,91 @@ class InzuchtkoeffizientCoiTest extends TestCase {
             Plugin::DETAIL_PARENT_DEPTH . ' Generationen je Elternteil',
             $sections[0]
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Detailseite mit per UELN/Name verknüpften Eltern (Audit M28)
+    // ------------------------------------------------------------------
+
+    /**
+     * Großeltern G1 × G2, deren Kinder S und D Vollgeschwister per FK sind.
+     * S trägt eine eindeutige UELN.
+     *
+     * @return array{s: int, d: int, s_ueln: string, s_name: string, d_name: string}
+     */
+    private function vollgeschwister(PDO $db, bool $sVeroeffentlicht = true): array {
+        $u = uniqid('coi28-', true);
+        $g1 = $this->insertHorse($db, "G1-{$u}");
+        $g2 = $this->insertHorse($db, "G2-{$u}");
+        $sUeln = 'DE' . substr(md5($u), 0, 13);
+        $s = $this->insertHorse($db, "S-{$u}", $g1, $g2, ueln: $sUeln, is_published: $sVeroeffentlicht ? 1 : 0);
+        $d = $this->insertHorse($db, "D-{$u}", $g1, $g2);
+
+        return ['s' => $s, 'd' => $d, 's_ueln' => $sUeln, 's_name' => "S-{$u}", 'd_name' => "D-{$u}"];
+    }
+
+    /** @return array<string, mixed> */
+    private function zeile(PDO $db, int $id): array {
+        $stmt = $db->prepare('SELECT * FROM horses WHERE id = ?');
+        $stmt->execute([$id]);
+        $zeile = $stmt->fetch(PDO::FETCH_ASSOC);
+        $this->assertIsArray($zeile);
+        return $zeile;
+    }
+
+    /**
+     * Der Vater ist nur per Lebensnummer eingetragen (CSV-Import, Formular-
+     * Freitext), die Mutter per FK. Der Stammbaum des Kerns löst den Vater
+     * auf - der COI-Abschnitt nahm bisher nur sire_id und zeigte 0,00 %.
+     */
+    public function testAddDetailSectionNutztPerLebensnummerVerknuepftenVater(): void {
+        $db = $this->db();
+        $e = $this->vollgeschwister($db);
+        $fohlen = $this->insertHorse($db, 'F-' . uniqid('coi28-', true), null, $e['d'], sire_ueln: $e['s_ueln']);
+
+        $pedigree = PedigreeBuilder::build($fohlen, 6, true);
+        $sections = (new Plugin())->addDetailSection([], $this->zeile($db, $fohlen), [], $pedigree);
+
+        $this->assertCount(1, $sections);
+        $this->assertStringContainsString('25,00 %', $sections[0]);
+    }
+
+    /** Beide Eltern nur per Name: Der Abschnitt fehlte bisher ganz. */
+    public function testAddDetailSectionBeideElternNurPerFreitext(): void {
+        $db = $this->db();
+        $e = $this->vollgeschwister($db);
+        $fohlen = $this->insertHorse(
+            $db,
+            'F-' . uniqid('coi28-', true),
+            sire_name: $e['s_name'],
+            dam_name: $e['d_name'],
+        );
+
+        $pedigree = PedigreeBuilder::build($fohlen, 6, true);
+        $sections = (new Plugin())->addDetailSection([], $this->zeile($db, $fohlen), [], $pedigree);
+
+        $this->assertCount(1, $sections, 'Mit zwei auflösbaren Freitext-Eltern gehört der Abschnitt auf die Seite.');
+        $this->assertStringContainsString('25,00 %', $sections[0]);
+    }
+
+    /**
+     * Ein unveröffentlichter Vater, nur per UELN eingetragen: Der Kern macht
+     * daraus einen Platzhalter, und der COI darf ihn nicht doch noch über
+     * einen eigenen Weg einbeziehen (kein Leck).
+     */
+    public function testUnveroeffentlichterFreitextElternteilFliesstNichtEin(): void {
+        $db = $this->db();
+        $e = $this->vollgeschwister($db, false);
+        $fohlen = $this->insertHorse($db, 'F-' . uniqid('coi28-', true), null, $e['d'], sire_ueln: $e['s_ueln']);
+
+        $pedigree = PedigreeBuilder::build($fohlen, 6, true);
+        $this->assertTrue($pedigree['sire']['is_placeholder'] ?? false,
+            'Voraussetzung: Der Kern zeigt den unveröffentlichten Vater nur als Platzhalter.');
+
+        $sections = (new Plugin())->addDetailSection([], $this->zeile($db, $fohlen), [], $pedigree);
+
+        $this->assertCount(1, $sections);
+        $this->assertStringNotContainsString('25,00 %', $sections[0]);
+        $this->assertStringContainsString('0,00 %', $sections[0], 'Nur der Mutterbaum zählt.');
     }
 }

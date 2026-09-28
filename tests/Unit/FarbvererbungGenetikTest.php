@@ -36,8 +36,9 @@ class FarbvererbungGenetikTest extends TestCase {
 
     /**
      * Familie 1: Jede der 25 Paarungen ergibt in Summe exakt 1,0 - die fünf
-     * Phänotypen sind eine vollständige Zerlegung. Fängt jede Regression, bei
-     * der die Prozentanzeige sich still auf z. B. 90 % addiert.
+     * Phänotypen plus das gesondert ausgewiesene Cr-Cr-Ergebnis (Audit N25)
+     * sind eine vollständige Zerlegung. Fängt jede Regression, bei der die
+     * Prozentanzeige sich still auf z. B. 90 % addiert.
      */
     public function testEveryPairingSumsToOne(): void {
         foreach (FjordColor::ORDER as $sire) {
@@ -50,9 +51,9 @@ class FarbvererbungGenetikTest extends TestCase {
                     "Summe der Fohlenfarb-Wahrscheinlichkeiten für {$sire} x {$dam} muss 1,0 sein."
                 );
                 $this->assertSame(
-                    FjordColor::ORDER,
+                    FjordColor::RESULT_ORDER,
                     array_keys($result),
-                    "predictFoal({$sire}, {$dam}) muss genau die fünf Falbfarben liefern."
+                    "predictFoal({$sire}, {$dam}) muss die fünf Falbfarben plus 'doppelcream' liefern."
                 );
                 foreach ($result as $key => $p) {
                     $this->assertGreaterThanOrEqual(0.0, $p, "Negative Wahrscheinlichkeit für {$key} bei {$sire} x {$dam}.");
@@ -117,24 +118,60 @@ class FarbvererbungGenetikTest extends TestCase {
     }
 
     /**
-     * Familie 4: Hellfalbe x Braunfalbe isoliert den Cream-Locus. Ein
-     * Hellfalbe ist Cream-Träger (Cr ∈ {Cr n, Cr Cr} gleich gewichtet ->
-     * p(n) = 0,25), der Braunfalbe sicher nn -> p(kein Cream beim Fohlen)
-     * = 0,25 * 1 = 0,25, also 0,75 Cream-Anteil - und der verteilt sich
+     * Familie 4: Hellfalbe x Braunfalbe isoliert den Cream-Locus. Cream ist
+     * unvollständig dominant: Ein Hellfalbe trägt genau EINE Dosis (Cr n ->
+     * p(n) = 0,5), der Braunfalbe sicher nn -> p(kein Cream beim Fohlen)
+     * = 0,5 * 1 = 0,5, also 0,5 Cream-Anteil - und der verteilt sich
      * vollständig auf die beiden Cream-Phänotypen Hell- und Gelbfalbe.
-     * Fängt die Regression p(n) = 0,5 statt 0,25 (Cream-Anteil fiele auf 0,5).
+     * Fängt die frühere Annahme Cr ∈ {Cr n, Cr Cr} mit p(n) = 0,25 (Cream-
+     * Anteil stiege auf 0,75, Audit N25).
      */
     public function testCreamCarrierProducesCreamOffspringWithExpectedShare(): void {
         $r = FjordColor::predictFoal('ulsblakk', 'brunblakk');
 
         $this->assertEqualsWithDelta(
-            0.75,
+            0.5,
             $r['ulsblakk'] + $r['gulblakk'],
             1e-9,
-            'Cream-Träger x nn: p(Cream beim Fohlen) = 1 - 0,25*1 = 0,75.'
+            'Cr n x nn: p(Cream beim Fohlen) = 1 - 0,5*1 = 0,5.'
         );
-        // Gegenprobe: die restlichen 25 % sind die cream-freien Phänotypen.
-        $this->assertEqualsWithDelta(0.25, $r['brunblakk'] + $r['graa'] + $r['rodblakk'], 1e-9);
+        // Gegenprobe: die restlichen 50 % sind die cream-freien Phänotypen.
+        $this->assertEqualsWithDelta(0.5, $r['brunblakk'] + $r['graa'] + $r['rodblakk'], 1e-9);
+        $this->assertSame(0.0, $r['doppelcream'], 'Mit einem nn-Elternteil ist Cr Cr unmöglich.');
+    }
+
+    /**
+     * Gelbfalbe (ee Cr n) x Rotfalbe (ee nn): exakt halb/halb. Unter der
+     * alten Annahme kamen 75 % / 25 % heraus (Audit N25).
+     */
+    public function testGelbfalbeMalRotfalbeIstExakt5050(): void {
+        $r = FjordColor::predictFoal('gulblakk', 'rodblakk');
+
+        $this->assertSame(0.5, $r['gulblakk']);
+        $this->assertSame(0.5, $r['rodblakk']);
+        $this->assertSame(0.0, $r['doppelcream']);
+    }
+
+    /**
+     * Gelbfalbe x Gelbfalbe: Cr n x Cr n ergibt 1/4 nn, 1/2 Cr n, 1/4 Cr Cr.
+     * Das doppelt verdünnte Viertel ist keine Gelbfalbe und steht gesondert.
+     */
+    public function testGelbfalbeMalGelbfalbeWeistDoppelCreamGesondertAus(): void {
+        $r = FjordColor::predictFoal('gulblakk', 'gulblakk');
+
+        $this->assertSame(0.5, $r['gulblakk']);
+        $this->assertSame(0.25, $r['rodblakk']);
+        $this->assertSame(0.25, $r['doppelcream']);
+    }
+
+    /**
+     * 'doppelcream' ist ein Ergebnis, keine Elternfarbe: Der Rechner darf es
+     * als Eingabe nicht annehmen, und die Auswahl bleibt bei fünf Farben.
+     */
+    public function testDoppelCreamIstKeineWaehlbareElternfarbe(): void {
+        $this->assertFalse(FjordColor::isKnown('doppelcream'));
+        $this->assertCount(5, FjordColor::options());
+        $this->assertStringContainsString('Doppelte Cream-Dosis', FjordColor::label('doppelcream'));
     }
 
     /**

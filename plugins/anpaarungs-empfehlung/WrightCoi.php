@@ -58,11 +58,23 @@ namespace Hengstverzeichnis\Addons\Shared;
  * Verwendet die im Zuchtwesen übliche Näherungsformel
  * F = Σ (0,5)^(n1+n2+1) über alle gemeinsamen Vorfahren, wobei n1/n2 die
  * Anzahl der Generationsschritte vom jeweiligen Elternteil zum gemeinsamen
- * Vorfahren sind. Wrights Pfadregel verlangt dabei, dass in einem Pfad kein
- * Individuum mehr als einmal vorkommt - unterhalb eines gemeinsamen Vorfahren
- * wird daher nicht weitergesammelt, denn dessen eigene Ahnen sind nur durch ihn
- * hindurch erreichbar und stecken korrekt ausschließlich im Term (1+F_A).
- * Dieser Term selbst wird bewusst nicht rekursiv nachberechnet - das würde bei
+ * Vorfahren sind.
+ *
+ * Wrights Pfadregel: Ein Pfad Vater -> … -> A -> … -> Mutter darf kein
+ * Individuum mehr als einmal enthalten. Geprüft wird das am PAAR: Die beiden
+ * Halbpfade (Vater -> A und Mutter -> A) dürfen sich nur in A selbst
+ * schneiden. Ahnen von A, die nur durch A hindurch erreichbar sind, fallen
+ * damit heraus (ihr Beitrag steckt im Term 1+F_A). Ahnen von A, die auf der
+ * anderen Seite auf einem EIGENEN Weg erreichbar sind, zählen dagegen mit.
+ * Bis Revision 2 endete jeder Pfad am ersten gemeinsamen Vorfahren - das
+ * schnitt genau diese Pfade ab (Audit M29). Gegenbeispiele:
+ *
+ *  - Linienzucht auf B und dessen Vater A, beidseitig: Vater = B × X,
+ *    Mutter = B × Y, Y hat Vater A. Richtig 0,15625, bisher 0,125.
+ *  - A nur hinter einem anderen gemeinsamen Vorfahren B erreichbar, auf der
+ *    Gegenseite aber direkt: richtig 0,0625, bisher 0,03125.
+ *
+ * Der Term 1+F_A selbst wird bewusst nicht rekursiv nachberechnet - das würde bei
  * jedem Aufruf zusätzliche, potenziell exponentiell viele
  * PedigreeBuilder-Abfragen auslösen (kein Caching, siehe
  * docs/plugin-development.md im Framework-Repo). Für die verfügbare Tiefe
@@ -75,30 +87,45 @@ namespace Hengstverzeichnis\Addons\Shared;
  */
 final class WrightCoi {
 
+    /**
+     * Revisionsmerkmal des Rechenkerns. Seit Revision 2 gilt Wrights
+     * Pfadregel vollständig (Audit M29); eine ältere Fassung hat die
+     * Konstante nicht. Die Plugin.php-Dateien prüfen sie nach dem
+     * class_exists()-Wächter: Der PluginManager lädt die Addons alphabetisch,
+     * bei beiden aktiven Addons rechnet also immer die Kopie aus
+     * anpaarungs-empfehlung - ein Update nur von inzuchtkoeffizient bliebe
+     * sonst ohne jeden Hinweis wirkungslos.
+     */
+    public const REVISION = 2;
+
+    /**
+     * Aufwand: Je Seite gibt es höchstens 2^Tiefe - 1 Pfade (255 bei Tiefe
+     * 8), gesammelt in EINEM Durchlauf ohne Abbruch. Verglichen werden nur
+     * Pfadpaare zu demselben Vorfahren. Im Review gemessen: 200 Kandidaten bei
+     * Tiefe 8 in einer geschlossenen Population (2-8 Tiere je Generation)
+     * 0,25-0,6 s statt vorher 0,02 s, bei realistischer Population (30 je
+     * Generation) 0,08 s. Ein Deckel ist daher nicht nötig.
+     */
     public static function fromParentTrees(?array $sireTree, ?array $damTree): float {
-        // Erster Durchlauf ohne Abbruch: bestimmt die Menge der IDs, die in
-        // beiden Teilbäumen vorkommen (gemeinsame Vorfahren).
-        $sireAll = [];
-        self::collectAncestors($sireTree, 0, $sireAll);
-        $damAll = [];
-        self::collectAncestors($damTree, 0, $damAll);
-        $common = array_intersect_key($sireAll, $damAll);
-
-        // Zweiter Durchlauf: Pfade enden am jeweils ersten gemeinsamen
-        // Vorfahren (Wrights Pfadregel, s. Klassenkommentar).
-        $sireOccurrences = [];
-        self::collectAncestors($sireTree, 0, $sireOccurrences, $common);
-
-        $damOccurrences = [];
-        self::collectAncestors($damTree, 0, $damOccurrences, $common);
+        $sirePaths = [];
+        self::collectAncestors($sireTree, [], $sirePaths);
+        $damPaths = [];
+        self::collectAncestors($damTree, [], $damPaths);
 
         $sum = 0.0;
-        foreach ($sireOccurrences as $ancestorId => $linksFromSire) {
-            if (!isset($damOccurrences[$ancestorId])) {
+        foreach ($sirePaths as $ancestorId => $pathsFromSire) {
+            if (!isset($damPaths[$ancestorId])) {
                 continue;
             }
-            foreach ($linksFromSire as $n1) {
-                foreach ($damOccurrences[$ancestorId] as $n2) {
+            foreach ($pathsFromSire as $p1) {
+                foreach ($damPaths[$ancestorId] as $p2) {
+                    // Wrights Pfadregel am Paar: Die beiden Halbpfade teilen
+                    // nur den gemeinsamen Vorfahren selbst (s. Klassenkommentar).
+                    if (count(array_intersect_key($p1, $p2)) !== 1) {
+                        continue;
+                    }
+                    $n1 = count($p1) - 1;
+                    $n2 = count($p2) - 1;
                     $sum += (0.5 ** ($n1 + $n2 + 1));
                 }
             }
@@ -109,38 +136,43 @@ final class WrightCoi {
 
     /**
      * Sammelt für jeden erreichbaren, echten (nicht-Platzhalter) Vorfahren im
-     * Teilbaum die Anzahl an Generationsschritten ("Links") vom übergebenen
-     * Elternteil aus. Ein Pferd kann mehrfach mit unterschiedlicher
-     * Schrittzahl auftreten (mehrere Abstammungspfade) - alle Vorkommen
-     * fließen einzeln in die Summe ein, das ist im Pfad-Koeffizienten-Verfahren
-     * so vorgesehen.
+     * Teilbaum ALLE Pfade vom übergebenen Elternteil zu ihm, jeweils als
+     * ID-Menge (Elternteil und Vorfahre eingeschlossen). Die Schrittzahl ist
+     * count($pfad) - 1. Ein Pferd kann über mehrere Abstammungspfade
+     * auftreten - jeder Pfad wird einzeln geführt, denn ob ein Paar zählt,
+     * entscheidet erst der Vergleich mit der Gegenseite (fromParentTrees()).
      *
      * Platzhalter (unveröffentlichte oder unbekannte Vorfahren) tragen keine
      * Identität und dürfen deshalb nie als gemeinsamer Vorfahre gelten - sonst
      * entstünde aus zwei "Unbekannt"-Knoten eine Verwandtschaft, und der
      * öffentliche Stammbaum ließe Rückschlüsse auf ausgeblendete Pferde zu.
      *
-     * Ist `$stopAt` gesetzt (Menge gemeinsamer Vorfahren-IDs), endet die
-     * Rekursion an jedem darin enthaltenen Knoten: seine eigenen Ahnen dürfen
-     * nach Wrights Pfadregel nicht als weitere "gemeinsame Vorfahren" gezählt
-     * werden, da jeder Pfad zu ihnen den bereits gezählten Vorfahren erneut
-     * enthielte.
+     * Kein Abbruch an gemeinsamen Vorfahren mehr (bis Revision 2 per
+     * `$stopAt`, Audit M29): Welche Ahnen eines gemeinsamen Vorfahren
+     * mitzählen, hängt davon ab, ob die Gegenseite sie auf eigenem Weg
+     * erreicht - das entscheidet die Schnittmengenprüfung am Paar.
      *
-     * @param array<int, list<int>> &$map Vorfahren-ID => Liste der Schrittzahlen
-     * @param array<int, mixed> $stopAt IDs, an denen die Rekursion endet
+     * Defensiver Zyklusschutz: Ein Pfad enthält kein Individuum doppelt.
+     * PedigreeBuilder verhindert Zyklen schon selbst (#131), eine fremde
+     * Baumquelle vielleicht nicht.
+     *
+     * @param array<int|string, true> $pathIds IDs auf dem Pfad bis hierher
+     * @param array<int|string, list<array<int|string, true>>> &$map Vorfahren-ID => Liste der Pfade
      */
-    private static function collectAncestors(?array $node, int $links, array &$map, array $stopAt = []): void {
+    private static function collectAncestors(?array $node, array $pathIds, array &$map): void {
         if ($node === null || empty($node['id']) || !empty($node['is_placeholder'])) {
             return;
         }
 
-        $map[$node['id']][] = $links;
-
-        if (isset($stopAt[$node['id']])) {
+        $id = $node['id'];
+        if (isset($pathIds[$id])) {
             return;
         }
 
-        self::collectAncestors($node['sire'] ?? null, $links + 1, $map, $stopAt);
-        self::collectAncestors($node['dam'] ?? null, $links + 1, $map, $stopAt);
+        $pathIds[$id] = true;
+        $map[$id][] = $pathIds;
+
+        self::collectAncestors($node['sire'] ?? null, $pathIds, $map);
+        self::collectAncestors($node['dam'] ?? null, $pathIds, $map);
     }
 }

@@ -44,6 +44,16 @@ if (!class_exists(WrightCoi::class, false)) {
     require_once __DIR__ . '/WrightCoi.php';
 }
 
+// Mischstand erkennen (Audit M29): Der PluginManager lädt die Addons
+// alphabetisch - sind beide aktiv, rechnet immer die Kopie aus
+// anpaarungs-empfehlung. Stammt die geladene Klasse aus einer Fassung vor
+// Revision 2 (Pfade endeten am ersten gemeinsamen Vorfahren), bliebe ein
+// Update nur eines der beiden Addons sonst ohne jeden Hinweis wirkungslos.
+// Nachladen lässt sich eine Klasse nicht - also wenigstens sichtbar machen.
+if (!defined(WrightCoi::class . '::REVISION') || WrightCoi::REVISION < 2) {
+    error_log('[anpaarungs-empfehlung] Veralteter WrightCoi-Rechenkern geladen - inzuchtkoeffizient und anpaarungs-empfehlung gemeinsam aktualisieren');
+}
+
 // Altname aus der Zeit der Doppelung (#123): Vor der Zusammenlegung war
 // CoiEstimator eine eigene Klasse mit eigener Rechnung - und lief zeitweise
 // sogar auseinander (ihm fehlte Wrights Pfadregel). Der Alias hält bestehende
