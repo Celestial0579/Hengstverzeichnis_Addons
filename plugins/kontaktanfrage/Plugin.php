@@ -1148,10 +1148,19 @@ final class Aufraeumen {
 
 /**
  * Öffentlicher POST-Endpunkt. Bewusst ohne checkAuth() - er ist für anonyme
- * Besucher gedacht, wie das DSGVO-Kontaktformular des Kerns. Der Schutz
- * besteht deshalb aus fünf Hürden: CSRF-Token, Honeypot, Rate-Limit (je IP
- * UND je Empfänger), Spam-Aufgabe (#351) und der abgeschlossenen
- * Gründe-Liste.
+ * Besucher gedacht, wie das DSGVO-Kontaktformular des Kerns. Die Hürden
+ * greifen in dieser Reihenfolge (dieselbe wie in deckanfrage und
+ * verkaufsboerse):
+ *
+ *  1. CSRF-Token
+ *  2. Honeypot (still "erfolg", bucht nichts)
+ *  3. Zähler je IP - prüfen und buchen, VOR der Aufgabe
+ *  4. Leserecht contacts.view (still "erfolg")
+ *  5. Spam-Aufgabe (#351)
+ *  6. Eingabeprüfung samt abgeschlossener Gründe-Liste
+ *  7. Ziel: veröffentlicht, kein Opt-out, Team-Adresse (sonst still "erfolg")
+ *  8. Zähler je Empfänger - prüfen und buchen, erst jetzt (Audit M4)
+ *  9. Speichern, Mail an das Team, Protokoll
  */
 class AnfrageController extends BaseController {
 
@@ -1176,37 +1185,39 @@ class AnfrageController extends BaseController {
             $this->zurueck($id, 'erfolg');
         }
 
+        // Der IP-Zähler zählt VERSUCHE und steht deshalb vor der Aufgabe: Er
+        // bremst den einzelnen Absender, auch beim Raten der Aufgabe (siehe
+        // unten). Der Empfängerzähler steht erst hinter Aufgabe und
+        // Zielprüfung, siehe dort.
         $ip = ClientIp::resolve();
-        // Seit #336 gibt es nur noch eine Kontaktliste, der Bezeichner braucht
-        // also keinen Typ mehr. Das Präfix bleibt trotzdem stehen: Der Zähler
-        // liegt in derselben Tabelle wie alle anderen, und eine nackte Zahl
-        // als Bezeichner wäre eine Einladung zur Kollision.
-        $zielBezeichner = 'kontakt:' . $id;
-        // Zwei Zähler, weil sie zwei verschiedene Missbräuche treffen: Der
-        // IP-Zähler bremst den einzelnen Absender, der Empfänger-Zähler
-        // verhindert, dass ein Kontakt über wechselnde Anschlüsse zugemüllt
-        // wird. Nur einer von beiden wäre jeweils leicht zu umgehen.
-        if (RateLimiter::tooManyAttempts($ip, 'kontaktanfrage-ip', self::MAX_JE_IP, self::FENSTER_IP)
-            || RateLimiter::tooManyAttempts($zielBezeichner, 'kontaktanfrage-ziel', self::MAX_JE_ZIEL, self::FENSTER_ZIEL)) {
-            PluginAudit::log(
-                Plugin::SLUG,
-                'Kontaktanfrage abgewiesen (Rate-Limit)',
-                "Kontakt #{$id}",
-                'über das öffentliche Formular'
-            );
-            $this->zurueck($id, 'zuviele');
+        if (RateLimiter::tooManyAttempts($ip, 'kontaktanfrage-ip', self::MAX_JE_IP, self::FENSTER_IP)) {
+            $this->abweisenWegenLimit($id);
         }
         RateLimiter::recordAttempt($ip, 'kontaktanfrage-ip');
-        RateLimiter::recordAttempt($zielBezeichner, 'kontaktanfrage-ziel');
 
-        // Die Spam-Aufgabe wird NACH der Buchung geprüft, und das ist keine
-        // Nachlässigkeit: Der eingebaute Anbieter stellt eine Rechenaufgabe
-        // mit rund zwanzig möglichen Antworten. Zählte ein falscher Versuch
-        // nicht, könnte ein Bot beliebig oft raten und käme im Schnitt nach
-        // wenigen Anläufen durch - die Aufgabe wäre dann Zierde. Genau die
-        // Begrenzung der Rateversuche macht sie wirksam. Der Preis ist, dass
-        // ein Vertipper einen der fünf Versuche je Stunde kostet; die
-        // Rückmeldung sagt deshalb ausdrücklich, woran es lag.
+        // Dieselbe Regel wie beim Anzeigen: Ohne contacts.view liefert die
+        // Kontaktseite des Kerns 404 (PublicController::contactDetail), das
+        // Formular erscheint also gar nicht. Ein direkter POST darf dann
+        // nichts speichern (Audit N2). Die Rückmeldung ist trotzdem
+        // "erfolg" - das Recht hängt an der Gruppe, nicht an der ID, aber
+        // eine abweichende Antwort wäre ein unnötiges Signal. Die Prüfung
+        // steht VOR der Aufgabe, weil ein POST ohne Recht gar nicht erst
+        // verarbeitet werden soll, und HINTER dem IP-Zähler, damit auch
+        // solche POSTs begrenzt bleiben. Captcha::clear(), damit keine
+        // ausgegebene Aufgabe in der Sitzung liegen bleibt.
+        if (!$this->hasPermission('contacts', 'view')) {
+            Captcha::clear();
+            $this->zurueck($id, 'erfolg');
+        }
+
+        // Die Spam-Aufgabe wird NACH der Buchung des IP-Zählers geprüft, und
+        // das ist keine Nachlässigkeit: Der eingebaute Anbieter stellt eine
+        // Rechenaufgabe mit rund zwanzig möglichen Antworten. Zählte ein
+        // falscher Versuch nicht, könnte ein Bot beliebig oft raten und käme
+        // im Schnitt nach wenigen Anläufen durch - die Aufgabe wäre dann
+        // Zierde. Genau die Begrenzung der Rateversuche macht sie wirksam. Der
+        // Preis ist, dass ein Vertipper einen der fünf Versuche je Stunde
+        // kostet; die Rückmeldung sagt deshalb ausdrücklich, woran es lag.
         if (Captcha::verify($this->settings, Formular::CAPTCHA_KONTEXT, $_POST) !== Captcha::OK) {
             $this->zurueck($id, 'captcha');
         }
@@ -1224,12 +1235,35 @@ class AnfrageController extends BaseController {
         $ziel = Ziel::oeffentlich($id);
 
         // Fehlender/unveröffentlichter Datensatz, Opt-out oder fehlende
-        // Team-Adresse: verwerfen und "erfolg" melden. Der Rückgabestatus darf
-        // kein Orakel dafür sein, welche IDs es gibt und wer Anfragen
-        // abgeschaltet hat.
+        // Team-Adresse: verwerfen und "erfolg" melden - wie oben bei fehlendem
+        // contacts.view. Der Rückgabestatus darf kein Orakel dafür sein, welche
+        // IDs es gibt und wer Anfragen abgeschaltet hat. Gebucht wird in
+        // diesen Fällen nichts.
         if ($teamAdresse === null || $ziel === null || Ziel::abgeschaltet($id)) {
             $this->zurueck($id, 'erfolg');
         }
+
+        // Der Empfängerzähler verhindert, dass ein Kontakt über wechselnde
+        // Anschlüsse zugemüllt wird - der IP-Zähler allein wäre so leicht zu
+        // umgehen. Er zählt ANGENOMMENE Anfragen und steht deshalb erst hier,
+        // hinter Aufgabe, Eingabe- und Zielprüfung. Stand er davor, sperrten
+        // zehn Versuche mit falscher oder leerer Antwort das Formular eines
+        // Kontakts für einen Tag, ohne dass eine Anfrage ankam (Audit M4).
+        //
+        // Seit #336 gibt es nur noch eine Kontaktliste, der Bezeichner braucht
+        // also keinen Typ mehr. Das Präfix bleibt trotzdem stehen: Der Zähler
+        // liegt in derselben Tabelle wie alle anderen, und eine nackte Zahl
+        // als Bezeichner wäre eine Einladung zur Kollision.
+        //
+        // Bewusst hingenommen: "zuviele" ist damit nur noch für veröffentlichte
+        // Kontakte ohne Opt-out erreichbar. Dass die ID ein öffentlicher
+        // Kontakt ist, zeigt dessen Kontaktseite ohnehin. Prüfen und Buchen
+        // sind nicht atomar - wie beim IP-Zähler.
+        $zielBezeichner = 'kontakt:' . $id;
+        if (RateLimiter::tooManyAttempts($zielBezeichner, 'kontaktanfrage-ziel', self::MAX_JE_ZIEL, self::FENSTER_ZIEL)) {
+            $this->abweisenWegenLimit($id);
+        }
+        RateLimiter::recordAttempt($zielBezeichner, 'kontaktanfrage-ziel');
 
         $grundLabel = $gruende[$grundSchluessel];
 
@@ -1278,6 +1312,17 @@ class AnfrageController extends BaseController {
         // wird das trotzdem als Fehler gemeldet: Er soll nicht auf eine
         // Antwort warten, die vielleicht niemand gesehen hat.
         $this->zurueck($id, $versendet ? 'erfolg' : 'fehler');
+    }
+
+    /** Protokolliert eine vom Zähler (je IP oder je Empfänger) abgewiesene Anfrage. */
+    private function abweisenWegenLimit(int $id): never {
+        PluginAudit::log(
+            Plugin::SLUG,
+            'Kontaktanfrage abgewiesen (Rate-Limit)',
+            "Kontakt #{$id}",
+            'über das öffentliche Formular'
+        );
+        $this->zurueck($id, 'zuviele');
     }
 
     private function zurueck(int $id, string $status): never {

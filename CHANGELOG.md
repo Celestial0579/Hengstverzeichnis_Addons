@@ -154,7 +154,61 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   SQL-Backticks nicht von Shell-Backticks trennen kann, meldet er
   Backtick-Funde nur noch als MED; blockierend prüft die CI mit Tokenizer.
 
+- **`kontaktanfrage` (1.1.2): Fehlgeschlagene Versuche sperren keinen
+  Kontakt mehr** (Audit M4). Der Zähler je Empfänger (10 Anfragen in 24
+  Stunden) wurde schon vor der Sicherheitsfrage gebucht. Zehn Anfragen mit
+  falscher oder leerer Antwort sperrten so das Formular eines Kontakts für
+  einen Tag, ohne dass eine Anfrage ankam. Jetzt zählt der Empfängerzähler
+  nur noch angenommene Anfragen: nach gelöster Aufgabe, gültiger Eingabe und
+  Zielprüfung. Der IP-Zähler bucht weiterhin jeden Versuch vor der Aufgabe.
+  Unveröffentlichte Kontakte, Opt-out und fehlende Team-Adresse buchen
+  nichts.
+
+- **`kontaktanfrage` (1.1.2): Ohne `contacts.view` wird nichts mehr
+  gespeichert** (Audit N2). Fehlt der Gast-Gruppe das Leserecht auf
+  Kontakte, zeigt die Kontaktseite 404. Ein direkter POST legte trotzdem eine
+  Anfrage an und schickte sie ans Team. Er wird jetzt vor der Sicherheitsfrage
+  still verworfen, die Rückmeldung bleibt „erfolg“.
+
+- **`verkaufsboerse` (1.3.0): Kontaktformular mit Zähler je Inserat,
+  Längengrenzen und dem Honeypot des Kerns** (Audit N3). Bisher bremste nur
+  ein IP-Zähler; über wechselnde Anschlüsse ließ sich jedes Inserat als
+  Mail-Relais an den Inserenten nutzen. Jetzt gilt:
+  - höchstens zehn Anfragen je Inserat in 24 Stunden (darüber „fehler“);
+    gezählt werden nur Anfragen, die alle Prüfungen bestanden haben
+  - Name und E-Mail-Adresse je höchstens 150 Zeichen, Nachricht höchstens
+    5000 Zeichen, gültiges UTF-8, kein Zeilenumbruch in Name und Adresse
+  - das Honeypot-Feld des Kerns (`website`); der alte Name `webseite` wird
+    eine Version lang weiter ausgewertet
+  - ein manipuliertes CSRF-Feld (Array) führt zu 403 statt HTTP 500
+
+  Die Sicherheitsfrage für dieses Formular **folgt mit Kern-Captcha je
+  Kontext.** Der gepinnte Kern hält die eingebaute Aufgabe, `captcha-altcha`
+  die seine, in je einem einzigen Session-Slot mit fester DOM-ID. Auf einer
+  Hengstseite mit Deckanfrage-Formular wäre sonst eines der beiden Formulare
+  nicht mehr absendbar.
+
+- **`verkaufsboerse` (1.3.0): Kein Versand und kein Existenz-Orakel ohne
+  `horses.view`** (Audit N4). Ohne Leserecht der Gast-Gruppe auf Pferde
+  zeigen Börse und Pferdeseite 404; ein direkter POST verschickt jetzt auch
+  nichts mehr. Anfragen an Pferde ohne aktives Inserat, mit abgelaufenem
+  Inserat oder an unveröffentlichte Pferde melden „erfolg“ statt „fehler“ –
+  ohne Versand. Der Status verriet bisher, zu welchem Pferd ein Inserat läuft.
+
 ### Behoben
+
+- **`deckanfrage` (1.2.1): Überlange Eingaben führen nicht mehr zu einer
+  Fehlerseite** (Audit N24). Namen oder E-Mail-Adressen über 150 Zeichen,
+  sehr lange Nachrichten und ungültiges UTF-8 scheiterten erst am Speichern
+  (HTTP 500), die Anfrage ging verloren. Jetzt begrenzen `maxlength` und eine
+  Prüfung auf dem Server die Eingaben – Name und E-Mail-Adresse auf 150
+  Zeichen, die Nachricht auf 5000 Zeichen – und melden „fehler“. Ein
+  manipuliertes CSRF-Feld (Array) führt zu 403 statt HTTP 500.
+
+- **`deckanfrage` (1.2.1): Ohne `horses.view` bzw. `contacts.view` wird vor
+  der Sicherheitsfrage verworfen** (Audit N24). Die Rechteprüfung stand erst
+  hinter der Aufgabe; ein Direkt-POST ohne Recht bekam „captcha“ statt der
+  stillen Rückmeldung „erfolg“. Versendet wurde auch bisher nichts.
 
 - **`mitgliedsstatus` (1.1.0): Übernahme aus dem v0.7-Altbestand** (Audit
   N78). Fehlt `contacts.membership_status`, weil die Instanz direkt von v0.7
@@ -440,6 +494,22 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   `SprachAddonVollstaendigkeitTest` als angekündigter Vorab-Schlüssel und
   gehört nach dem Pin dort wieder gestrichen. `core_compatibility` und
   `core_supported_max` bleiben unverändert (Linie 0.9).
+
+- **Einheitliche Prüfreihenfolge der drei öffentlichen Anfrageformulare**
+  (`kontaktanfrage` 1.1.2, `verkaufsboerse` 1.3.0, `deckanfrage` 1.2.1):
+  CSRF, Honeypot, IP-Zähler, Leserechte der Gast-Gruppe, Sicherheitsfrage,
+  Eingabeprüfung, Ziel bzw. Inserat, Empfänger- bzw. Inseratszähler,
+  Speichern bzw. Versand. Fehlt das Recht oder das Ziel, wird still mit
+  „erfolg“ geantwortet. `core_compatibility` und `core_supported_max` bleiben
+  unverändert (Linie 0.9).
+
+  **Für Betreiber (`verkaufsboerse`):** Je Inserat gehen höchstens zehn
+  Anfragen in 24 Stunden an den Inserenten. Das Honeypot-Feld heißt jetzt
+  `website`, die ID `verkaufsboerse-website`; eigene CSS- oder
+  JS-Anpassungen an `#verkaufsboerse-webseite` müssen umgestellt werden.
+  Das Deinstallieren entfernt jetzt die Zähler des Formulars aus
+  `login_attempts`; die Inserate bleiben. Die Sicherheitsfrage folgt mit
+  Kern-Captcha je Kontext.
 
 ## [0.9.0] – 2026-08-27
 

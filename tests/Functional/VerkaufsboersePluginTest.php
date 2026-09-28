@@ -33,6 +33,9 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
     /** Die entfallene Verwaltungsseite (#119) - hier nur noch als Negativprobe. */
     private const ALTE_SEITE = '/plugin/verkaufsboerse/verwaltung';
 
+    /** `login_attempts.type` des Zählers je Inserat (Plugin::INSERAT_LIMIT_TYPE). */
+    private const INSERAT_TYP = 'verkaufsinserat';
+
     public function testFullPluginLifecycle(): void {
         $admin = $this->authenticatedClient();
 
@@ -130,7 +133,13 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
         $this->assertStringContainsString('Zum Verkauf', $detailAfter->body);
         $this->assertStringContainsString('1.500,00 €', $detailAfter->body);
         $this->assertStringContainsString('Verkauf wegen Bestandsreduzierung.', $detailAfter->body);
-        $this->assertStringContainsString('name="webseite"', $detailAfter->body);
+        // Honeypot mit dem Feldnamen des Kerns (1.3.0) und Längengrenzen.
+        $this->assertStringContainsString('name="website"', $detailAfter->body);
+        $this->assertStringContainsString('id="verkaufsboerse-website"', $detailAfter->body);
+        $this->assertStringNotContainsString('name="webseite"', $detailAfter->body);
+        $this->assertStringContainsString('name="requester_name" required maxlength="150"', $detailAfter->body);
+        $this->assertStringContainsString('name="requester_email" required maxlength="150"', $detailAfter->body);
+        $this->assertStringContainsString('name="message" required rows="3" maxlength="5000"', $detailAfter->body);
 
         // 6b. Upsert (horse_id ist UNIQUE): Erneutes Speichern aktualisiert das
         //     Inserat, es entsteht kein zweites. Damit trägt derselbe Abschnitt
@@ -212,19 +221,28 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
             'Ein abgelaufenes Inserat muss im Abschnitt sichtbar und damit verlängerbar bleiben.'
         );
 
-        // 8. Honeypot ausgefüllt: wird stillschweigend als "erfolg" behandelt.
+        // 8. Honeypot ausgefüllt: wird stillschweigend als "erfolg" behandelt -
+        //    über das Kern-Feld und eine Version lang auch über den alten
+        //    Namen "webseite" (Formulare aus Tabs von vor dem Update). Keiner
+        //    der beiden Fälle bucht einen Zähler.
+        self::zaehlerLeeren();
         $csrfToken = $detailAfter->formField('csrf_token') ?? '';
-        $honeypotResponse = $visitor->post('/plugin/verkaufsboerse/kontakt', [
-            'csrf_token' => $csrfToken,
-            'horse_id' => (string) $horseId,
-            'requester_name' => 'Bot',
-            'requester_email' => 'bot@example.test',
-            'message' => 'Spam',
-            'webseite' => 'https://spam.example',
-        ]);
-        $this->assertSame("/horse?id={$horseId}&verkaufsanfrage=erfolg", $honeypotResponse->location());
+        foreach (['website', 'webseite'] as $feld) {
+            $honeypotResponse = $visitor->post('/plugin/verkaufsboerse/kontakt', [
+                'csrf_token' => $csrfToken,
+                'horse_id' => (string) $horseId,
+                'requester_name' => 'Bot',
+                'requester_email' => 'bot@example.test',
+                'message' => 'Spam',
+                $feld => 'https://spam.example',
+            ]);
+            $this->assertSame("/horse?id={$horseId}&verkaufsanfrage=erfolg", $honeypotResponse->location(), "Honeypot '{$feld}'");
+        }
+        $this->assertSame(0, $this->zaehlerStand('verkaufsboerse'), 'Ein Honeypot-Treffer zählt nicht als Versuch');
+        $this->assertSame(0, $this->zaehlerStand(self::INSERAT_TYP));
 
-        // 9. Echte Anfrage: Versand schlägt mangels SMTP-Konfiguration kontrolliert fehl.
+        // 9. Echte Anfrage: Versand schlägt mangels SMTP-Konfiguration
+        //    kontrolliert fehl. Der Zähler je Inserat bucht genau einmal.
         $realResponse = $visitor->post('/plugin/verkaufsboerse/kontakt', [
             'csrf_token' => $csrfToken,
             'horse_id' => (string) $horseId,
@@ -233,6 +251,8 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
             'message' => 'Ist der Preis verhandelbar?',
         ]);
         $this->assertSame("/horse?id={$horseId}&verkaufsanfrage=fehler", $realResponse->location());
+        $this->assertSame(1, $this->zaehlerStand(self::INSERAT_TYP, "inserat:{$horseId}"));
+        self::zaehlerLeeren();
 
         // 10. CSRF-Schutz.
         $csrfRejected = $visitor->post('/plugin/verkaufsboerse/kontakt', [
@@ -356,6 +376,247 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
         $detailAfterDelete = $visitor->get("/horse?id={$horseId}");
         $this->assertStringNotContainsString('Zum Verkauf', $detailAfterDelete->body);
         $this->assertSame(0, $this->countListings($horseId));
+    }
+
+    /**
+     * Audit N3: Zähler je Inserat, Längengrenzen und das CSRF-Feld.
+     *
+     * Der IP-Zähler allein liess sich über wechselnde Anschlüsse umgehen, und
+     * der Inserent bekam beliebig viele Mails. Jetzt gehen je Inserat
+     * höchstens zehn Anfragen in 24 Stunden hinaus. Die ersten zehn Buchungen
+     * stehen direkt in login_attempts; der IP-Zähler wird geleert - das ist
+     * der Absender mit wechselnden Anschlüssen.
+     */
+    public function testInseratsLimitUndLaengengrenzen(): void {
+        $admin = $this->authenticatedClient();
+        $unique = uniqid();
+        $inserentMail = "limit-inserent-{$unique}@example.test";
+        $horseId = $this->inseratAnlegen($admin, "LimitVerkauf-{$unique}", $inserentMail);
+        $visitor = $this->newClient();
+        $gueltig = [
+            'horse_id' => (string) $horseId,
+            'requester_name' => 'Kaufinteressent',
+            'requester_email' => "interessent-{$unique}@example.test",
+            'message' => 'Ist der Preis verhandelbar?',
+        ];
+
+        self::zaehlerLeeren();
+        try {
+            // Limit erreicht: "fehler", kein Versand, keine weitere Buchung.
+            $this->zaehlerFuellen("inserat:{$horseId}", 10);
+            $antwort = $visitor->post('/plugin/verkaufsboerse/kontakt', [
+                'csrf_token' => $this->token($visitor, $horseId),
+            ] + $gueltig);
+            $this->assertSame("/horse?id={$horseId}&verkaufsanfrage=fehler", $antwort->location());
+            $this->assertSame(10, $this->zaehlerStand(self::INSERAT_TYP, "inserat:{$horseId}"), 'Eine abgewiesene Anfrage bucht nicht');
+            $this->assertSame(0, $this->versandversuche($inserentMail), 'Über dem Limit darf keine Mail an den Inserenten gehen');
+
+            // Längengrenzen und UTF-8: "fehler" ohne Buchung und ohne 500.
+            self::zaehlerLeeren();
+            $faelle = [
+                'Nachricht mit 5001 Zeichen' => ['message' => str_repeat('m', 5001)],
+                'E-Mail mit 151 Zeichen' => ['requester_email' => str_repeat('x', 40) . '@' . str_repeat('a', 50) . '.' . str_repeat('b', 46) . '.example.test'],
+                'Name mit 151 Zeichen' => ['requester_name' => str_repeat('n', 151)],
+                'ungültiges UTF-8 im Namen' => ['requester_name' => "Kaputt\xC3\x28"],
+                'Zeilenumbruch in der E-Mail' => ['requester_email' => "interessent-{$unique}@example.test\r\nBcc: opfer@example.test"],
+                'Name als Array' => ['requester_name' => ['a', 'b']],
+            ];
+            foreach ($faelle as $fall => $abweichung) {
+                $antwort = $visitor->post('/plugin/verkaufsboerse/kontakt', [
+                    'csrf_token' => $this->token($visitor, $horseId),
+                ] + $abweichung + $gueltig);
+                $this->assertSame(302, $antwort->statusCode, "{$fall}: erwartet eine Weiterleitung");
+                $this->assertSame("/horse?id={$horseId}&verkaufsanfrage=fehler", $antwort->location(), $fall);
+                $this->assertSame(0, $this->zaehlerStand(self::INSERAT_TYP), "{$fall}: keine Buchung");
+                $this->leereTyp('verkaufsboerse');
+            }
+            $this->assertSame(151, strlen($faelle['E-Mail mit 151 Zeichen']['requester_email']));
+            $this->assertSame(0, $this->versandversuche($inserentMail));
+
+            // CSRF-Feld als Array: 403 statt TypeError und HTTP 500.
+            $array = $visitor->post('/plugin/verkaufsboerse/kontakt', ['csrf_token' => ['x']] + $gueltig);
+            $this->assertSame(403, $array->statusCode);
+        } finally {
+            self::zaehlerLeeren();
+        }
+    }
+
+    /**
+     * Audit N4: Ohne horses.view der Gast-Gruppe zeigen Börse und Pferdeseite
+     * 404 - dann darf ein Direkt-POST auch nichts versenden. Und der Status
+     * verrät nicht mehr, zu welchem Pferd ein Inserat läuft: kein Inserat,
+     * abgelaufenes Inserat und unveröffentlichtes Pferd melden "erfolg" wie
+     * der Honeypot, ohne Versand und ohne Zählerbuchung.
+     */
+    public function testOhneHorsesViewKeinVersandUndKeinOrakel(): void {
+        $admin = $this->authenticatedClient();
+        $unique = uniqid();
+        $inserentMail = "orakel-inserent-{$unique}@example.test";
+        $horseId = $this->inseratAnlegen($admin, "OrakelVerkauf-{$unique}", $inserentMail);
+        $db = \App\Database::getInstance();
+        $gast = (int) $db->query("SELECT id FROM `groups` WHERE slug = 'public'")->fetchColumn();
+        $this->assertGreaterThan(0, $gast, 'Gast-Gruppe nicht gefunden');
+        $felder = [
+            'requester_name' => 'Kaufinteressent',
+            'requester_email' => "orakel-{$unique}@example.test",
+            'message' => 'Ist das Pferd noch zu haben?',
+        ];
+
+        self::zaehlerLeeren();
+        try {
+            $db->prepare("DELETE FROM `group_permissions` WHERE group_id = ? AND module = 'horses' AND action = 'view'")
+                ->execute([$gast]);
+
+            $visitor = $this->newClient();
+            $this->assertSame(404, $visitor->get('/plugin/verkaufsboerse/liste')->statusCode);
+
+            $antwort = $visitor->post('/plugin/verkaufsboerse/kontakt', [
+                'csrf_token' => $visitor->get('/dsgvo')->formField('csrf_token') ?? '',
+                'horse_id' => (string) $horseId,
+            ] + $felder);
+            $this->assertSame("/horse?id={$horseId}&verkaufsanfrage=erfolg", $antwort->location());
+            $this->assertSame(0, $this->zaehlerStand(self::INSERAT_TYP), 'Ohne horses.view keine Buchung');
+            $this->assertSame(0, $this->versandversuche($inserentMail), 'Ohne horses.view kein Versand');
+        } finally {
+            $db->prepare("INSERT IGNORE INTO `group_permissions` (group_id, module, action) VALUES (?, 'horses', 'view')")
+                ->execute([$gast]);
+            self::zaehlerLeeren();
+        }
+
+        // Mit Recht: Pferde ohne sichtbares Inserat melden "erfolg".
+        $ohneInserat = $this->createHorse($admin, "OhneInserat-{$unique}", ['status' => 'active']);
+        $abgelaufen = $this->inseratAnlegen($admin, "AbgelaufenOrakel-{$unique}", $inserentMail, ['listed_until' => '2000-01-01']);
+        $verborgen = $this->inseratAnlegen($admin, "VerborgenOrakel-{$unique}", $inserentMail, [], ['is_published' => '0']);
+
+        $visitor = $this->newClient();
+        try {
+            foreach (['kein Inserat' => $ohneInserat, 'abgelaufen' => $abgelaufen, 'unveröffentlicht' => $verborgen] as $fall => $id) {
+                $antwort = $visitor->post('/plugin/verkaufsboerse/kontakt', [
+                    'csrf_token' => $this->token($visitor, $horseId),
+                    'horse_id' => (string) $id,
+                ] + $felder);
+                $this->assertSame("/horse?id={$id}&verkaufsanfrage=erfolg", $antwort->location(), $fall);
+                $this->leereTyp('verkaufsboerse');
+            }
+            $this->assertSame(0, $this->zaehlerStand(self::INSERAT_TYP), 'Ein verworfenes Ziel bucht keinen Inseratszähler');
+            $this->assertSame(0, $this->versandversuche($inserentMail));
+        } finally {
+            self::zaehlerLeeren();
+        }
+    }
+
+    /**
+     * Framework#338: uninstall() räumt die Zähler des Formulars aus der
+     * Kern-Tabelle `login_attempts` ab - beide Typen, und nur diese. Die
+     * Inserate bleiben: Die plugin.json deklariert kein `owns`.
+     *
+     * Läuft im PHPUnit-Prozess statt über /admin/plugins, damit das Addon für
+     * die übrigen Tests aktiv bleibt.
+     */
+    public function testUninstallRaeumtZaehlerAuf(): void {
+        $admin = $this->authenticatedClient();
+        $unique = uniqid();
+        $horseId = $this->inseratAnlegen($admin, "UninstallVerkauf-{$unique}", "uninstall-{$unique}@example.test");
+
+        $db = \App\Database::getInstance();
+        $fremd = "fremd-{$unique}";
+        $stmt = $db->prepare('INSERT INTO login_attempts (identifier, type) VALUES (?, ?)');
+        $stmt->execute(['127.0.0.1', 'verkaufsboerse']);
+        $stmt->execute(["inserat:{$horseId}", self::INSERAT_TYP]);
+        $stmt->execute([$fremd, 'deckanfrage']);
+
+        try {
+            require_once __DIR__ . '/../../plugins/verkaufsboerse/Plugin.php';
+            $this->assertSame(self::INSERAT_TYP, \Plugin\Verkaufsboerse\Plugin::INSERAT_LIMIT_TYPE);
+            $this->assertLessThanOrEqual(20, strlen(\Plugin\Verkaufsboerse\Plugin::INSERAT_LIMIT_TYPE), 'login_attempts.type ist VARCHAR(20)');
+
+            (new \Plugin\Verkaufsboerse\Plugin())->uninstall();
+
+            $this->assertSame(0, $this->zaehlerStand('verkaufsboerse'));
+            $this->assertSame(0, $this->zaehlerStand(self::INSERAT_TYP));
+            $this->assertSame(1, $this->zaehlerStand('deckanfrage', $fremd), 'Fremde Zähler bleiben stehen');
+            $this->assertSame(1, $this->countListings($horseId), 'Die Inserate bleiben');
+        } finally {
+            $db->prepare('DELETE FROM login_attempts WHERE identifier = ? AND type = ?')->execute([$fremd, 'deckanfrage']);
+        }
+    }
+
+    /**
+     * Legt ein Pferd samt Inserat über den Abschnitt im Bearbeitungsformular
+     * an und aktiviert vorher das Addon.
+     *
+     * @param array<string, string> $inserat Zusatzfelder für store()
+     * @param array<string, string> $pferd Zusatzfelder für createHorse()
+     */
+    private function inseratAnlegen(\Tests\Support\HttpClient $admin, string $name, string $email, array $inserat = [], array $pferd = []): int {
+        $admin->post('/admin/plugins/toggle', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'slug' => self::SLUG,
+            'enable' => '1',
+        ]);
+        $horseId = $this->createHorse($admin, $name, ['status' => 'active'] + $pferd);
+        $form = $admin->get('/admin/horses/edit?id=' . $horseId);
+        $store = $admin->post(self::ALTE_SEITE . '/store', [
+            'csrf_token' => $form->formField('csrf_token') ?? '',
+            'horse_id' => (string) $horseId,
+            'price' => '1000.00',
+            'contact_email' => $email,
+        ] + $inserat);
+        $this->assertSame('/admin/horses/edit?id=' . $horseId, $store->location());
+        $this->assertSame(1, $this->countListings($horseId));
+
+        return $horseId;
+    }
+
+    /** CSRF-Token von der Pferdeseite mit dem Kontaktformular. */
+    private function token(\Tests\Support\HttpClient $client, int $horseId): string {
+        $seite = $client->get("/horse?id={$horseId}");
+        $this->assertStringContainsString('/plugin/verkaufsboerse/kontakt', $seite->body, 'Kein Kontaktformular auf der Pferdeseite');
+        return $seite->formField('csrf_token') ?? '';
+    }
+
+    /** Leert beide Zähler des Formulars (IP und je Inserat). */
+    private static function zaehlerLeeren(): void {
+        \App\Database::getInstance()->exec(
+            "DELETE FROM login_attempts WHERE type IN ('verkaufsboerse', '" . self::INSERAT_TYP . "')"
+        );
+    }
+
+    private function leereTyp(string $typ): void {
+        \App\Database::getInstance()->prepare('DELETE FROM login_attempts WHERE type = ?')->execute([$typ]);
+    }
+
+    private function zaehlerStand(string $typ, ?string $bezeichner = null): int {
+        $db = \App\Database::getInstance();
+        if ($bezeichner === null) {
+            $stmt = $db->prepare('SELECT COUNT(*) FROM login_attempts WHERE type = ?');
+            $stmt->execute([$typ]);
+        } else {
+            $stmt = $db->prepare('SELECT COUNT(*) FROM login_attempts WHERE type = ? AND identifier = ?');
+            $stmt->execute([$typ, $bezeichner]);
+        }
+        return (int) $stmt->fetchColumn();
+    }
+
+    /** Schreibt $anzahl Buchungen des Inseratszählers direkt, statt sie abzuwarten. */
+    private function zaehlerFuellen(string $bezeichner, int $anzahl): void {
+        $stmt = \App\Database::getInstance()->prepare('INSERT INTO login_attempts (identifier, type) VALUES (?, ?)');
+        for ($i = 0; $i < $anzahl; $i++) {
+            $stmt->execute([$bezeichner, self::INSERAT_TYP]);
+        }
+    }
+
+    /**
+     * Versandversuche an eine Adresse: App\Service\Mailer protokolliert jeden
+     * Versuch unter der Kategorie `email` mit dem Empfänger in den Details -
+     * ohne SMTP ist das der Fehlschlag-Eintrag (siehe DeckanfragePluginTest).
+     */
+    private function versandversuche(string $adresse): int {
+        $stmt = \App\Database::getInstance()->prepare(
+            "SELECT COUNT(*) FROM audit_logs WHERE category = 'email' AND details LIKE ?"
+        );
+        $stmt->execute(['%' . $adresse . '%']);
+        return (int) $stmt->fetchColumn();
     }
 
     /**

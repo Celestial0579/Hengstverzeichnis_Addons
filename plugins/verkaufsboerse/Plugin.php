@@ -25,12 +25,44 @@ use App\Helper\MediaUrl;
 use App\Plugin\HookManager;
 use App\Plugin\PluginPage;
 use App\Router;
+use App\Security\Captcha;
 use App\Security\ClientIp;
 use App\Security\RateLimiter;
 use App\Service\Mailer;
 use PDO;
 
 class Plugin {
+
+    /** Der eigene Slug. */
+    public const SLUG = 'verkaufsboerse';
+
+    /**
+     * `type` der Zeilen des IP-Zählers in der Kern-Tabelle `login_attempts`.
+     * Bleibt der Slug, damit laufende Zähler über das Update hinweg gelten.
+     */
+    public const RATE_LIMIT_TYPE = self::SLUG;
+
+    /**
+     * `type` der Zeilen des Zählers je Inserat. Kurz gehalten, weil die
+     * Spalte `login_attempts.type` nur VARCHAR(20) ist - ein längerer Wert
+     * (etwa "verkaufsboerse-inserat", 22 Zeichen) scheiterte unter
+     * STRICT_TRANS_TABLES am INSERT, und weil RateLimiter::recordAttempt()
+     * Fehler bewusst verschluckt, zählte der Zähler dann still nie.
+     */
+    public const INSERAT_LIMIT_TYPE = 'verkaufsinserat';
+
+    /** Höchstens so viele Anfragen je Inserat im Zeitfenster. */
+    public const MAX_JE_INSERAT = 10;
+    public const FENSTER_INSERAT = 86400;
+
+    /**
+     * Längengrenzen des Kontaktformulars. Name und Adresse wie in
+     * `deckanfrage` (150), die Nachricht 5000 Zeichen - genug für jede
+     * Anfrage und klein genug für eine Mail an einen Dritten.
+     */
+    public const NAME_MAX = 150;
+    public const EMAIL_MAX = 150;
+    public const NACHRICHT_MAX = 5000;
 
     /**
      * Request-weiter Cache der horse_ids mit Inserat (Framework#222):
@@ -152,6 +184,24 @@ class Plugin {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
         );
     }
+
+    /**
+     * Deinstallation (Framework#338, Muster wie deckanfrage): räumt die
+     * Zeilen ab, die das Kontaktformular in der Kern-Tabelle `login_attempts`
+     * hinterlassen hat - den IP-Zähler (enthält IP-Adressen, ein
+     * personenbezogenes Datum) und den Zähler je Inserat. Ohne das Formular
+     * haben sie keinen Zweck mehr.
+     *
+     * Die Inseratstabelle bleibt bewusst unberührt: Die plugin.json
+     * deklariert kein `owns`, das Deinstallieren nimmt die Inserate also
+     * nicht mit. Das ist das bisherige Verhalten und bleibt so, bis das
+     * Register um die Tabelle ergänzt wird.
+     */
+    public function uninstall(): void {
+        $stmt = Database::getInstance()->prepare('DELETE FROM `login_attempts` WHERE `type` IN (?, ?)');
+        $stmt->execute([self::RATE_LIMIT_TYPE, self::INSERAT_LIMIT_TYPE]);
+    }
+
     /**
      * Filter-Beispiel: zeigt ein "Zum Verkauf"-Badge samt Preis und
      * Kontaktformular an, wenn für dieses Pferd ein aktives Inserat existiert
@@ -192,16 +242,27 @@ class Plugin {
         $html .= '<form method="POST" action="/plugin/verkaufsboerse/kontakt">';
         $html .= '<input type="hidden" name="csrf_token" value="' . $csrfToken . '">';
         $html .= '<input type="hidden" name="horse_id" value="' . $horseId . '">';
+        // Honeypot mit dem Feldnamen des Kerns (Captcha::HONEYPOT_FIELD, vorher
+        // "webseite"), geprüft mit Captcha::honeypotTripped() - eine Stelle
+        // statt zwei, die auseinanderlaufen können (wie in deckanfrage).
+        $honeypot = htmlspecialchars(Captcha::HONEYPOT_FIELD, ENT_QUOTES, 'UTF-8');
         $html .= '<div style="position:absolute;left:-9999px;" aria-hidden="true">'
-            . '<label for="verkaufsboerse-webseite">Webseite (bitte leer lassen)</label>'
-            . '<input type="text" id="verkaufsboerse-webseite" name="webseite" tabindex="-1" autocomplete="off">'
+            . '<label for="verkaufsboerse-' . $honeypot . '">Webseite (bitte leer lassen)</label>'
+            . '<input type="text" id="verkaufsboerse-' . $honeypot . '" name="' . $honeypot . '" tabindex="-1" autocomplete="off">'
             . '</div>';
         $html .= '<label style="display:block;margin-top:0.5rem;font-size:0.9em;">Ihr Name<br>'
-            . '<input type="text" name="requester_name" required style="width:100%;padding:0.4rem;margin-top:0.2rem;"></label>';
+            . '<input type="text" name="requester_name" required maxlength="' . self::NAME_MAX . '" style="width:100%;padding:0.4rem;margin-top:0.2rem;"></label>';
         $html .= '<label style="display:block;margin-top:0.5rem;font-size:0.9em;">Ihre E-Mail-Adresse<br>'
-            . '<input type="email" name="requester_email" required style="width:100%;padding:0.4rem;margin-top:0.2rem;"></label>';
+            . '<input type="email" name="requester_email" required maxlength="' . self::EMAIL_MAX . '" style="width:100%;padding:0.4rem;margin-top:0.2rem;"></label>';
         $html .= '<label style="display:block;margin-top:0.5rem;font-size:0.9em;">Nachricht<br>'
-            . '<textarea name="message" required rows="3" style="width:100%;padding:0.4rem;margin-top:0.2rem;"></textarea></label>';
+            . '<textarea name="message" required rows="3" maxlength="' . self::NACHRICHT_MAX . '" style="width:100%;padding:0.4rem;margin-top:0.2rem;"></textarea></label>';
+        // Die Sicherheitsfrage des Kerns fehlt hier noch - sie folgt mit der
+        // Kern-Captcha-Aufgabe je Kontext. Der gepinnte Kern hält die
+        // eingebaute Aufgabe (und captcha-altcha die seine) in EINEM
+        // Session-Slot mit fester DOM-ID "captcha". Auf einer Hengstseite mit
+        // Deckanfrage-Formular überschriebe eine zweite Aufgabe die erste, und
+        // eines der beiden Formulare wäre nicht mehr absendbar. Bis dahin
+        // begrenzen IP- und Inseratszähler den Versand.
         $html .= '<button type="submit" style="margin-top:0.5rem;padding:0.6rem 1.2rem;">Kontakt aufnehmen</button>';
         $html .= '</form></div>';
 
@@ -629,36 +690,64 @@ class VerwaltungController extends BaseController {
 /**
  * Verarbeitet die Kontaktanfrage aus dem Formular auf der Pferde-
  * Detailseite. Bewusst ohne Zugriffsschutz (öffentliche Route für anonyme
- * Interessenten), mit Honeypot- und IP-Rate-Limiting wie beim
- * deckanfrage-Addon (eigener RateLimiter-`type`, um Kollisionen mit anderen
- * Formularen zu vermeiden).
+ * Interessenten). Die Hürden greifen in dieser Reihenfolge (dieselbe wie in
+ * kontaktanfrage und deckanfrage):
+ *
+ *  1. CSRF
+ *  2. Honeypot (still "erfolg", bucht nichts)
+ *  3. Zähler je IP - prüfen und buchen
+ *  4. Leserecht horses.view (still "erfolg")
+ *  5. Sicherheitsfrage - folgt mit der Kern-Captcha-Aufgabe je Kontext,
+ *     siehe Plugin::addDetailSection()
+ *  6. Eingabeprüfung mit Längengrenzen und UTF-8-Prüfung ("fehler")
+ *  7. Inserat auflösen (kein aktives Inserat: still "erfolg")
+ *  8. Zähler je Inserat - erst jetzt prüfen und buchen ("fehler")
+ *  9. Versand
  */
 class KontaktController extends BaseController {
 
     public function submit(): void {
-        $horseId = !empty($_POST['horse_id']) ? (int) $_POST['horse_id'] : null;
+        $rohId = $_POST['horse_id'] ?? null;
+        $horseId = is_string($rohId) && (int) $rohId > 0 ? (int) $rohId : null;
 
-        if (!Router::verifyCsrfToken($_POST['csrf_token'] ?? '')) {
+        // Nur Zeichenketten weiterreichen: Router::verifyCsrfToken(?string)
+        // wirft bei einem Array-Parameter (csrf_token[]=x) einen TypeError,
+        // und aus dem abgewiesenen Formular würde HTTP 500.
+        if (!Router::verifyCsrfToken(is_string($_POST['csrf_token'] ?? null) ? $_POST['csrf_token'] : '')) {
             $this->renderForbidden('CSRF-Sicherheits-Token ungültig oder abgelaufen.');
         }
 
-        if (!empty($_POST['webseite'])) {
+        // Honeypot: das Kern-Feld und für eine Version noch der alte Name
+        // "webseite" - ein Formular aus einem Browser-Tab von vor dem Update
+        // trägt noch ihn.
+        if (Captcha::honeypotTripped($_POST) || !empty($_POST['webseite'])) {
             $this->redirectBack($horseId, 'erfolg');
         }
 
         $ip = ClientIp::resolve();
-        if (RateLimiter::tooManyAttempts($ip, 'verkaufsboerse', 5, 3600)) {
+        if (RateLimiter::tooManyAttempts($ip, Plugin::RATE_LIMIT_TYPE, 5, 3600)) {
             $this->redirectBack($horseId, 'fehler');
         }
-        RateLimiter::recordAttempt($ip, 'verkaufsboerse');
+        RateLimiter::recordAttempt($ip, Plugin::RATE_LIMIT_TYPE);
 
-        $requesterName = trim($_POST['requester_name'] ?? '');
-        $requesterEmail = trim($_POST['requester_email'] ?? '');
-        $message = trim($_POST['message'] ?? '');
+        // Dieselbe Regel wie beim Anzeigen (Audit N4): Ohne horses.view der
+        // Gast-Gruppe liefern ListeController::show() und die Pferdeseite des
+        // Kerns (PublicController::horseDetail) 404, das Formular erscheint
+        // also nicht - dann darf ein Direkt-POST auch nichts versenden.
+        // contacts.view spielt hier keine Rolle: Der Empfänger ist die
+        // contact_email des Inserats, kein Kontakt-Datensatz. Die Antwort ist
+        // dieselbe wie beim Honeypot; das Recht hängt an der Gruppe, nicht am
+        // Pferd. Die Prüfung steht hinter dem IP-Zähler, damit auch solche
+        // POSTs begrenzt bleiben.
+        if (!$this->hasPermission('horses', 'view')) {
+            $this->redirectBack($horseId, 'erfolg');
+        }
 
-        if (!$horseId || $requesterName === '' || $message === '' || !filter_var($requesterEmail, FILTER_VALIDATE_EMAIL)) {
+        $eingabe = $this->eingabeGueltig($_POST);
+        if ($horseId === null || $eingabe === null) {
             $this->redirectBack($horseId, 'fehler');
         }
+        [$requesterName, $requesterEmail, $message] = $eingabe;
 
         $db = Database::getInstance();
         $stmt = $db->prepare(
@@ -671,9 +760,30 @@ class KontaktController extends BaseController {
         $stmt->execute([$horseId]);
         $listing = $stmt->fetch(PDO::FETCH_ASSOC);
 
+        // Kein aktives Inserat, Pferd unveröffentlicht oder im Papierkorb:
+        // still verwerfen und "erfolg" melden wie beim Honeypot und beim
+        // fehlenden Recht. Bis 1.2.0 stand hier "fehler" - der Status verriet
+        // damit, zu welchen Pferde-IDs ein öffentliches Inserat läuft
+        // (kein Existenz-Orakel, Audit N4).
         if (!$listing) {
+            $this->redirectBack($horseId, 'erfolg');
+        }
+
+        // Zähler je Inserat: Der IP-Zähler allein liesse sich über wechselnde
+        // Anschlüsse umgehen, und der Inserent bekäme beliebig viele Mails.
+        // Er zählt ANGENOMMENE Anfragen und steht deshalb erst hier, hinter
+        // Eingabe- und Inseratsprüfung - sonst sperrten ungültige Versuche
+        // ein Inserat (wie Audit M4 bei kontaktanfrage). horse_id ist in der
+        // Inseratstabelle UNIQUE und taugt damit als Bezeichner.
+        //
+        // Bewusst hingenommen: "fehler" ist hier nur für echte, aktive
+        // Inserate erreichbar - dass das Pferd ein Inserat hat, zeigt dessen
+        // öffentliche Seite ohnehin. Prüfen und Buchen sind nicht atomar.
+        $inseratBezeichner = 'inserat:' . $horseId;
+        if (RateLimiter::tooManyAttempts($inseratBezeichner, Plugin::INSERAT_LIMIT_TYPE, Plugin::MAX_JE_INSERAT, Plugin::FENSTER_INSERAT)) {
             $this->redirectBack($horseId, 'fehler');
         }
+        RateLimiter::recordAttempt($inseratBezeichner, Plugin::INSERAT_LIMIT_TYPE);
 
         $siteName = htmlspecialchars((string) ($this->settings['site_name'] ?? 'Hengstverzeichnis'), ENT_QUOTES, 'UTF-8');
         $horseName = htmlspecialchars((string) $listing['horse_name'], ENT_QUOTES, 'UTF-8');
@@ -695,7 +805,61 @@ class KontaktController extends BaseController {
         $this->redirectBack($horseId, $sent ? 'erfolg' : 'fehler');
     }
 
-    private function redirectBack(?int $horseId, string $status): void {
+    /**
+     * Prüft die drei Freitextfelder und liefert sie bereinigt zurück, bei
+     * einem Verstoß null.
+     *
+     * - Nur Zeichenketten; ein Array-Parameter führte sonst zu einem TypeError
+     *   in trim() und damit zu HTTP 500.
+     * - Gültiges UTF-8 in allen drei Feldern - der Text geht in eine Mail an
+     *   einen Dritten.
+     * - Name: nicht leer, höchstens NAME_MAX Zeichen, ohne Zeilenumbruch.
+     * - E-Mail: CR/LF wird VOR dem Trimmen abgelehnt - trim() würde einen
+     *   angehängten Umbruch sonst „reparieren“, und eine Adresse mit Umbruch
+     *   ist der Anlauf, eine Kopfzeile einzuschleusen. Danach höchstens
+     *   EMAIL_MAX Byte und FILTER_VALIDATE_EMAIL.
+     * - Nachricht: nicht leer, höchstens NACHRICHT_MAX Zeichen.
+     *
+     * Eigene Fassung statt eines gemeinsamen Helfers: Addons importieren
+     * einander nicht, deckanfrage hat dieselbe Prüfung.
+     *
+     * @param array<string, mixed> $post
+     * @return array{0: string, 1: string, 2: string}|null
+     */
+    private function eingabeGueltig(array $post): ?array {
+        $rohName = $post['requester_name'] ?? '';
+        $rohEmail = $post['requester_email'] ?? '';
+        $rohNachricht = $post['message'] ?? '';
+        if (!is_string($rohName) || !is_string($rohEmail) || !is_string($rohNachricht)) {
+            return null;
+        }
+        if (!mb_check_encoding($rohName, 'UTF-8') || !mb_check_encoding($rohEmail, 'UTF-8')
+            || !mb_check_encoding($rohNachricht, 'UTF-8')) {
+            return null;
+        }
+
+        $name = trim($rohName);
+        if ($name === '' || mb_strlen($name, 'UTF-8') > Plugin::NAME_MAX || preg_match('/[\r\n]/', $name) === 1) {
+            return null;
+        }
+
+        if (preg_match('/[\r\n]/', $rohEmail) === 1) {
+            return null;
+        }
+        $email = trim($rohEmail);
+        if (strlen($email) > Plugin::EMAIL_MAX || filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+            return null;
+        }
+
+        $nachricht = trim($rohNachricht);
+        if ($nachricht === '' || mb_strlen($nachricht, 'UTF-8') > Plugin::NACHRICHT_MAX) {
+            return null;
+        }
+
+        return [$name, $email, $nachricht];
+    }
+
+    private function redirectBack(?int $horseId, string $status): never {
         header('Location: /horse?id=' . (int) $horseId . '&verkaufsanfrage=' . $status);
         exit;
     }
