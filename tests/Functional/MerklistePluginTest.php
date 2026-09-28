@@ -111,4 +111,73 @@ class MerklistePluginTest extends FunctionalTestCase {
             $this->assertSame([], json_decode($badResponse->body, true));
         }
     }
+
+    /**
+     * Audit N28: Startet der Katalog ohne Treffer, gibt es kein Merklisten-
+     * Skript auf der Seite. Die Karten, die danach per Live-Filter kommen,
+     * bringen das <script>-Tag zwar in cards_html mit - per innerHTML
+     * eingefügt führt der Browser es aber nie aus, und "Merken" blieb ohne
+     * Wirkung. Jeder Knopf lädt das Skript deshalb bei Bedarf selbst nach.
+     *
+     * Einen JS-Runner hat dieses Repo nicht: Geprüft wird der Nachlader als
+     * Text, das Asset, auf das er zeigt, dagegen echt über HTTP.
+     */
+    public function testKnopfLaedtSkriptNachWennKatalogOhneTrefferStartete(): void {
+        $admin = $this->authenticatedClient();
+        $admin->post('/admin/plugins/toggle', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'slug' => self::SLUG,
+            'enable' => '1',
+        ]);
+
+        $unique = uniqid();
+        $name = "MerklisteNachlader-{$unique}";
+        $id = $this->createHorse($admin, $name, ['status' => 'active']);
+        $visitor = $this->newClient();
+
+        // (a) Der Ausgangszustand des Fehlers: kein Treffer, kein Skript.
+        $leer = $visitor->get('/katalog?search=' . urlencode("GibtEsNicht-{$unique}"));
+        $this->assertSame(200, $leer->statusCode);
+        $this->assertStringNotContainsString('data-hv-merkliste', $leer->body);
+        $this->assertStringNotContainsString('/plugin/merkliste/assets.js', $leer->body);
+
+        // (b) Die Karten aus dem AJAX-Filter tragen den Nachlader im onclick.
+        $ajax = $visitor->get('/katalog?ajax=1&search=' . urlencode($name));
+        $this->assertSame(200, $ajax->statusCode);
+        $daten = json_decode($ajax->body, true);
+        $this->assertIsArray($daten, "Keine JSON-Antwort: {$ajax->body}");
+        $karten = (string) ($daten['cards_html'] ?? '');
+        $this->assertStringContainsString('data-hv-merkliste="' . $id . '"', $karten);
+
+        $this->assertSame(
+            1,
+            preg_match('/<button[^>]*data-hv-merkliste="' . $id . '"[^>]*onclick="([^"]*)"/', $karten, $treffer),
+            'Der Merken-Knopf braucht ein onclick.'
+        );
+        $onclick = html_entity_decode($treffer[1], ENT_QUOTES, 'UTF-8');
+        $this->assertStringContainsString("document.createElement('script')", $onclick);
+        $this->assertStringContainsString('hvMerklisteToggle(b,true)', $onclick,
+            'Der nachgeholte Klick muss "merken" heissen, nicht "umschalten".');
+        $this->assertStringContainsString('"/plugin/merkliste/assets.js?v=', $onclick,
+            'Die Asset-URL gehört ungeescapt (ohne \\/) in den Nachlader.');
+        $this->assertStringNotContainsString('<script src=', $onclick);
+
+        // Die dort eingetragene URL ist erreichbar und liefert JavaScript.
+        $this->assertSame(1, preg_match('#s\.src="([^"]+)"#', $onclick, $url));
+        $asset = $visitor->get($url[1]);
+        $this->assertSame(200, $asset->statusCode);
+        $this->assertStringContainsString('application/javascript', (string) $asset->header('Content-Type'));
+
+        // (c) Das Asset kennt den Zielzustand.
+        $this->assertStringContainsString('function (btn, ziel)', $asset->body);
+
+        // (d) Auf einer Katalogseite mit Karten bleibt es bei genau EINEM
+        //     Script-Tag (#73) - der Nachlader bringt keines mit.
+        $mitTreffer = $visitor->get('/katalog?search=' . urlencode($name));
+        $this->assertSame(
+            1,
+            preg_match_all('/<script src="\/plugin\/merkliste\/assets\.js(\?v=\d+)?" defer><\/script>/', $mitTreffer->body),
+            'Das Merklisten-Script-Tag muss genau EINMAL je Seite ausgegeben werden (#73)'
+        );
+    }
 }

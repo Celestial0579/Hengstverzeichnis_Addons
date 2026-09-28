@@ -92,7 +92,12 @@ unbequemes Kontaktformular.
 Deshalb gibt es den **Rückfall ohne JavaScript** (Einstellung, standardmäßig
 **an**): Ist er aktiv, steht im `<noscript>`-Bereich zusätzlich die
 Rechenaufgabe des Kerns, und wer den Nachweis nicht liefern kann, beantwortet
-sie.
+sie. Dieselbe Aufgabe steht außerdem verborgen im Formular, mit deaktiviertem
+Feld. Das Skript blendet sie ein und gibt das Feld frei, wenn der Browser zwar
+JavaScript ausführt, aber kein `crypto.subtle` hat oder die Berechnung
+scheitert. Ohne diesen Block standen Besucher einer per HTTP ausgelieferten
+Instanz ohne Nachweis und ohne Aufgabe da (Audit N20). Ohne JavaScript bleibt
+das Feld gesperrt; übertragen wird also immer genau ein Feld `captcha`.
 
 Das ist ehrlich zu benennen: **Der Schutz ist dann so stark wie die schwächere
 der beiden Hürden**, also so stark wie der eingebaute Schutz des Kerns - nicht
@@ -108,7 +113,7 @@ vertretbar sein; für `/dsgvo` ist es das eher nicht.
 | Einstellung | Standard | Bedeutung |
 |---|---|---|
 | Rechenaufwand | `mittel` (bis 100.000 Prüfsummen) | Obergrenze der zu probierenden Zahlen. Im Mittel ist es die Hälfte davon. Gerechnet wird auf dem **Gerät des Besuchers**, nicht auf dem Server. `niedrig` = 20.000, `hoch` = 400.000. |
-| Rückfall ohne JavaScript | an | Siehe oben. |
+| Rückfall ohne JavaScript bzw. ohne `crypto.subtle` | an | Siehe oben: Rechenaufgabe des Kerns in `<noscript>` und als verborgener Block, den das Skript bei Bedarf einblendet. |
 
 `hoch` ist für Installationen gedacht, die tatsächlich unter Beschuss stehen -
 es kostet jeden ehrlichen Besucher spürbar Zeit, und alte Mobilgeräte kostet es
@@ -176,8 +181,8 @@ dort kein toter Anbietername stehen bleibt.
   des Kerns wirkt unabhängig weiter.
 - Auf sehr alten Geräten kostet die Stufe `hoch` spürbar Zeit.
 - `crypto.subtle` braucht einen sicheren Kontext. Auf einer per HTTP
-  ausgelieferten Instanz greift daher immer der Rückfall - ein weiterer Grund,
-  HTTPS zu benutzen.
+  ausgelieferten Instanz greift daher immer der Rückfall - das Skript blendet
+  die Rechenaufgabe dann selbst ein. Ein weiterer Grund, HTTPS zu benutzen.
 
 ## Was der Kern dazu sagt
 

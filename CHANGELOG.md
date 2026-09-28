@@ -254,6 +254,25 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   `MediaUrl` für die Vorschaubilder und erklärte bisher `>=0.4.0`. Jetzt steht
   dort `>=0.5.1`.
 
+- **`captcha-altcha` (1.0.1): Rückfall auch für Browser ohne
+  `crypto.subtle`** (Audit N20). Die Rechenaufgabe des Kerns stand bisher nur
+  im `<noscript>`-Bereich. Auf einer per HTTP ausgelieferten Instanz fehlt
+  `crypto.subtle`, weil SubtleCrypto einen sicheren Kontext verlangt.
+  Besucher mit JavaScript sahen dort weder einen Nachweis noch eine Aufgabe
+  und scheiterten an jedem geschützten Formular, auch am DSGVO-Portal. Die
+  Aufgabe steht jetzt zusätzlich verborgen im Formular. Das Skript blendet
+  sie ein, wenn der Browser den Nachweis nicht rechnen kann oder die
+  Berechnung scheitert. Ohne JavaScript bleibt alles wie bisher. README und
+  Verwaltungsseite beschreiben das jetzt zutreffend.
+
+- **`merkliste` (1.2.2): „Merken“ funktioniert auch nach einem Filterwechsel
+  auf einem zunächst leeren Katalog** (Audit N28). Das Merklisten-Skript
+  wurde nur zusammen mit der ersten Katalogkarte eingebunden. Startete der
+  Katalog ohne Treffer, etwa über einen geteilten Suchlink, und kamen die
+  Karten danach per Live-Filter, blieb ein Klick auf „Merken“ ohne Wirkung.
+  Der Knopf lädt das Skript jetzt bei Bedarf selbst nach. Ein bereits
+  gemerktes Pferd wird dabei nicht versehentlich wieder entfernt.
+
 ### Geändert
 
 - **`datenmigration` 1.2.0, `kontaktanfrage` 1.1.1.** `core_compatibility`

@@ -61,11 +61,10 @@ class Plugin {
             ? 'padding:0.25rem 0.6rem;font-size:0.8em;'
             : 'padding:0.5rem 1rem;';
 
-        // Der window.-Guard im onclick deckt den kurzen Zeitraum ab, bevor
-        // das defer-Skript geladen ist: ein Klick verpufft dann still statt
-        // mit einem ReferenceError in der Konsole.
+        // Das onclick lädt das Skript bei Bedarf selbst nach (nachladerJs(),
+        // Audit N28) - statt wie früher per window.-Guard still zu verpuffen.
         $html = '<button type="button" data-hv-merkliste="' . $horseId . '" '
-            . 'onclick="window.hvMerklisteToggle&&hvMerklisteToggle(this)" '
+            . 'onclick="' . htmlspecialchars(self::nachladerJs(), ENT_QUOTES, 'UTF-8') . '" '
             . 'style="' . $style . 'margin-top:0.5rem;border:1px solid var(--warning-fg);background:var(--info-soft-bg);border-radius:var(--border-radius, 4px);cursor:pointer;">'
             . '☆ Merken</button>';
 
@@ -93,8 +92,52 @@ class Plugin {
      * also nicht.
      */
     private static function scriptTag(): string {
-        $version = @filemtime(self::assetPath()) ?: 0;
-        return '<script src="/plugin/merkliste/assets.js?v=' . $version . '" defer></script>';
+        return '<script src="' . self::assetUrl() . '" defer></script>';
+    }
+
+    /** Asset-URL samt ?v=-Versionsparameter - gemeinsam für scriptTag() und nachladerJs(). */
+    private static function assetUrl(): string {
+        return '/plugin/merkliste/assets.js?v=' . (@filemtime(self::assetPath()) ?: 0);
+    }
+
+    /**
+     * Inline-Nachlader für das onclick jedes Merken-Knopfs (Audit N28).
+     *
+     * WARUM: Das <script>-Tag hängt nur am ersten Knopf eines Requests.
+     * Startet der Katalog ohne Treffer (etwa über einen geteilten Suchlink),
+     * ruft der Kern catalog.card_sections nie auf - es gibt kein Tag. Kommen
+     * die Karten danach per Live-Filter, bringt cards_html das Tag zwar mit,
+     * catalog-filter.js fügt es aber per innerHTML bzw. <template> ein, und
+     * so eingefügte <script>-Elemente führt der Browser nie aus. Einen
+     * seitenweiten Hook, der Skripte zulässt, hat der Kern nicht. Also lädt
+     * der Knopf das Skript selbst nach und holt den Klick danach nach.
+     *
+     * - Der nachgeholte Klick übergibt den Zielzustand `true`: Vor dem Laden
+     *   zeigt jeder Knopf "☆ Merken", auch für bereits gemerkte Pferde - der
+     *   Klick soll tun, was der Besucher gesehen hat, und nichts entfernen.
+     *   Beim Laden per createElement ist readyState schon "complete", init()
+     *   und syncButtons laufen also vor onload.
+     * - Mehrfaches Laden ist harmlos: Das Asset ist idempotent
+     *   (window.hvMerkliste-Guard). Das gilt auch für einen Klick, während
+     *   das defer-Skript noch lädt, oder für mehrere Knöpfe vor dem Laden -
+     *   der zweite Lauf endet am Guard, sein onload findet hvMerklisteToggle
+     *   definiert vor.
+     * - Größe: rund 300 Byte je Karte, bei 24 Karten etwa 7 KB unkomprimiert
+     *   - deutlich unter dem früheren 3,8-KB-Block je Karte (Addons#73).
+     * - CSP: script-src 'self' 'unsafe-inline' des Kerns erlaubt Inline-
+     *   Handler und das Skript der eigenen Herkunft.
+     *
+     * `return` im Handler ist zulässig, der Handlerrumpf ist eine Funktion.
+     * Keine Pfeilfunktionen, keine optionale Verkettung - wie im Asset.
+     * JSON_UNESCAPED_SLASHES, damit die URL lesbar als /plugin/… im
+     * Attribut steht.
+     */
+    private static function nachladerJs(): string {
+        $src = json_encode(self::assetUrl(), JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        return 'if(window.hvMerklisteToggle){hvMerklisteToggle(this);return;}'
+            . 'var b=this,s=document.createElement(\'script\');b.disabled=true;s.src=' . $src . ';'
+            . 's.onload=function(){b.disabled=false;hvMerklisteToggle(b,true);};'
+            . 's.onerror=function(){b.disabled=false;};document.head.appendChild(s);';
     }
 
     public static function assetPath(): string {

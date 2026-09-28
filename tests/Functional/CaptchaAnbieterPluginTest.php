@@ -269,6 +269,101 @@ class CaptchaAnbieterPluginTest extends FunctionalTestCase {
     }
 
     /**
+     * Audit N20: Der Rückfall stand nur in <noscript>. Ein Browser MIT
+     * JavaScript, aber ohne crypto.subtle (jede per HTTP ausgelieferte
+     * Instanz ausserhalb von localhost) sah weder Nachweis noch Aufgabe und
+     * kam durch kein geschütztes Formular - auch nicht durch das DSGVO-Portal.
+     *
+     * Einen JS-Runner hat dieses Repo nicht; das Skript wird deshalb über
+     * seinen Text geprüft, der Rückfallweg selbst aber vollständig über HTTP.
+     */
+    public function testAltchaRueckfallStehtAuchMitJavaScriptOhneCryptoSubtleBereit(): void {
+        $admin = $this->authenticatedClient();
+        $this->addonsAktivieren($admin);
+        self::anbieterSetzen(self::ALTCHA);
+        $rueckfallVorher = self::rueckfallEinstellung();
+
+        try {
+            self::rueckfallEinstellungSetzen('1');
+            $besucher = $this->newClient();
+            $formular = $besucher->get('/dsgvo');
+            $this->assertSame(200, $formular->statusCode);
+
+            // (a) Was ein Browser MIT JavaScript sieht: <noscript> ist dort
+            //     kein Markup. Übrig bleiben muss der verborgene Block mit
+            //     genau einem, deaktivierten Feld "captcha".
+            $mitJs = (string) preg_replace('#<noscript>.*?</noscript>#s', '', $formular->body);
+            $this->assertMatchesRegularExpression(
+                '#<div id="hv-altcha-[a-z0-9_-]+-rueckfall" hidden[ >]#',
+                $mitJs,
+                'Der Rückfall muss auch ausserhalb von <noscript> bereitstehen (N20).'
+            );
+            $this->assertSame(1, preg_match_all('#<input[^>]*name="captcha"[^>]*>#', $mitJs, $felder),
+                'Genau ein Feld "captcha" ausserhalb von <noscript>.');
+            $this->assertStringContainsString(' disabled', $felder[0][0],
+                'Das Feld muss deaktiviert sein - sonst stünden ohne JavaScript zwei Felder "captcha" im POST.');
+            $this->assertSame(1, preg_match('#-rueckfall-feld">\s*<strong>([^<]+)</strong>#u', $mitJs, $frage),
+                'Die Rechenaufgabe fehlt im verborgenen Rückfallblock.');
+
+            // (b) Das Skript blendet ihn ein - im crypto.subtle-Zweig, also
+            //     bevor die Absende-Knöpfe gesperrt werden.
+            $this->assertStringContainsString("-rueckfall'", $mitJs);
+            $this->assertStringContainsString('rueckfallFeld.disabled = false', $mitJs);
+            $cryptoZweig = strpos($mitJs, '!window.crypto.subtle');
+            $this->assertNotFalse($cryptoZweig);
+            $aufruf = strpos($mitJs, 'rueckfallZeigen(', $cryptoZweig);
+            $sperre = strpos($mitJs, 'knoepfe[i].disabled = true', $cryptoZweig);
+            $this->assertNotFalse($aufruf);
+            $this->assertNotFalse($sperre);
+            $this->assertLessThan($sperre, $aufruf,
+                'Ohne crypto.subtle muss das Skript den Rückfall zeigen, bevor es irgendetwas sperrt.');
+
+            // (c) Absenden über den Rückfallweg: leerer Nachweis, gelöste
+            //     Aufgabe des Kerns. antwortPruefen() leitet das an
+            //     Captcha::verifyBuiltin() weiter.
+            sleep(\App\Security\Captcha::MIN_SOLVE_SECONDS);
+            self::dsgvoZaehlerZuruecksetzen();
+            $angenommen = $besucher->post('/dsgvo', self::dsgvoFelder($formular->formField('csrf_token') ?? '', [
+                'altcha_payload' => '',
+                'captcha' => self::aufgabeRechnen($frage[1]),
+            ]));
+            $this->assertSame('/dsgvo?success=1', $angenommen->location(),
+                "Die gelöste Rückfall-Aufgabe muss durchgehen, Body: {$angenommen->body}");
+
+            // Gegenprobe auf einer frischen Aufgabe: falsche Antwort.
+            $formular2 = $besucher->get('/dsgvo');
+            $this->assertSame(1, preg_match('#-rueckfall-feld">\s*<strong>([^<]+)</strong>#u', $formular2->body, $frage2));
+            sleep(\App\Security\Captcha::MIN_SOLVE_SECONDS);
+            self::dsgvoZaehlerZuruecksetzen();
+            $abgelehnt = $besucher->post('/dsgvo', self::dsgvoFelder($formular2->formField('csrf_token') ?? '', [
+                'altcha_payload' => '',
+                'captcha' => (string) ((int) self::aufgabeRechnen($frage2[1]) + 20),
+            ]));
+            $this->assertNull($abgelehnt->location(), 'Eine falsche Antwort auf die Rückfall-Aufgabe muss abgewiesen werden.');
+
+            // (d) Rückfall aus: weder Block noch <noscript> - und das Skript
+            //     kommt mit den fehlenden Elementen zurecht (alter Text).
+            self::rueckfallEinstellungSetzen('0');
+            $ohne = $this->newClient()->get('/dsgvo');
+            $this->assertSame(200, $ohne->statusCode);
+            // Nur das Widget betrachten - das Seitenlayout des Kerns kann
+            // eigene <noscript>-Bereiche haben.
+            $start = strpos($ohne->body, 'id="hv-altcha-');
+            $this->assertNotFalse($start, 'Das ALTCHA-Widget fehlt.');
+            $ende = strpos($ohne->body, '</script>', $start);
+            $this->assertNotFalse($ende);
+            $widget = substr($ohne->body, $start, $ende - $start);
+            $this->assertStringNotContainsString('-rueckfall"', $widget);
+            $this->assertStringNotContainsString('<noscript>', $widget);
+            $this->assertStringContainsString('rueckfallZeigen(', $widget);
+            $this->assertStringContainsString('if (rueckfall && rueckfallFeld)', $widget);
+        } finally {
+            self::rueckfallEinstellungSetzen($rueckfallVorher);
+            self::anbieterSetzen('builtin');
+        }
+    }
+
+    /**
      * Fail-closed bei den Berechtigungen: Wer das Verwaltungsrecht des Addons
      * nicht hat, kommt nicht auf die Verwaltungsseite - und wer es hat, schon.
      *
@@ -445,6 +540,51 @@ class CaptchaAnbieterPluginTest extends FunctionalTestCase {
         Database::getInstance()->exec(
             "DELETE FROM login_attempts WHERE type IN ('dsgvo_attempt', 'dsgvo_request')"
         );
+    }
+
+    /** Zahlwörter der Kern-Rechenaufgabe (Captcha::issue()), wie in DeckanfragePluginTest. */
+    private const ZAHLWOERTER = [
+        'eins' => 1, 'zwei' => 2, 'drei' => 3, 'vier' => 4, "f\u{00fc}nf" => 5,
+        'sechs' => 6, 'sieben' => 7, 'acht' => 8, 'neun' => 9,
+    ];
+
+    /**
+     * Löst die Rechenaufgabe des Kerns ("drei plus vier"). Bewusst ein
+     * eigener Löser: DsgvoFormHelper liegt nur in den Kerntests und ist hier
+     * nicht verlässlich autoladbar.
+     */
+    private static function aufgabeRechnen(string $text): string {
+        $teile = preg_split('/\s+/u', trim(html_entity_decode($text, ENT_QUOTES, 'UTF-8')));
+        self::assertIsArray($teile);
+        self::assertCount(3, $teile, "Unerwarteter Aufgabentext: {$text}");
+        $links = self::ZAHLWOERTER[$teile[0]] ?? null;
+        $rechts = self::ZAHLWOERTER[$teile[2]] ?? null;
+        self::assertNotNull($links, "Unbekanntes Zahlwort: {$teile[0]}");
+        self::assertNotNull($rechts, "Unbekanntes Zahlwort: {$teile[2]}");
+        self::assertContains($teile[1], ['plus', 'minus'], "Unbekannter Operator: {$teile[1]}");
+
+        return (string) ($teile[1] === 'minus' ? $links - $rechts : $links + $rechts);
+    }
+
+    /** Der gespeicherte Wert der Rückfall-Einstellung, null wenn keiner gespeichert ist. */
+    private static function rueckfallEinstellung(): ?string {
+        $stmt = Database::getInstance()->prepare('SELECT setting_value FROM settings WHERE setting_key = ?');
+        $stmt->execute(['plugin_captcha_altcha_fallback']);
+        $wert = $stmt->fetchColumn();
+        return $wert === false ? null : (string) $wert;
+    }
+
+    /** Setzt die Rückfall-Einstellung; null stellt den Auslieferungszustand her. */
+    private static function rueckfallEinstellungSetzen(?string $wert): void {
+        $db = Database::getInstance();
+        if ($wert === null) {
+            $db->prepare('DELETE FROM settings WHERE setting_key = ?')->execute(['plugin_captcha_altcha_fallback']);
+            return;
+        }
+        $db->prepare(
+            "INSERT INTO settings (setting_key, setting_value) VALUES ('plugin_captcha_altcha_fallback', ?)
+             ON DUPLICATE KEY UPDATE setting_value = ?"
+        )->execute([$wert, $wert]);
     }
 
     /**

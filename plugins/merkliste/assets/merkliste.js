@@ -9,6 +9,13 @@
 //
 // Das Skript ist idempotent (window-Guard): Auch wenn es doppelt geladen
 // würde, definieren sich die Helfer nur einmal.
+//
+// Fehlt das Tag - Katalog ohne Treffer gestartet, Karten danach per
+// AJAX-Filter, deren <script> per innerHTML nie ausgeführt wird (Audit
+// N28) -, lädt das onclick jedes Knopfs dieses Skript selbst nach und ruft
+// danach hvMerklisteToggle(btn, true) auf. Bis zum ersten Klick zeigen
+// gemerkte Pferde dann noch "☆ Merken", und der Katalog-Einstieg fehlt; die
+// saubere Lösung braucht einen Kern-Hook (Folgeticket im Framework-Repo).
 (function () {
     "use strict";
 
@@ -71,14 +78,21 @@
         }
     };
 
-    window.hvMerklisteToggle = function (btn) {
+    // ziel (optional): true = merken, false = entfernen, sonst umschalten.
+    // Der Nachlader im onclick (Plugin::nachladerJs()) übergibt true: Vor
+    // dem Laden zeigte der Knopf "☆ Merken", auch wenn das Pferd schon
+    // gemerkt war - der nachgeholte Klick darf es nicht wieder entfernen.
+    window.hvMerklisteToggle = function (btn, ziel) {
         var id = parseInt(btn.getAttribute("data-hv-merkliste"), 10);
         var ids = window.hvMerkliste.read();
         var pos = ids.indexOf(id);
-        if (pos === -1) {
+        if (pos === -1 && ziel !== false) {
             ids.push(id);
-        } else {
+        } else if (pos !== -1 && ziel !== true) {
             ids.splice(pos, 1);
+        } else {
+            window.hvMerkliste.syncButtons();
+            return;
         }
         window.hvMerkliste.write(ids);
         window.hvMerkliste.syncButtons();

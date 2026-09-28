@@ -63,7 +63,11 @@
 // Deshalb gibt es den RÜCKFALL (Einstellung "Rückfall ohne JavaScript",
 // standardmässig an): Ist er aktiv, steht im `<noscript>`-Bereich zusätzlich
 // die Rechenaufgabe des Kerns, und wer den Nachweis nicht liefern kann,
-// beantwortet sie. Das ist ehrlich zu benennen: Der Schutz ist dann so stark
+// beantwortet sie. Dieselbe Aufgabe steht ausserdem verborgen (mit
+// deaktiviertem Feld) im Formular; das Skript blendet sie ein, wenn der
+// Browser zwar JavaScript, aber kein `crypto.subtle` hat oder die Berechnung
+// scheitert (Audit N20) - `<noscript>` allein erreicht genau diese Besucher
+// nicht. Das ist ehrlich zu benennen: Der Schutz ist dann so stark
 // wie die schwächere der beiden Hürden, also so stark wie der eingebaute
 // Schutz des Kerns - nicht stärker. Wer das nicht will, schaltet den Rückfall
 // ab und nimmt in Kauf, Besucher ohne JavaScript auszusperren. Die
@@ -596,15 +600,34 @@ final class Widget {
             . '<input type="hidden" id="' . $idAttr . '-feld" name="' . self::FELD . '" value="">';
 
         if ($rueckfallFrage !== null) {
-            // Der Rückfall steht in <noscript>: Wer JavaScript hat, sieht ihn
-            // nicht und wird nicht verwirrt; wer keines hat, bekommt die
-            // Rechenaufgabe des Kerns. Der Feldname ist der des Kerns
-            // ("captcha"), weil Captcha::verifyBuiltin() genau den liest.
+            // Der Rückfall steht an ZWEI Stellen (Audit N20):
+            //
+            // - verborgen im Formular, für Besucher MIT JavaScript, deren
+            //   Browser den Nachweis nicht rechnen kann (kein crypto.subtle
+            //   auf einer per HTTP ausgelieferten Instanz, Berechnung
+            //   gescheitert). Das Skript blendet ihn dann ein und gibt das
+            //   Feld frei. `disabled` ist Pflicht: Ohne JavaScript bleibt das
+            //   Feld gesperrt und wird nicht übertragen - sonst stünden zwei
+            //   Felder "captcha" im POST.
+            // - in <noscript>, für Besucher OHNE JavaScript. Wer JavaScript
+            //   hat, sieht ihn nicht und wird nicht verwirrt.
+            //
+            // Der Feldname ist der des Kerns ("captcha"), weil
+            // Captcha::verifyBuiltin() genau den liest.
+            $frage = htmlspecialchars($rueckfallFrage, ENT_QUOTES, 'UTF-8');
+            $html .= '<div id="' . $idAttr . '-rueckfall" hidden style="margin-top:0.6rem;">'
+                . '<p>Die automatische Prüfung ist in diesem Browser nicht möglich. '
+                . 'Bitte lösen Sie stattdessen diese Aufgabe:</p>'
+                . '<div style="margin-bottom:0.5rem;font-size:1.1rem;"><label for="' . $idAttr . '-rueckfall-feld">'
+                . '<strong>' . $frage . '</strong> =</label></div>'
+                . '<input type="text" id="' . $idAttr . '-rueckfall-feld" name="captcha" class="form-control"'
+                . ' inputmode="numeric" autocomplete="off" maxlength="2" style="max-width:8rem;" disabled>'
+                . '</div>';
             $html .= '<noscript>'
                 . '<p style="margin-top:0.6rem;">Ihr Browser führt kein JavaScript aus. '
                 . 'Bitte lösen Sie stattdessen diese Aufgabe:</p>'
                 . '<div style="margin-bottom: 0.5rem; font-size: 1.1rem;"><strong>'
-                . htmlspecialchars($rueckfallFrage, ENT_QUOTES, 'UTF-8') . '</strong> =</div>'
+                . $frage . '</strong> =</div>'
                 . '<input type="text" name="captcha" class="form-control" inputmode="numeric"'
                 . ' autocomplete="off" maxlength="2" style="max-width: 8rem;">'
                 . '</noscript>';
@@ -631,6 +654,11 @@ final class Widget {
      * Browser zurückgegeben, sonst käme er zwischen zwei Prüfsummen nie zum
      * Zeichnen und die Seite wirkte eingefroren.
      *
+     * Kann der Browser nicht rechnen oder scheitert die Berechnung, blendet
+     * rueckfallZeigen() die verborgene Rechenaufgabe des Kerns ein (Audit
+     * N20). Ist der Rückfall abgeschaltet, fehlen die Elemente, und es bleibt
+     * bei der bisherigen Meldung.
+     *
      * Der Absende-Knopf ist gesperrt, solange gerechnet wird. Ohne das
      * schickt ein schneller Besucher das Formular ab, bevor der Nachweis im
      * Feld steht - und bekommt "nicht bestanden", ohne etwas falsch gemacht
@@ -643,14 +671,26 @@ final class Widget {
     var wurzel = document.getElementById(id);
     var feld = document.getElementById(id + '-feld');
     var status = document.getElementById(id + '-status');
+    var rueckfall = document.getElementById(id + '-rueckfall');
+    var rueckfallFeld = document.getElementById(id + '-rueckfall-feld');
     if (!wurzel || !feld || !status) { return; }
+
+    function rueckfallZeigen(meldungOhne) {
+        if (rueckfall && rueckfallFeld) {
+            rueckfall.hidden = false;
+            rueckfallFeld.disabled = false;
+            status.textContent = 'Die automatische Prüfung ist in diesem Browser nicht möglich. Bitte lösen Sie die Aufgabe unten.';
+        } else {
+            status.textContent = meldungOhne;
+        }
+    }
 
     var aufgabe;
     try { aufgabe = JSON.parse(wurzel.getAttribute('data-hv-altcha')); } catch (e) { return; }
     if (!aufgabe || !aufgabe.salt || !aufgabe.challenge) { return; }
 
     if (!window.crypto || !window.crypto.subtle || !window.TextEncoder) {
-        status.textContent = 'Dieser Browser kann die automatische Prüfung nicht ausführen.';
+        rueckfallZeigen('Dieser Browser kann die automatische Prüfung nicht ausführen.');
         return;
     }
 
@@ -692,10 +732,10 @@ final class Widget {
                 await new Promise(function (weiter) { setTimeout(weiter, 0); });
             }
         }
-        status.textContent = 'Die Sicherheitsprüfung konnte nicht abgeschlossen werden. Bitte laden Sie die Seite neu.';
+        rueckfallZeigen('Die Sicherheitsprüfung konnte nicht abgeschlossen werden. Bitte laden Sie die Seite neu.');
         freigeben();
     })().catch(function () {
-        status.textContent = 'Die Sicherheitsprüfung konnte nicht abgeschlossen werden. Bitte laden Sie die Seite neu.';
+        rueckfallZeigen('Die Sicherheitsprüfung konnte nicht abgeschlossen werden. Bitte laden Sie die Seite neu.');
         freigeben();
     });
 })();
@@ -748,7 +788,7 @@ class VerwaltungController extends BaseController {
             Plugin::SLUG,
             'Einstellungen geändert',
             'Spam-Schutz ALTCHA',
-            'Aufwand: ' . $stufe . ', Rückfall ohne JavaScript: ' . ($rueckfall === '1' ? 'an' : 'aus')
+            'Aufwand: ' . $stufe . ', Rückfall ohne JavaScript bzw. ohne crypto.subtle: ' . ($rueckfall === '1' ? 'an' : 'aus')
         );
 
         $this->zurueck('gespeichert');
@@ -781,7 +821,9 @@ class VerwaltungController extends BaseController {
             . '<p style="margin: 0;">Der Rechennachweis läuft im Browser. Ohne JavaScript - oder auf einer '
             . 'unverschlüsselt ausgelieferten Seite, wo <code>crypto.subtle</code> nicht zur Verfügung steht - '
             . 'kommt kein Nachweis zustande. Der <em>Rückfall</em> unten löst das: Ist er an, steht für diese '
-            . 'Besucher die eingebaute Rechenaufgabe des Kerns im Formular. Der Schutz ist dann so stark wie '
+            . 'Besucher die eingebaute Rechenaufgabe des Kerns im Formular - ohne JavaScript über '
+            . '<code>&lt;noscript&gt;</code>, ohne <code>crypto.subtle</code> oder bei gescheiterter Berechnung '
+            . 'blendet das Skript sie selbst ein. Der Schutz ist dann so stark wie '
             . 'die schwächere der beiden Hürden, also so stark wie der eingebaute Schutz - nicht stärker. '
             . 'Schalten Sie ihn nur ab, wenn Sie bewusst in Kauf nehmen, Besucher ohne JavaScript '
             . 'auszusperren.</p>'
@@ -818,8 +860,9 @@ class VerwaltungController extends BaseController {
 
         $html .= '<div class="form-group"><label>'
             . '<input type="checkbox" name="rueckfall" value="1"' . ($rueckfall ? ' checked' : '') . '> '
-            . 'Rückfall ohne JavaScript (empfohlen)</label>'
-            . '<span class="form-hint">Zeigt Besuchern ohne JavaScript die eingebaute Rechenaufgabe des Kerns. '
+            . 'Rückfall ohne JavaScript bzw. ohne crypto.subtle (empfohlen)</label>'
+            . '<span class="form-hint">Zeigt Besuchern ohne JavaScript - und Browsern, die den Nachweis nicht '
+            . 'rechnen können, etwa auf einer per HTTP ausgelieferten Seite - die eingebaute Rechenaufgabe des Kerns. '
             . 'Siehe den Kasten oben - das senkt den Schutz auf das Niveau des eingebauten Schutzes, hält das '
             . 'Formular aber für alle erreichbar.</span></div>';
 
