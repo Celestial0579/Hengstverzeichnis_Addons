@@ -82,6 +82,7 @@ return [
     'catalog.search_placeholder' => 'Recherche plein texte (cheval, UELN, éleveur, propriétaire, station de monte, père, mère)...',
     'catalog.search_button' => 'Rechercher',
     'catalog.reset_filters' => 'Réinitialiser les filtres',
+    'catalog.contact_filter_unavailable' => 'La recherche par éleveur, propriétaire, détenteur ou station de monte n\'est pas disponible ici.',
     'catalog.advanced_filters' => '⚙️ Filtres avancés par attributs (cheval, éleveur, station de monte, pedigree)',
     'catalog.horse_name' => 'Nom du cheval',
     'catalog.horse_name_placeholder' => 'p. ex. Storm',
@@ -304,6 +305,7 @@ return [
     'register.email_invalid' => 'Veuillez indiquer une adresse e-mail valide.',
     'register.password_invalid' => 'Les mots de passe ne correspondent pas ou sont trop courts (au moins 8 caractères).',
     'register.already_taken' => 'Le nom d\'utilisateur ou l\'adresse e-mail est déjà utilisé.',
+    'register.unavailable' => 'L\'inscription n\'est pas possible pour le moment (configuration incomplète). Veuillez contacter l\'association.',
     'register.verification_invalid' => 'Le lien de confirmation est invalide ou a expiré. Veuillez vous inscrire à nouveau ou contacter l\'exploitant.',
 
     'auth.2fa_heading' => '🔐 Vérification 2FA',

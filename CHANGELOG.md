@@ -525,6 +525,16 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   gehört nach dem Pin dort wieder gestrichen. `core_compatibility` und
   `core_supported_max` bleiben unverändert (Linie 0.9).
 
+- **Zehn Sprach-Addons 1.0.2**: Übersetzungen für `register.unavailable`, die
+  Meldung, mit der der Kern die Selbstregistrierung ohne feste Stamm-URL
+  ablehnt (Framework#473, Audit M6), und für
+  `catalog.contact_filter_unavailable`, den Hinweis im Katalog, wenn die
+  Gast-Gruppe `contacts.view` nicht hat und die Suche nach Züchter, Besitzer,
+  Halter oder Deckstation deshalb entfällt (Framework#475, Audit M18). Ohne
+  sie erschienen beide Meldungen auf Deutsch. `core_compatibility` und
+  `core_supported_max` bleiben unverändert (Linie 0.9; gepinnt: Framework
+  5dc8c77).
+
 - **Einheitliche Prüfreihenfolge der drei öffentlichen Anfrageformulare**
   (`kontaktanfrage` 1.1.2, `verkaufsboerse` 1.3.0, `deckanfrage` 1.2.1):
   CSRF, Honeypot, IP-Zähler, Leserechte der Gast-Gruppe, Sicherheitsfrage,

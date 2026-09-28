@@ -82,6 +82,7 @@ return [
     'catalog.search_placeholder' => 'Vapaatekstihaku (hevonen, UELN, kasvattaja, omistaja, oriasema, isä, emä)...',
     'catalog.search_button' => 'Hae',
     'catalog.reset_filters' => 'Tyhjennä suodattimet',
+    'catalog.contact_filter_unavailable' => 'Haku kasvattajan, omistajan, haltijan tai oriaseman mukaan ei ole käytettävissä tässä.',
     'catalog.advanced_filters' => '⚙️ Tarkennetut suodattimet (hevonen, kasvattaja, oriasema, sukutaulu)',
     'catalog.horse_name' => 'Hevosen nimi',
     'catalog.horse_name_placeholder' => 'esim. Storm',
@@ -304,6 +305,7 @@ return [
     'register.email_invalid' => 'Anna kelvollinen sähköpostiosoite.',
     'register.password_invalid' => 'Salasanat eivät täsmää tai ne ovat liian lyhyitä (vähintään 8 merkkiä).',
     'register.already_taken' => 'Käyttäjätunnus tai sähköpostiosoite on jo käytössä.',
+    'register.unavailable' => 'Rekisteröityminen ei ole tällä hetkellä mahdollista (käyttöönotto on kesken). Ota yhteyttä yhdistykseen.',
     'register.verification_invalid' => 'Vahvistuslinkki on virheellinen tai vanhentunut. Rekisteröidy uudelleen tai ota yhteyttä ylläpitäjään.',
 
     'auth.2fa_heading' => '🔐 2FA-vahvistus',

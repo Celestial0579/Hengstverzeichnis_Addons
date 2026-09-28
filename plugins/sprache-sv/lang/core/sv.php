@@ -82,6 +82,7 @@ return [
     'catalog.search_placeholder' => 'Fritextsökning (häst, UELN, uppfödare, ägare, hingststation, far, mor)...',
     'catalog.search_button' => 'Sök',
     'catalog.reset_filters' => 'Återställ filter',
+    'catalog.contact_filter_unavailable' => 'Sökning efter uppfödare, ägare, hästhållare eller hingststation är inte tillgänglig här.',
     'catalog.advanced_filters' => '⚙️ Avancerade attributfilter (häst, uppfödare, hingststation, härstamning)',
     'catalog.horse_name' => 'Hästens namn',
     'catalog.horse_name_placeholder' => 't.ex. Storm',
@@ -304,6 +305,7 @@ return [
     'register.email_invalid' => 'Ange en giltig e-postadress.',
     'register.password_invalid' => 'Lösenorden stämmer inte överens eller är för korta (minst 8 tecken).',
     'register.already_taken' => 'Användarnamnet eller e-postadressen är redan upptagen.',
+    'register.unavailable' => 'Registrering är för närvarande inte möjlig (installationen är ofullständig). Kontakta föreningen.',
     'register.verification_invalid' => 'Bekräftelselänken är ogiltig eller har gått ut. Registrera dig på nytt eller kontakta operatören.',
 
     'auth.2fa_heading' => '🔐 2FA-verifiering',

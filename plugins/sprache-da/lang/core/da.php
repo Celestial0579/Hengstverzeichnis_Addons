@@ -82,6 +82,7 @@ return [
     'catalog.search_placeholder' => 'Fritekstsøgning (hest, UELN, opdrætter, ejer, hingstestation, far, mor)...',
     'catalog.search_button' => 'Søg',
     'catalog.reset_filters' => 'Nulstil filtre',
+    'catalog.contact_filter_unavailable' => 'Søgning efter opdrætter, ejer, holder eller hingstestation er ikke tilgængelig her.',
     'catalog.advanced_filters' => '⚙️ Avancerede attributfiltre (hest, opdrætter, hingstestation, afstamning)',
     'catalog.horse_name' => 'Hestens navn',
     'catalog.horse_name_placeholder' => 'f.eks. Storm',
@@ -304,6 +305,7 @@ return [
     'register.email_invalid' => 'Angiv venligst en gyldig e-mailadresse.',
     'register.password_invalid' => 'Adgangskoderne stemmer ikke overens eller er for korte (mindst 8 tegn).',
     'register.already_taken' => 'Brugernavnet eller e-mailadressen er allerede i brug.',
+    'register.unavailable' => 'Registrering er i øjeblikket ikke mulig (opsætningen er ufuldstændig). Kontakt venligst foreningen.',
     'register.verification_invalid' => 'Bekræftelseslinket er ugyldigt eller udløbet. Registrer dig venligst igen, eller kontakt operatøren.',
 
     'auth.2fa_heading' => '🔐 2FA-bekræftelse',

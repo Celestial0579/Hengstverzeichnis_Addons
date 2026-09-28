@@ -246,7 +246,11 @@ class MitgliedsstatusPluginTest extends FunctionalTestCase {
         // draussen - auch nicht, wenn der Kontakt öffentlich freigegeben ist.
         $this->statusSpeichern($admin, $klar, 'mitglied', true);
         $oeffentlich = $this->newClient()->get('/kontakt?id=' . $klar);
-        $this->assertStringNotContainsString('4711', $oeffentlich->body);
+        // CSRF-Tokens anderer Addons auf derselben Seite (etwa das Formular
+        // von kontaktanfrage) sind zufälliges Hex und enthalten ab und zu
+        // "4711" - sie sind keine Ausgabe der Kennung.
+        $sichtbar = (string) preg_replace('/name="csrf_token" value="[0-9a-f]*"/', '', $oeffentlich->body);
+        $this->assertStringNotContainsString('4711', $sichtbar);
         $this->assertStringNotContainsString('crm.example.test', $oeffentlich->body);
 
         // 11. Protokoll (Framework#352). Gegengeprüft ist der Test, indem der

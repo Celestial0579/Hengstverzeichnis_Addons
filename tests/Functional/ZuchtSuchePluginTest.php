@@ -121,7 +121,15 @@ class ZuchtSuchePluginTest extends FunctionalTestCase {
         // 1. Die Suchseite ist ohne Anmeldung erreichbar und führt OHNE
         //    Rollenfilter alle veröffentlichten Kontakte - vor #122 zeigte der
         //    Standardreiter nur die gekennzeichneten Züchter.
-        $seite = $visitor->get(self::SEITE);
+        //
+        //    Eingegrenzt auf die Namen DIESES Laufs (alle drei tragen
+        //    $unique): Die Liste ist nach Namen sortiert und blättert nach 50
+        //    Treffern. Ungefiltert rutschten die "ZS…"-Namen hinter die Kontakte
+        //    der vorher gelaufenen Tests auf Seite 2, sobald die Suite mehr als
+        //    50 veröffentlichte Kontakte anlegt - der Test hinge dann an der
+        //    Zahl der anderen Tests statt an diesem Addon.
+        $nurDieserLauf = '?name=' . urlencode($unique);
+        $seite = $visitor->get(self::SEITE . $nurDieserLauf);
         $this->assertSame(200, $seite->statusCode);
         $this->assertStringContainsString('🧬 Zucht', $seite->body);
         foreach ([$zuechterName, $keinZuechterName, $stationName] as $name) {
@@ -153,7 +161,7 @@ class ZuchtSuchePluginTest extends FunctionalTestCase {
 
         // 3. Rollenfilter „Züchter": das redaktionelle Kennzeichen
         //    contacts.is_breeder, ausdrücklich NICHT horse_persons.role.
-        $zuechterListe = $visitor->get(self::SEITE . '?rolle=zuechter');
+        $zuechterListe = $visitor->get(self::SEITE . $nurDieserLauf . '&rolle=zuechter');
         $this->assertSame(200, $zuechterListe->statusCode);
         $this->assertStringContainsString($zuechterName, $zuechterListe->body);
         $this->assertStringNotContainsString(
@@ -166,7 +174,7 @@ class ZuchtSuchePluginTest extends FunctionalTestCase {
         // 4. Rollenfilter „Deckstation": abgeleitet aus den Zuordnungen
         //    veröffentlichter Pferde, nicht aus einem Feld am Datensatz - die
         //    Gattung „Deckstation" gibt es nicht mehr.
-        $stationsListe = $visitor->get(self::SEITE . '?rolle=station');
+        $stationsListe = $visitor->get(self::SEITE . $nurDieserLauf . '&rolle=station');
         $this->assertSame(200, $stationsListe->statusCode);
         $this->assertStringContainsString($stationName, $stationsListe->body);
         $this->assertStringNotContainsString(
@@ -189,7 +197,7 @@ class ZuchtSuchePluginTest extends FunctionalTestCase {
         //    Framework#395 nicht mehr.
         $altwert = "Mitgliedsmarker-{$unique}";
 
-        $mitglieder = $visitor->get(self::SEITE . '?mitglied=' . urlencode($altwert));
+        $mitglieder = $visitor->get(self::SEITE . $nurDieserLauf . '&mitglied=' . urlencode($altwert));
         $this->assertStringContainsString($zuechterName, $mitglieder->body);
         $this->assertStringContainsString(
             $keinZuechterName,
@@ -250,7 +258,7 @@ class ZuchtSuchePluginTest extends FunctionalTestCase {
             'is_breeder' => '1',
             'is_published' => '0',
         ]);
-        $nachVerstecken = $visitor->get(self::SEITE);
+        $nachVerstecken = $visitor->get(self::SEITE . $nurDieserLauf);
         $this->assertStringNotContainsString($verstecktName, $nachVerstecken->body);
 
         $gastGruppe = $this->findBuiltinGroupId($admin, 'Gast');
@@ -272,7 +280,7 @@ class ZuchtSuchePluginTest extends FunctionalTestCase {
 
             // Und der Wert wirkt auch nicht, wenn er von Hand gesetzt wird:
             // die Anfrage fällt auf „(alle)" zurück, der Züchter erscheint also.
-            $erzwungen = $this->newClient()->get(self::SEITE . '?rolle=station');
+            $erzwungen = $this->newClient()->get(self::SEITE . $nurDieserLauf . '&rolle=station');
             $this->assertSame(200, $erzwungen->statusCode);
             $this->assertStringContainsString(
                 $zuechterName,

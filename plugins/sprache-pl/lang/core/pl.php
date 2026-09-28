@@ -82,6 +82,7 @@ return [
     'catalog.search_placeholder' => 'Wyszukiwanie pełnotekstowe (koń, UELN, hodowca, właściciel, stacja ogierów, ojciec, matka)...',
     'catalog.search_button' => 'Szukaj',
     'catalog.reset_filters' => 'Resetuj filtry',
+    'catalog.contact_filter_unavailable' => 'Wyszukiwanie według hodowcy, właściciela, posiadacza lub stacji ogierów nie jest tutaj dostępne.',
     'catalog.advanced_filters' => '⚙️ Zaawansowane filtry atrybutów (koń, hodowca, stacja ogierów, rodowód)',
     'catalog.horse_name' => 'Nazwa konia',
     'catalog.horse_name_placeholder' => 'np. Storm',
@@ -304,6 +305,7 @@ return [
     'register.email_invalid' => 'Prosimy podać prawidłowy adres e-mail.',
     'register.password_invalid' => 'Hasła nie są zgodne lub są za krótkie (co najmniej 8 znaków).',
     'register.already_taken' => 'Nazwa użytkownika lub adres e-mail są już zajęte.',
+    'register.unavailable' => 'Rejestracja jest obecnie niemożliwa (konfiguracja niekompletna). Prosimy o kontakt ze związkiem.',
     'register.verification_invalid' => 'Link potwierdzający jest nieprawidłowy lub wygasł. Prosimy zarejestrować się ponownie lub skontaktować się z operatorem.',
 
     'auth.2fa_heading' => '🔐 Weryfikacja 2FA',

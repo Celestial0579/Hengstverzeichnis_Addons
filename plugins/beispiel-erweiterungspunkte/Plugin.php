@@ -217,6 +217,16 @@ class Plugin {
      * @var array<string, string>
      */
     public const BEWUSST_NICHT_ABGEDECKT = [
+        'contact.merged' => 'Uebergang: neuer Kern-Hook aus der Kontakt-Zusammenfuehrung '
+            . '(Kern-#474, Audit M33). Der Beleg - Notiz der Quelle an das Ziel haengen - '
+            . 'folgt im naechsten Addons-Commit; bis dahin haelt dieser Eintrag die '
+            . 'Abdeckungspruefung ehrlich statt still.',
+        'contact.anonymized' => 'Uebergang: neuer Kern-Hook aus der DSGVO-Bearbeitung '
+            . '(Kern-#476, Audit N45). Der Beleg - eigene Notiz zum Kontakt entfernen - '
+            . 'folgt im naechsten Addons-Commit zusammen mit contact.merged.',
+        'contact.erased' => 'Uebergang: neuer Kern-Hook fuer das endgueltige Loeschen '
+            . '(Kern-#476, Audit N45). Der Beleg - eigene Notiz ohne Fremdschluessel '
+            . 'entfernen - folgt im naechsten Addons-Commit zusammen mit contact.merged.',
     ];
 
     /**
