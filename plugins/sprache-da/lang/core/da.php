@@ -246,6 +246,7 @@ return [
     'auth.login_button' => 'Log ind',
     'auth.rate_limited_login' => 'For mange mislykkede loginforsøg. Prøv venligst igen om 15 minutter.',
     'auth.invalid_credentials' => 'Ugyldige loginoplysninger.',
+    'auth.login_captcha_required' => 'Efter mange mislykkede loginforsøg kræves der desuden en sikkerhedskontrol. Udfyld den venligst nedenfor, og log ind igen.',
     'auth.email_not_verified' => 'Bekræft venligst først din e-mailadresse via det link, vi sendte dig ved registreringen.',
     'auth.email_verified_success' => '✓ E-mailadressen er bekræftet. Du kan nu logge ind.',
     'auth.register_link' => 'Har du ikke en konto endnu? Registrer dig nu',

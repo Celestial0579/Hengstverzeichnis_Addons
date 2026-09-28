@@ -246,6 +246,7 @@ return [
     'auth.login_button' => 'Kirjaudu sisään',
     'auth.rate_limited_login' => 'Liian monta epäonnistunutta kirjautumisyritystä. Yritä uudelleen 15 minuutin kuluttua.',
     'auth.invalid_credentials' => 'Virheelliset kirjautumistiedot.',
+    'auth.login_captcha_required' => 'Useiden epäonnistuneiden kirjautumisyritysten jälkeen tarvitaan lisäksi turvatarkistus. Täytä se alla ja kirjaudu uudelleen.',
     'auth.email_not_verified' => 'Vahvista ensin sähköpostiosoitteesi rekisteröitymisen yhteydessä lähettämämme linkin kautta.',
     'auth.email_verified_success' => '✓ Sähköpostiosoite vahvistettu. Voit nyt kirjautua sisään.',
     'auth.register_link' => 'Ei vielä tiliä? Rekisteröidy nyt',

@@ -352,6 +352,16 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   Release-Tag) müssen nach dem Update unter `/admin/plugins` erneut
   freigegeben werden.
 
+- **Zehn Sprach-Addons 1.0.1** (`sprache-cs`, `sprache-da`, `sprache-fi`,
+  `sprache-fr`, `sprache-it`, `sprache-lb`, `sprache-nb`, `sprache-nl`,
+  `sprache-pl`, `sprache-sv`): Übersetzung für `auth.login_captcha_required`,
+  die Meldung der neuen kontoweiten Anmeldebremse im Kern (Framework, Audit
+  M7). Ohne sie erschiene die Meldung dort auf Deutsch. Der Kern-Schlüssel
+  kommt erst mit dem nächsten Framework-Stand; bis dahin steht er in
+  `SprachAddonVollstaendigkeitTest` als angekündigter Vorab-Schlüssel und
+  gehört nach dem Pin dort wieder gestrichen. `core_compatibility` und
+  `core_supported_max` bleiben unverändert (Linie 0.9).
+
 ## [0.9.0] – 2026-08-27
 
 **Der Addon-Stand zur Kern-Freigabe v0.9.0.** Alle 36 Addons sind gegen den

@@ -246,6 +246,7 @@ return [
     'auth.login_button' => 'Se connecter',
     'auth.rate_limited_login' => 'Trop de tentatives de connexion échouées. Veuillez réessayer dans 15 minutes.',
     'auth.invalid_credentials' => 'Identifiants invalides.',
+    'auth.login_captcha_required' => 'Après de nombreuses tentatives de connexion échouées, une vérification de sécurité supplémentaire est nécessaire. Veuillez la compléter ci-dessous et vous reconnecter.',
     'auth.email_not_verified' => 'Veuillez d\'abord confirmer votre adresse e-mail via le lien que nous vous avons envoyé lors de l\'inscription.',
     'auth.email_verified_success' => '✓ Adresse e-mail confirmée. Vous pouvez maintenant vous connecter.',
     'auth.register_link' => 'Pas encore de compte ? S\'inscrire maintenant',

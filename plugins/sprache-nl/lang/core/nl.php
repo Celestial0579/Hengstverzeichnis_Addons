@@ -246,6 +246,7 @@ return [
     'auth.login_button' => 'Aanmelden',
     'auth.rate_limited_login' => 'Te veel mislukte aanmeldpogingen. Probeer het over 15 minuten opnieuw.',
     'auth.invalid_credentials' => 'Ongeldige inloggegevens.',
+    'auth.login_captcha_required' => 'Na veel mislukte aanmeldpogingen is een extra beveiligingscontrole nodig. Vul deze hieronder in en meld u opnieuw aan.',
     'auth.email_not_verified' => 'Bevestig eerst uw e-mailadres via de link die wij u bij de registratie hebben gestuurd.',
     'auth.email_verified_success' => '✓ E-mailadres bevestigd. U kunt zich nu aanmelden.',
     'auth.register_link' => 'Nog geen account? Registreer nu',
