@@ -40,3 +40,15 @@ Keine Berechtigung nötig - die API gibt ausschließlich Daten aus, die der
   MutationObserver auch nach AJAX-Nachladen des Katalogs synchron gehalten;
   beobachtet wird gezielt der Karten-Container `#catalog-grid` (auf Seiten
   ohne diesen Container läuft kein Observer).
+- Nachladen bei Bedarf (Audit N28): Startet der Katalog ohne Treffer (etwa
+  über einen geteilten Suchlink), steht kein `<script>`-Tag auf der Seite.
+  Kommen die Karten danach per Live-Filter, bringt die AJAX-Antwort das Tag
+  zwar mit, per `innerHTML` eingefügt wird es aber nie ausgeführt. Jeder
+  Merken-Knopf lädt das Skript deshalb bei Bedarf selbst nach und holt den
+  Klick danach als „merken“ nach (`hvMerklisteToggle(btn, true)`) – ein
+  bereits gemerktes Pferd wird dabei nicht versehentlich entfernt.
+  **Einschränkung:** Bis zu diesem ersten Klick zeigen gemerkte Pferde auf
+  solchen nachgeladenen Karten noch „☆ Merken“, und der Einstieg
+  „★ Merkliste (n)“ neben dem Trefferzähler fehlt. Die saubere Lösung braucht
+  einen seitenweiten Asset-Hook oder ein Ereignis nach dem Ersetzen der Karten
+  im Kern (Folgeticket im Framework-Repo).
