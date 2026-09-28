@@ -132,6 +132,11 @@ nicht kennt, und beide sehen für sich plausibel aus.
 **Fail-open bei jedem Fehler.** Kann das Addon nicht prüfen (Tabelle fehlt,
 Datenbank antwortet nicht), meldet es *keine* Einwände. Ein abgestürztes Addon
 darf keine Veröffentlichung blockieren - niemand könnte den Grund beheben.
+Scheitert dabei nur *eine* Regel, laufen die übrigen einzeln weiter: Eine
+defekte Regel verschluckt nicht die Funde aller anderen. Jeder solche Fehler
+steht im Server-Log (`[plausibilitaetspruefung] …`), und der Bericht zeigt bei
+der betroffenen Regel „konnte nicht ausgewertet werden" statt „Keine Fälle im
+Bestand".
 
 ## Eine Regel ergänzen
 

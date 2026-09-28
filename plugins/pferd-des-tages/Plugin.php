@@ -889,8 +889,16 @@ final class Kasten {
  */
 class VerwaltungController extends BaseController {
 
-    /** Wie viele Vorgaben/Wahlen die Seite zeigt. */
+    /** Wie viele zurückliegende Tage die Rückschau der Vorgabenliste zeigt. */
     private const LETZTE_WAHLEN = 14;
+
+    /**
+     * Schutzdeckel für die Liste „Heute und anstehend". Künftige Zeilen
+     * entstehen nur über Vorgaben, und datumAusAnfrage() lässt jedes gültige
+     * Datum zu - auch Jahre im Voraus. Ein Jahr Planung passt vollständig
+     * hinein; darüber hinaus weist ein Hinweis auf die Kürzung hin.
+     */
+    private const KUENFTIGE_MAX = 366;
 
     /** @var array<string, string> */
     private const MELDUNGEN = [
@@ -1228,58 +1236,67 @@ class VerwaltungController extends BaseController {
 
     private function vorgabenKarte(string $csrf): string {
         $heute = Auswahl::heute();
+        $db = Database::getInstance();
 
-        // Alles ab heute (die Vorgaben, die noch wirken) plus die letzten
-        // Tage zur Kontrolle. Die Liste beantwortet die Frage, die nach zwei
-        // Wochen aufkommt: "Welches Pferd stand wann da?"
-        $stmt = Database::getInstance()->prepare(
+        // Zwei getrennte Abfragen statt einer gemeinsamen: Ein Deckel von 14
+        // Zeilen über alles, absteigend sortiert, hat bei mehr als zwei Wochen
+        // Vorausplanung heute und die nächsten Tage verdrängt - samt
+        // Aufheben-Knopf -, und die Rückschau fehlte ganz (Audit N33).
+        // Aufsteigend ab heute kann die heutige Zeile nicht mehr herausfallen.
+        // Vergangene Vorgaben älter als die Rückschau wirken nicht mehr
+        // (fuerTag() fragt nur heute ab) und brauchen deshalb keinen eigenen Weg.
+        $stmt = $db->prepare(
             'SELECT w.datum, w.horse_id, w.fest, h.name, h.is_published
              FROM `plugin_pferd_des_tages_wahl` w
              LEFT JOIN horses h ON h.id = w.horse_id
-             WHERE w.datum >= ? OR w.fest = 1
+             WHERE w.datum >= ?
+             ORDER BY w.datum ASC
+             LIMIT ' . (self::KUENFTIGE_MAX + 1)
+        );
+        $stmt->execute([$heute]);
+        $anstehend = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $gekuerzt = count($anstehend) > self::KUENFTIGE_MAX;
+        if ($gekuerzt) {
+            $anstehend = array_slice($anstehend, 0, self::KUENFTIGE_MAX);
+        }
+
+        // Die letzten Tage zur Kontrolle. Die Liste beantwortet die Frage, die
+        // nach zwei Wochen aufkommt: "Welches Pferd stand wann da?" datum ist
+        // eindeutig, das LIMIT nur eine Absicherung.
+        $stmt = $db->prepare(
+            'SELECT w.datum, w.horse_id, w.fest, h.name, h.is_published
+             FROM `plugin_pferd_des_tages_wahl` w
+             LEFT JOIN horses h ON h.id = w.horse_id
+             WHERE w.datum < ? AND w.datum >= ?
              ORDER BY w.datum DESC
              LIMIT ' . self::LETZTE_WAHLEN
         );
-        $stmt->execute([date('Y-m-d', (int) strtotime($heute . ' -' . self::LETZTE_WAHLEN . ' days'))]);
-        $zeilen = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $stmt->execute([$heute, date('Y-m-d', (int) strtotime($heute . ' -' . self::LETZTE_WAHLEN . ' days'))]);
+        $zurueck = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $html = '<div class="card"><h2 style="margin-top:0;">Vorgaben und getroffene Wahlen</h2>';
         $html .= '<p style="color:var(--text-muted);">Für ein bestimmtes Datum lässt sich ein Pferd fest '
             . 'vorgeben - Fohlenschau, Jubiläum, Verbandstermin. Eine Vorgabe schlägt die automatische '
             . 'Wahl; die Kriterien gelten für sie nicht.</p>';
 
-        if ($zeilen === []) {
+        $html .= '<h3>Heute und anstehend</h3>';
+        if ($anstehend === []) {
+            $html .= '<p style="color:var(--text-muted);">Keine anstehenden Vorgaben.</p>';
+        } else {
+            $html .= $this->wahlTabelle($anstehend, $heute, $csrf);
+            if ($gekuerzt) {
+                $letzte = (string) $anstehend[count($anstehend) - 1]['datum'];
+                $html .= '<p style="color:var(--text-muted);">Weitere Vorgaben nach dem ' . self::esc($letzte)
+                    . ' sind vorhanden und hier nicht aufgeführt. Sie lassen sich mit „Vorgabe setzen" '
+                    . 'für dasselbe Datum überschreiben.</p>';
+            }
+        }
+
+        $html .= '<h3>Zurückliegend (letzte ' . self::LETZTE_WAHLEN . ' Tage)</h3>';
+        if ($zurueck === []) {
             $html .= '<p style="color:var(--text-muted);">Noch keine Wahl getroffen.</p>';
         } else {
-            $html .= '<div class="tabelle-scroll"><table style="width:100%;border-collapse:collapse;"><thead>'
-                . '<tr style="text-align:left;border-bottom:2px solid var(--border-color);">'
-                . '<th style="padding:0.4rem;">Datum</th><th style="padding:0.4rem;">Pferd</th>'
-                . '<th style="padding:0.4rem;">Art</th><th style="padding:0.4rem;"></th></tr></thead><tbody>';
-            foreach ($zeilen as $zeile) {
-                $datum = (string) $zeile['datum'];
-                $html .= '<tr style="border-bottom:1px solid var(--border-color);">';
-                $html .= '<td style="padding:0.4rem;">' . self::esc($datum)
-                    . ($datum === $heute ? ' <strong>(heute)</strong>' : '') . '</td>';
-                if ($zeile['horse_id'] === null) {
-                    $html .= '<td style="padding:0.4rem;color:var(--text-muted);">kein Kandidat</td>';
-                } else {
-                    $html .= '<td style="padding:0.4rem;"><a href="/admin/horses/edit?id=' . (int) $zeile['horse_id'] . '">'
-                        . self::esc($zeile['name'] ?? ('#' . (int) $zeile['horse_id'])) . '</a>'
-                        . (empty($zeile['is_published'])
-                            ? ' <span style="color:var(--text-muted);">(nicht veröffentlicht - erscheint nicht)</span>'
-                            : '')
-                        . '</td>';
-                }
-                $html .= '<td style="padding:0.4rem;color:var(--text-muted);">'
-                    . (!empty($zeile['fest']) ? 'Vorgabe' : 'automatisch') . '</td>';
-                $html .= '<td style="padding:0.4rem;text-align:right;">'
-                    . '<form method="POST" action="' . Plugin::VERWALTUNG . '/vorgabe/entfernen" style="margin:0;">'
-                    . '<input type="hidden" name="csrf_token" value="' . $csrf . '">'
-                    . '<input type="hidden" name="datum" value="' . self::esc($datum) . '">'
-                    . '<button type="submit" class="btn btn-secondary">Aufheben</button></form></td>';
-                $html .= '</tr>';
-            }
-            $html .= '</tbody></table></div>';
+            $html .= $this->wahlTabelle($zurueck, $heute, $csrf);
         }
 
         $html .= '<h3>Vorgabe setzen</h3>';
@@ -1293,6 +1310,44 @@ class VerwaltungController extends BaseController {
         $html .= '</form>';
 
         return $html . '</div>';
+    }
+
+    /** @param list<array<string, mixed>> $zeilen */
+    private function wahlTabelle(array $zeilen, string $heute, string $csrf): string {
+        $html = '<div class="tabelle-scroll"><table style="width:100%;border-collapse:collapse;"><thead>'
+            . '<tr style="text-align:left;border-bottom:2px solid var(--border-color);">'
+            . '<th style="padding:0.4rem;">Datum</th><th style="padding:0.4rem;">Pferd</th>'
+            . '<th style="padding:0.4rem;">Art</th><th style="padding:0.4rem;"></th></tr></thead><tbody>';
+        foreach ($zeilen as $zeile) {
+            $html .= $this->wahlZeile($zeile, $heute, $csrf);
+        }
+        return $html . '</tbody></table></div>';
+    }
+
+    /** @param array<string, mixed> $zeile */
+    private function wahlZeile(array $zeile, string $heute, string $csrf): string {
+        $datum = (string) $zeile['datum'];
+        $html = '<tr style="border-bottom:1px solid var(--border-color);">';
+        $html .= '<td style="padding:0.4rem;">' . self::esc($datum)
+            . ($datum === $heute ? ' <strong>(heute)</strong>' : '') . '</td>';
+        if ($zeile['horse_id'] === null) {
+            $html .= '<td style="padding:0.4rem;color:var(--text-muted);">kein Kandidat</td>';
+        } else {
+            $html .= '<td style="padding:0.4rem;"><a href="/admin/horses/edit?id=' . (int) $zeile['horse_id'] . '">'
+                . self::esc($zeile['name'] ?? ('#' . (int) $zeile['horse_id'])) . '</a>'
+                . (empty($zeile['is_published'])
+                    ? ' <span style="color:var(--text-muted);">(nicht veröffentlicht - erscheint nicht)</span>'
+                    : '')
+                . '</td>';
+        }
+        $html .= '<td style="padding:0.4rem;color:var(--text-muted);">'
+            . (!empty($zeile['fest']) ? 'Vorgabe' : 'automatisch') . '</td>';
+        $html .= '<td style="padding:0.4rem;text-align:right;">'
+            . '<form method="POST" action="' . Plugin::VERWALTUNG . '/vorgabe/entfernen" style="margin:0;">'
+            . '<input type="hidden" name="csrf_token" value="' . $csrf . '">'
+            . '<input type="hidden" name="datum" value="' . self::esc($datum) . '">'
+            . '<button type="submit" class="btn btn-secondary">Aufheben</button></form></td>';
+        return $html . '</tr>';
     }
 
     // ------------------------------------------------------------------

@@ -93,7 +93,11 @@ wird die heutige Wahl beim Ausnehmen mit verworfen.
 
 **Redaktionell vorgeben** — für ein bestimmtes Datum ein Pferd fest setzen:
 Fohlenschau, Jubiläum, Verbandstermin. Eine Vorgabe schlägt die automatische
-Wahl; die Kriterien gelten für sie nicht.
+Wahl; die Kriterien gelten für sie nicht. Die Liste auf der Verwaltungsseite
+ist zweigeteilt: „Heute und anstehend" aufsteigend ab heute (bis zu 366
+Einträge, darüber ein Hinweis) und „Zurückliegend" mit den letzten 14 Tagen.
+So bleibt die heutige Zeile samt Aufheben-Knopf auch bei langer
+Vorausplanung sichtbar.
 
 **Heute neu wählen** — verwirft die heutige Zeile, die nächste Anzeige trifft
 die Wahl nach den aktuellen Kriterien neu. Das ist der bewusste Ausweg aus der

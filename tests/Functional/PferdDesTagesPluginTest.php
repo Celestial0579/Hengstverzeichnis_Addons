@@ -474,6 +474,94 @@ class PferdDesTagesPluginTest extends FunctionalTestCase {
             'Dieser Lauf darf keiner späteren Testklasse ein Pferd des Tages hinterlassen.');
     }
 
+    /**
+     * Audit N33: Die Vorgabenliste hat alles ab heute−14 absteigend sortiert
+     * und nach 14 Zeilen abgeschnitten. Mit mehr als zwei Wochen
+     * Vorausplanung fielen heute, die nächsten Tage und die ganze Rückschau
+     * heraus - samt Aufheben-Knopf.
+     *
+     * Die Testpferde sind UNVERÖFFENTLICHT: Die heutige Zeile steuert die
+     * öffentliche Startseite für jede spätere Testklasse, und
+     * testDieFestgehalteneTageswahlZiehtSichZurueck sichert zu, dass kein
+     * Lauf ein Pferd des Tages hinterlässt. Der betroffene Datumsbereich wird
+     * vorher gesichert und danach exakt wiederhergestellt.
+     */
+    public function testVorgabenlisteZeigtHeuteAuchBeiVielenKuenftigenVorgaben(): void {
+        $admin = $this->authenticatedClient();
+        $this->pluginAktivieren($admin);
+
+        $unique = uniqid();
+        $nameA = "PdTPlanA-{$unique}";
+        $nameB = "PdTPlanB-{$unique}";
+        $idA = $this->createHorse($admin, $nameA, ['is_published' => '0']);
+        $idB = $this->createHorse($admin, $nameB, ['is_published' => '0']);
+
+        $tag = static fn (int $versatz): string => date('Y-m-d', (int) strtotime(sprintf('%+d days', $versatz)));
+        $heute = date('Y-m-d');
+        $von = $tag(-25);
+        $bis = $tag(25);
+
+        $db = \App\Database::getInstance();
+        $stmt = $db->prepare(
+            'SELECT datum, horse_id, fest FROM `plugin_pferd_des_tages_wahl` WHERE datum BETWEEN ? AND ?'
+        );
+        $stmt->execute([$von, $bis]);
+        $schnappschuss = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+
+        try {
+            $this->merkeVorgabe($heute, $idB);
+            for ($i = 1; $i <= 20; $i++) {
+                $this->merkeVorgabe($tag($i), $idA);
+            }
+            $this->merkeWahl($tag(-3), $idA);
+            $this->merkeWahl($tag(-20), $idA);
+
+            $seite = $admin->get(self::SEITE);
+            $this->assertSame(200, $seite->statusCode);
+
+            // Nur innerhalb der Karte zusichern: Der Name von B steht auch in
+            // der Karte "Heute", das heutige Datum im Datumsfeld darunter.
+            $start = strpos($seite->body, 'Vorgaben und getroffene Wahlen');
+            $this->assertNotFalse($start, 'Die Karte "Vorgaben und getroffene Wahlen" fehlt.');
+            $ende = strpos($seite->body, '<h3>Vorgabe setzen', $start);
+            $this->assertNotFalse($ende);
+            $karte = substr($seite->body, $start, $ende - $start);
+
+            $this->assertMatchesRegularExpression(
+                '#' . preg_quote($heute, '#') . ' <strong>\(heute\)</strong>.*?' . preg_quote($nameB, '#') . '#s',
+                $karte,
+                'Die heutige Vorgabe muss trotz 20 künftiger Vorgaben in der Liste stehen (N33).'
+            );
+            $this->assertStringContainsString($tag(1), $karte);
+            $this->assertStringContainsString($tag(20), $karte);
+
+            $zurueck = strpos($karte, 'Zurückliegend');
+            $this->assertNotFalse($zurueck, 'Die Rückschau fehlt (N33).');
+            $this->assertStringContainsString($tag(-3), substr($karte, $zurueck));
+            $this->assertStringNotContainsString($tag(-20), $karte,
+                'Einträge vor der Rückschau (heute−14) gehören nicht in die Liste.');
+
+            $posHeute = strpos($karte, $heute);
+            $posMorgen = strpos($karte, $tag(1));
+            $posSpaet = strpos($karte, $tag(20));
+            $posVorher = strpos($karte, $tag(-3));
+            $this->assertTrue(
+                $posHeute < $posMorgen && $posMorgen < $posSpaet && $posSpaet < $zurueck && $zurueck < $posVorher,
+                'Erwartet: heute, dann aufsteigend die anstehenden Vorgaben, dann die Rückschau.'
+            );
+        } finally {
+            $db->prepare('DELETE FROM `plugin_pferd_des_tages_wahl` WHERE datum BETWEEN ? AND ?')
+                ->execute([$von, $bis]);
+            $wiederherstellen = $db->prepare(
+                'INSERT INTO `plugin_pferd_des_tages_wahl` (datum, horse_id, fest) VALUES (?, ?, ?)'
+            );
+            foreach ($schnappschuss as $zeile) {
+                $wiederherstellen->execute([$zeile['datum'], $zeile['horse_id'], $zeile['fest']]);
+            }
+            $db->prepare('DELETE FROM horses WHERE id IN (?, ?)')->execute([$idA, $idB]);
+        }
+    }
+
     /** Idempotent - der Lebenszyklus-Test lässt das Addon aktiv zurück. */
     private function pluginAktivieren(HttpClient $admin): void {
         $admin->post('/admin/plugins/toggle', [
@@ -609,6 +697,15 @@ class PferdDesTagesPluginTest extends FunctionalTestCase {
         $stmt = \App\Database::getInstance()->prepare(
             'INSERT INTO `plugin_pferd_des_tages_wahl` (datum, horse_id, fest) VALUES (?, ?, 0)
              ON DUPLICATE KEY UPDATE horse_id = VALUES(horse_id)'
+        );
+        $stmt->execute([$datum, $horseId]);
+    }
+
+    /** Eine redaktionelle Vorgabe (fest = 1) direkt hinterlegen. */
+    private function merkeVorgabe(string $datum, int $horseId): void {
+        $stmt = \App\Database::getInstance()->prepare(
+            'INSERT INTO `plugin_pferd_des_tages_wahl` (datum, horse_id, fest) VALUES (?, ?, 1)
+             ON DUPLICATE KEY UPDATE horse_id = VALUES(horse_id), fest = 1'
         );
         $stmt->execute([$datum, $horseId]);
     }

@@ -341,8 +341,16 @@ final class Regelwerk {
      * Byte-Folge und CONVERT statt als Literal in der Quelldatei: Ein
      * Ersatzzeichen im Quelltext einer Datei, die Ersatzzeichen sucht,
      * übersteht die erste Kodierungspanne nicht.
+     *
+     * Die Kollation steht ausdrücklich dabei: CONVERT … USING trägt die
+     * Standardkollation des Zeichensatzes (je nach Server general_ci,
+     * uca1400 oder 0900_ai_ci) und kollidiert sonst mit der Kollation der
+     * Spalte - "Illegal mix of collations" (Fehler 1267), die Regel lief nie
+     * (Audit N34). utf8mb4_bin statt einer Sprachkollation, weil ein exaktes
+     * Zeichen gesucht wird: Unter einer UCA-Kollation könnte U+FFFD als
+     * ignorierbar gewichtet werden, und "%�%" träfe dann jede Zeile.
      */
-    private const ERSATZZEICHEN = "CONCAT('%', CONVERT(0xEFBFBD USING utf8mb4), '%')";
+    private const ERSATZZEICHEN = "CONCAT('%', CONVERT(0xEFBFBD USING utf8mb4) COLLATE utf8mb4_bin, '%')";
 
     /** @var array<int, Regel>|null */
     private static ?array $regeln = null;
@@ -559,7 +567,9 @@ final class Pruefung {
      *    zwei Regeln übrig.
      * 2. Was übrig bleibt, läuft in EINER Abfrage: die Teilabfragen per
      *    UNION ALL, jede über den Primärschlüssel des Pferds. Ein Roundtrip,
-     *    ein paar Index-Zugriffe.
+     *    ein paar Index-Zugriffe. Schlägt die gemeinsame Abfrage fehl, läuft
+     *    jede Regel einzeln, damit eine defekte Regel nicht die Funde aller
+     *    anderen verschluckt (Audit N34).
      * 3. Die abgehakten Fälle werden nur dann nachgeschlagen, wenn überhaupt
      *    etwas gefunden wurde.
      *
@@ -606,13 +616,22 @@ final class Pruefung {
             $stmt = Database::getInstance()->prepare(implode(' UNION ALL ', $teile));
             $stmt->execute(array_fill(0, count($kandidaten), $horseId));
             $zeilen = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) {
+            error_log('[plausibilitaetspruefung] Gemeinsame Abfrage fehlgeschlagen, Einzelausführung: ' . $e->getMessage());
+            $zeilen = self::einzelnAusfuehren($kandidaten, $horseId);
+        }
 
-            if ($zeilen === []) {
-                return [];
-            }
+        if ($zeilen === []) {
+            return [];
+        }
 
+        // Getrennt vom UNION-Versuch: Ein Fehler beim Nachschlagen der
+        // Ausnahmen soll nicht den Rückfall auslösen und die Regeln doppelt
+        // ausführen. Hier bleibt es beim Fail-open.
+        try {
             $abgehakt = Ausnahmen::regelnFuer($horseId);
-        } catch (Throwable) {
+        } catch (Throwable $e) {
+            error_log('[plausibilitaetspruefung] Ausnahmen nicht lesbar: ' . $e->getMessage());
             return [];
         }
 
@@ -636,20 +655,46 @@ final class Pruefung {
     }
 
     /**
-     * Alle Fälle einer Regel im Bestand, getrennt nach offen und abgehakt.
+     * Rückfall für fuerPferd(): jede Regel für sich, jede abgesichert. Eine
+     * Regel, die scheitert, wird übersprungen und protokolliert - die übrigen
+     * liefern ihre Funde trotzdem.
      *
-     * @return array{offen: array<int, array<string, mixed>>, abgehakt: array<int, array<string, mixed>>, abgeschnitten: bool}
+     * @param array<int, Regel> $kandidaten
+     * @return array<int, array<string, mixed>>
+     */
+    private static function einzelnAusfuehren(array $kandidaten, int $horseId): array {
+        $zeilen = [];
+        foreach ($kandidaten as $regel) {
+            try {
+                $stmt = Database::getInstance()->prepare(Regelwerk::abfrage($regel, 'h.id = ?'));
+                $stmt->execute([$horseId]);
+                foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $zeile) {
+                    $zeilen[] = $zeile;
+                }
+            } catch (Throwable $e) {
+                error_log('[plausibilitaetspruefung] Regel "' . $regel->id . '" fehlgeschlagen: ' . $e->getMessage());
+            }
+        }
+        return $zeilen;
+    }
+
+    /**
+     * Alle Fälle einer Regel im Bestand, getrennt nach offen und abgehakt.
+     * `fehler` sagt, ob die Regel überhaupt ausgewertet werden konnte - eine
+     * stumme leere Liste hat die tote Regel "zeichenschaden" monatelang als
+     * "Keine Fälle im Bestand" ausgegeben (Audit N34).
+     *
+     * @return array{offen: array<int, array<string, mixed>>, abgehakt: array<int, array<string, mixed>>, abgeschnitten: bool, fehler: bool}
      */
     public static function fuerBestand(Regel $regel): array {
-        $leer = ['offen' => [], 'abgehakt' => [], 'abgeschnitten' => false];
-
         try {
             $sql = Regelwerk::abfrage($regel, '1=1')
                 . ' ORDER BY t.name ASC, t.horse_id ASC LIMIT ' . (self::JE_REGEL_MAX + 1);
             $zeilen = Database::getInstance()->query($sql)->fetchAll(PDO::FETCH_ASSOC);
             $ausnahmen = Ausnahmen::fuerRegel($regel->id);
-        } catch (Throwable) {
-            return $leer;
+        } catch (Throwable $e) {
+            error_log('[plausibilitaetspruefung] Regel "' . $regel->id . '" fehlgeschlagen: ' . $e->getMessage());
+            return ['offen' => [], 'abgehakt' => [], 'abgeschnitten' => false, 'fehler' => true];
         }
 
         $abgeschnitten = count($zeilen) > self::JE_REGEL_MAX;
@@ -669,7 +714,7 @@ final class Pruefung {
             }
         }
 
-        return ['offen' => $offen, 'abgehakt' => $abgehakt, 'abgeschnitten' => $abgeschnitten];
+        return ['offen' => $offen, 'abgehakt' => $abgehakt, 'abgeschnitten' => $abgeschnitten, 'fehler' => false];
     }
 
     /**
@@ -686,7 +731,10 @@ final class Pruefung {
             $stmt = Database::getInstance()->prepare($sql);
             $stmt->execute([$regel->id]);
             return (int) $stmt->fetchColumn();
-        } catch (Throwable) {
+        } catch (Throwable $e) {
+            // 0 bleibt - die Kachel zeigt nur eine Summe. Aber nicht mehr
+            // stumm: Der Bericht nennt die Regel, das Log den Grund.
+            error_log('[plausibilitaetspruefung] Regel "' . $regel->id . '" fehlgeschlagen: ' . $e->getMessage());
             return 0;
         }
     }
@@ -1173,6 +1221,12 @@ class BerichtController extends BaseController {
         $html .= '<h2 style="margin-bottom:0.25rem;">' . Ansicht::abzeichen($regel) . ' '
             . Ansicht::h($regel->titel) . '</h2>';
         $html .= '<p style="color:var(--text-muted);">' . Ansicht::h($regel->begruendung) . '</p>';
+
+        if ($ergebnis['fehler']) {
+            $html .= '<p style="color:var(--warning-fg);">Diese Regel konnte nicht ausgewertet werden. '
+                . 'Details stehen im Server-Log.</p></div>';
+            return $html;
+        }
 
         if ($ergebnis['offen'] === [] && $ergebnis['abgehakt'] === []) {
             $html .= '<p style="color:var(--success-fg);">Keine Fälle im Bestand.</p></div>';

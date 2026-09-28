@@ -73,3 +73,9 @@ mitglieder-konten|SQL mit Variable im Query-String (Interpolation)|FROM users WH
 # {WO} -> 'h.id = ?' und einer per Konstruktor auf ^[a-z0-9-]+$ geprueften
 # Regelkennung; das Pferd wird gebunden.
 plausibilitaetspruefung|SQL-String aus Variable zusammengesetzt (Funktionsaufruf/Ausdruck)|implode(' UNION ALL ', $teile)
+
+# plausibilitaetspruefung Pruefung::einzelnAusfuehren() (Rueckfall, Audit
+# N34): dieselbe Teilabfrage wie oben, nur je Regel einzeln statt per
+# UNION ALL - feste Regel-SQL aus dem Code, {WO} -> 'h.id = ?', das Pferd
+# wird gebunden.
+plausibilitaetspruefung|SQL-String aus Variable zusammengesetzt (Funktionsaufruf/Ausdruck)|Regelwerk::abfrage($regel, 'h.id = ?')
