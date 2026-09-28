@@ -21,12 +21,18 @@
 // (DatabaseDumper::dumpTo($write, $tabellen), Framework#342).
 //
 // Der Import auf der Zielinstanz ist zweistufig (Prüfen -> Anwenden):
-// Manifest-Vorschau mit Versions-/Plugin-Abgleich, dann ausdrückliche
-// Bestätigung. Vor dem Anwenden wird ein Sicherungs-Dump der Zielinstanz
-// geschrieben (Rückweg). Ein VOLLARCHIV ersetzt die Instanz (danach wird die
-// Sitzung beendet - die Benutzerkonten sind ausgetauscht); ein TEILARCHIV
-// wird zusammengeführt: Es ersetzt nur die enthaltenen Tabellen, alles andere
-// bleibt stehen (siehe apply()).
+// Vorschau mit Versions-/Plugin-Abgleich, dann ausdrückliche Bestätigung.
+// Seit 1.2.0 (Audit M1) gilt dabei nicht mehr das Manifest, sondern der
+// geprüfte Dump: database.sql läuft vorab durch den DumpPruefer (Positivliste
+// gegen das Format des Kern-Dumpers, Tabellenregel), und nur was dort als
+// "wird ersetzt" steht, wird ausgeführt - Anweisung für Anweisung über eine
+// eigene Verbindung (N21). Vor dem Anwenden wird ein Sicherungs-Dump der
+// Zielinstanz geschrieben und trocken geprüft (Rückweg). Ein VOLLARCHIV
+// ersetzt alle Tabellen, die es mitbringt; ein TEILARCHIV wird
+// zusammengeführt: Es ersetzt nur die enthaltenen Tabellen, alles andere
+// bleibt stehen. Werden Benutzerkonten ersetzt, enden alle Sitzungen (M2);
+// stehenbleibende abhängige Zeilen verlangen eine Entscheidung (N23). Siehe
+// apply() und importiere().
 //
 // Archivformat ist tar (ustar, bei verfügbarem zlib als .tar.gz), bewusst
 // OHNE ext-zip: Das mitgelieferte Dockerfile des Kerns installiert kein
@@ -193,6 +199,8 @@ final class Exportauswahl {
         'addons' => [
             'label' => 'Addon-Daten',
             'text' => 'Alle Tabellen mit dem Präfix plugin_ sowie der Aktivierungsstand der Addons. '
+                . 'Ausgenommen sind Addon-Tabellen mit einem Fremdschlüssel auf users - sie hängen '
+                . 'an Benutzerkonten und gehen nur mit „Benutzer, Gruppen, Rechte“ ins Archiv. '
                 . 'Der Kern prüft nach dem Import den Verzeichnis-Fingerabdruck und deaktiviert, '
                 . 'was lokal nicht identisch vorliegt (fail-closed).',
             'vorgabe' => true,
@@ -215,10 +223,12 @@ final class Exportauswahl {
         ],
         self::GRUPPE_BENUTZER => [
             'label' => 'Benutzer, Gruppen, Rechte',
-            'text' => 'Konten, Gruppenzugehörigkeit, Berechtigungsmatrix, API-Schlüssel, '
-                . 'Passwort-Zurücksetzungen und die Fehlversuchszähler des Brute-Force-Schutzes.',
+            'text' => 'Konten, Gruppenzugehörigkeit, Berechtigungsmatrix, API-Schlüssel, Passkeys, '
+                . 'E-Mail-Anmeldecodes, Passwort-Zurücksetzungen und die Fehlversuchszähler des '
+                . 'Brute-Force-Schutzes - dazu jede Tabelle, die per Fremdschlüssel auf users '
+                . 'verweist (auch die von Addons).',
             'vorgabe' => false,
-            'hinweis' => 'ZUGANGSMATERIAL: Passwort-Hashes, TOTP-Geheimnisse, Backup-Codes und '
+            'hinweis' => 'ZUGANGSMATERIAL: Passwort-Hashes, TOTP-Geheimnisse, Backup-Codes, Passkeys und '
                 . 'API-Schlüssel-Hashes. Wer dieses Archiv bekommt, bekommt die Zugänge Ihrer '
                 . 'Instanz. Nur anhaken, wenn die Zielinstanz Ihre eigene ist.',
         ],
@@ -241,8 +251,9 @@ final class Exportauswahl {
     ];
 
     /**
-     * Feste Zuordnung Kern-Tabelle -> Gruppe. Alles mit dem Präfix `plugin_`
-     * geht ohne Eintrag an `addons`, alles Übrige an `sonstiges`.
+     * Feste Zuordnung Kern-Tabelle -> Gruppe. Tabellen mit einem Verweis auf
+     * `users` gehen an `benutzer` (siehe gruppeFuer()), alles mit dem Präfix
+     * `plugin_` ohne Eintrag an `addons`, alles Übrige an `sonstiges`.
      *
      * @var array<string, string>
      */
@@ -273,28 +284,69 @@ final class Exportauswahl {
     ];
 
     /**
+     * Kern-Tabellen, die an Benutzerkonten hängen, ohne in ZUORDNUNG zu
+     * stehen (Audit M3).
+     *
+     * Bis 1.1.0 fielen sie in `sonstiges` - und `sonstiges` ist per Vorgabe
+     * AN. Die Passkeys und E-Mail-Anmeldecodes verließen die Instanz damit mit
+     * jedem Standardexport, und beim Einspielen hängten sich ihre Zeilen an
+     * die Konten der Zielinstanz mit derselben Kennung: fremde Passkeys an
+     * eigenen Konten, die eigenen gelöscht. Beide Tabellen haben zwar einen
+     * Fremdschlüssel auf users (und fielen damit auch über die Verweisziele in
+     * gruppeFuer() richtig) - sie stehen trotzdem namentlich hier, damit die
+     * Zuordnung nicht davon abhängt, dass die Fremdschlüssel-Karte gelesen
+     * werden konnte.
+     *
+     * @var array<int, string>
+     */
+    public const BENUTZERBEZOGEN = ['user_passkeys', 'email_2fa_codes'];
+
+    /**
      * Verweise ohne Fremdschlüssel im Schema, die die Abhängigkeitsprüfung
      * sonst übersähe.
      *
-     * Nur `match_labels` steht hier, und zwar vollständig: Die Tabelle hat
-     * keinen Fremdschlüssel (der Verweis hängt an der Spalte `kind`), und ein
-     * Label ohne sein Gegenstück ist nicht bloß leer, sondern schädlich - ein
-     * 'different' aus einer fremden Instanz legt auf dem Ziel den Vorschlag zu
-     * einem ganz anderen Paar still.
+     * `match_labels` hat keinen Fremdschlüssel (der Verweis hängt an der
+     * Spalte `kind`), und ein Label ohne sein Gegenstück ist nicht bloß leer,
+     * sondern schädlich - ein 'different' aus einer fremden Instanz legt auf
+     * dem Ziel den Vorschlag zu einem ganz anderen Paar still.
+     *
+     * Die beiden Kontaktanfrage-Tabellen verweisen über `contact_id` auf
+     * `contacts`, ebenfalls ohne Fremdschlüssel (0 heißt dort "Datensatz
+     * entfernt"). Ersetzt ein Import die Kontakte, ohne sie mitzubringen,
+     * ginge eine gespeicherte Anfrage sonst an die Person, die im Archiv
+     * dieselbe Kennung trägt (Audit N23). Addons tragen solche Verweise
+     * künftig selbst in ihre plugin.json ein (`weiche_verweise`, siehe
+     * weicheVerweiseAusManifest()); die Einträge hier bleiben als Rückfall für
+     * ältere Stände des Addons stehen.
+     *
+     * `trennen` sagt, was "trennen" in der Import-Vorschau mit einer solchen
+     * Zeile tut: `loeschen`, `null` (Spalte auf NULL) oder `null_wert`
+     * (Spalte auf 0 - die Kontaktanfrage-Semantik für "Datensatz entfernt").
      *
      * Bewusst NICHT hier: `audit_logs.user_id` und `addon_repos.added_by`.
      * Beide führen den Namen zusätzlich als Text mit, ein fehlender Verweis
      * kostet dort nichts - sie stünden bei der Vorgabe-Auswahl in jeder
      * Warnung und würden die Warnungen entwerten, auf die es ankommt.
      *
-     * @var array<string, array<int, array{0:string, 1:string}>> Tabelle => [[Zieltabelle, Bedingung], ...]
+     * @var array<string, array<int, array{ziel:string, spalte:string, wo:array<string, int|string>, trennen:string}>>
      */
     public const WEICHE_VERWEISE = [
         'match_labels' => [
-            ['horses', "kind = 'horse'"],
-            ['contacts', "kind = 'contact'"],
+            ['ziel' => 'horses', 'spalte' => 'left_id', 'wo' => ['kind' => 'horse'], 'trennen' => 'loeschen'],
+            ['ziel' => 'horses', 'spalte' => 'right_id', 'wo' => ['kind' => 'horse'], 'trennen' => 'loeschen'],
+            ['ziel' => 'contacts', 'spalte' => 'left_id', 'wo' => ['kind' => 'contact'], 'trennen' => 'loeschen'],
+            ['ziel' => 'contacts', 'spalte' => 'right_id', 'wo' => ['kind' => 'contact'], 'trennen' => 'loeschen'],
+        ],
+        'plugin_kontaktanfrage_requests' => [
+            ['ziel' => 'contacts', 'spalte' => 'contact_id', 'wo' => [], 'trennen' => 'null_wert'],
+        ],
+        'plugin_kontaktanfrage_optout' => [
+            ['ziel' => 'contacts', 'spalte' => 'contact_id', 'wo' => [], 'trennen' => 'loeschen'],
         ],
     ];
+
+    /** Zulässige Werte für `trennen` eines weichen Verweises. */
+    public const TRENNARTEN = ['loeschen', 'null', 'null_wert'];
 
     private function __construct() {}
 
@@ -339,8 +391,43 @@ final class Exportauswahl {
         ));
     }
 
-    /** Die Gruppe, in die eine tatsächlich vorhandene Tabelle fällt. */
-    public static function gruppeFuer(string $tabelle): string {
+    /**
+     * Die Gruppe, in die eine tatsächlich vorhandene Tabelle fällt.
+     *
+     * $verweisziele sind die Tabellen, auf die sie per Fremdschlüssel zeigt.
+     * Zeigt sie auf `users`, gehört sie zu den Benutzerkonten (Audit M3) -
+     * gleich, ob Kern- oder Addon-Tabelle: Ihre Zeilen hängen an einer
+     * Kontokennung und ergeben auf einer anderen Instanz nur an dem Konto mit
+     * derselben Kennung Sinn, also an einem fremden. Die feste ZUORDNUNG geht
+     * trotzdem vor; die Regel greift erst für Tabellen, die dort fehlen.
+     *
+     * @param array<int, string> $verweisziele
+     */
+    public static function gruppeFuer(string $tabelle, array $verweisziele = []): string {
+        if (isset(self::ZUORDNUNG[$tabelle])) {
+            return self::ZUORDNUNG[$tabelle];
+        }
+        if (in_array('users', $verweisziele, true) || in_array($tabelle, self::BENUTZERBEZOGEN, true)) {
+            return self::GRUPPE_BENUTZER;
+        }
+        if (str_starts_with($tabelle, 'plugin_')) {
+            return 'addons';
+        }
+        return self::GRUPPE_SONSTIGES;
+    }
+
+    /**
+     * Die Zuordnung, nach der Archive bis Version 1.1.0 dieses Addons
+     * geschrieben wurden (ZUORDNUNG, plugin_, sonstiges).
+     *
+     * Dient AUSSCHLIESSLICH der Importregel (siehe Importregel::fuer()): Ein
+     * älteres Archiv mit der Auswahl [pferde, sonstiges] enthält
+     * `user_passkeys` völlig regulär - damals gehörte die Tabelle zu
+     * "sonstiges". Mit der neuen Zuordnung allein sähe der Import darin eine
+     * Tabelle, die nicht zur Auswahl passt, und müsste das Archiv abweisen.
+     * Richtig ist, sie zu überspringen und den Rest einzuspielen.
+     */
+    public static function altGruppeFuer(string $tabelle): string {
         if (isset(self::ZUORDNUNG[$tabelle])) {
             return self::ZUORDNUNG[$tabelle];
         }
@@ -357,14 +444,124 @@ final class Exportauswahl {
      *
      * @param array<int, string> $auswahl
      * @param array<int, string> $vorhandene Ergebnis von SHOW TABLES
+     * @param array<string, array<int, string>> $fks Tabelle => Verweisziele (Fremdschlüssel)
      * @return array<int, string>
      */
-    public static function tabellen(array $auswahl, array $vorhandene): array {
+    public static function tabellen(array $auswahl, array $vorhandene, array $fks = []): array {
         $gewaehlt = array_flip($auswahl);
         return array_values(array_filter(
             $vorhandene,
-            static fn(string $t): bool => isset($gewaehlt[self::gruppeFuer($t)])
+            static fn(string $t): bool => isset($gewaehlt[self::gruppeFuer($t, $fks[$t] ?? [])])
         ));
+    }
+
+    /**
+     * Die `weiche_verweise` aus der plugin.json eines Addons - geprüft.
+     *
+     * Ein Addon kennt seine Verweise ohne Fremdschlüssel selbst am besten,
+     * deshalb darf es sie angeben. Die Angabe steuert aber, was "trennen" in
+     * der Import-Vorschau LÖSCHT. Ohne Grenzen könnte jedes installierte
+     * Addon per Manifest `trennen: loeschen` auf `users` oder `horses`
+     * erklären. Deshalb gilt hart:
+     *
+     *   - die Tabelle beginnt mit plugin_ und steht in `owns.tables`
+     *     DESSELBEN Manifests - ein Addon beschreibt nur eigene Tabellen;
+     *   - Tabelle, Ziel, Spalte und die Schlüssel von `wo` sind schlichte
+     *     Bezeichner (^[a-z0-9_]+$), die Werte von `wo` Skalare - sie werden
+     *     später als Parameter gebunden, nie eingesetzt;
+     *   - `trennen` ist einer der Werte aus TRENNARTEN.
+     *
+     * Was davon abweicht, wird verworfen und mit Grund zurückgegeben (der
+     * Aufrufer protokolliert es) - ein fehlerhafter Eintrag soll den Import
+     * nicht blockieren, aber auch nicht still wirken.
+     *
+     * @return array{verweise: array<string, array<int, array{ziel:string, spalte:string, wo:array<string, int|string>, trennen:string}>>, verworfen: array<int, string>}
+     */
+    public static function weicheVerweiseAusManifest(mixed $manifest): array {
+        $ergebnis = ['verweise' => [], 'verworfen' => []];
+        if (!is_array($manifest) || !array_key_exists('weiche_verweise', $manifest)) {
+            return $ergebnis;
+        }
+        $slug = is_string($manifest['slug'] ?? null) ? $manifest['slug'] : '?';
+        $angabe = $manifest['weiche_verweise'];
+        if (!is_array($angabe)) {
+            $ergebnis['verworfen'][] = "{$slug}: weiche_verweise ist kein Objekt";
+            return $ergebnis;
+        }
+        $eigene = is_array($manifest['owns']['tables'] ?? null) ? $manifest['owns']['tables'] : [];
+        $bezeichner = static fn(mixed $n): bool => is_string($n) && preg_match('/^[a-z0-9_]{1,64}$/D', $n) === 1;
+
+        foreach ($angabe as $tabelle => $eintraege) {
+            $tabelle = (string) $tabelle;
+            if (!$bezeichner($tabelle) || !str_starts_with($tabelle, 'plugin_')
+                || !in_array($tabelle, $eigene, true)) {
+                $ergebnis['verworfen'][] = "{$slug}: Tabelle '{$tabelle}' ist keine eigene plugin_-Tabelle aus owns.tables";
+                continue;
+            }
+            if (!is_array($eintraege) || !array_is_list($eintraege)) {
+                $ergebnis['verworfen'][] = "{$slug}: Eintrag für '{$tabelle}' ist keine Liste";
+                continue;
+            }
+            foreach ($eintraege as $e) {
+                if (!is_array($e)) {
+                    $ergebnis['verworfen'][] = "{$slug}: ungültiger Verweis in '{$tabelle}'";
+                    continue;
+                }
+                $ziel = $e['ziel'] ?? null;
+                $spalte = $e['spalte'] ?? null;
+                $trennen = $e['trennen'] ?? null;
+                $wo = $e['wo'] ?? [];
+                if (!$bezeichner($ziel) || !$bezeichner($spalte)
+                    || !in_array($trennen, self::TRENNARTEN, true) || !is_array($wo)) {
+                    $ergebnis['verworfen'][] = "{$slug}: ungültiger Verweis in '{$tabelle}'";
+                    continue;
+                }
+                $woSauber = [];
+                foreach ($wo as $k => $v) {
+                    if (!$bezeichner((string) $k) || !(is_int($v) || is_string($v))) {
+                        $woSauber = null;
+                        break;
+                    }
+                    $woSauber[(string) $k] = $v;
+                }
+                if ($woSauber === null) {
+                    $ergebnis['verworfen'][] = "{$slug}: ungültige Bedingung (wo) in '{$tabelle}'";
+                    continue;
+                }
+                $ergebnis['verweise'][$tabelle][] = [
+                    'ziel' => $ziel, 'spalte' => $spalte, 'wo' => $woSauber, 'trennen' => $trennen,
+                ];
+            }
+        }
+        return $ergebnis;
+    }
+
+    /**
+     * Führt Verweislisten zusammen (Konstante + Manifeste). Doppelte
+     * Einträge - dieselbe Tabelle, dasselbe Ziel, dieselbe Spalte, dieselbe
+     * Bedingung - zählen einmal; der ZUERST genannte gewinnt, deshalb steht
+     * die Konstante vorn.
+     *
+     * @param array<int, array<string, array<int, array{ziel:string, spalte:string, wo:array<string, int|string>, trennen:string}>>> $listen
+     * @return array<string, array<int, array{ziel:string, spalte:string, wo:array<string, int|string>, trennen:string}>>
+     */
+    public static function verweiseZusammenfuehren(array ...$listen): array {
+        $aus = [];
+        $gesehen = [];
+        foreach ($listen as $liste) {
+            foreach ($liste as $tabelle => $eintraege) {
+                foreach ($eintraege as $e) {
+                    $schluessel = $tabelle . '|' . $e['ziel'] . '|' . $e['spalte'] . '|' . json_encode($e['wo']);
+                    if (isset($gesehen[$schluessel])) {
+                        continue;
+                    }
+                    $gesehen[$schluessel] = true;
+                    $aus[$tabelle][] = $e;
+                }
+            }
+        }
+        ksort($aus);
+        return $aus;
     }
 
     /** Deckt die Auswahl jede Gruppe ab? Dann ist es ein Vollarchiv. */
@@ -517,10 +714,17 @@ final class TarWriter {
         return new self($handle, $gzip);
     }
 
+    /**
+     * Schreibt und prüft die geschriebene Menge, nicht nur auf false:
+     * gzwrite() meldet einen Schreibfehler (volle Platte, Quota) mit 0, und
+     * gzclose() danach trotzdem Erfolg. Ohne diesen Vergleich entstand ein
+     * abgeschnittenes Archiv, das als erfolgreich galt (Audit M43, hier das
+     * Duplikat im Addon).
+     */
     private function write(string $data): void {
         $ok = $this->gzip ? gzwrite($this->handle, $data) : fwrite($this->handle, $data);
-        if ($ok === false) {
-            throw new \RuntimeException('Schreiben in das Archiv fehlgeschlagen.');
+        if ($ok === false || $ok !== strlen($data)) {
+            throw new \RuntimeException('Schreiben in das Archiv fehlgeschlagen (Datenträger voll?).');
         }
     }
 
@@ -559,7 +763,10 @@ final class TarWriter {
 
     public function close(): void {
         $this->write(str_repeat("\0", 1024)); // Zwei Null-Blöcke = Archivende
-        $this->gzip ? gzclose($this->handle) : fclose($this->handle);
+        // Erst beim Schließen schreibt gzip den Rest samt Prüfsummen-Trailer.
+        if (!($this->gzip ? gzclose($this->handle) : fclose($this->handle))) {
+            throw new \RuntimeException('Archiv konnte nicht abgeschlossen werden.');
+        }
     }
 
     private function pad(int $size): void {
@@ -706,6 +913,857 @@ final class TarReader {
                 throw new \RuntimeException('Archiv abgeschnitten.');
             }
             $bytes -= strlen($chunk);
+        }
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// Import-Dump: prüfen, planen, ausführen (Audit M1, N21)
+// ---------------------------------------------------------------------------
+
+/** Eine Anweisung aus database.sql, die der DumpPruefer zugelassen hat. */
+final class Anweisung {
+
+    /**
+     * @param string      $art   set | drop | create | insert
+     * @param string      $sql   die Anweisung ohne abschließendes Semikolon
+     * @param string|null $kopf  nur INSERT: "INSERT INTO `t` (`a`, `b`) VALUES " in
+     *                           einheitlicher Schreibweise - der Schlüssel für
+     *                           Sammel-INSERTs (siehe DumpAusfuehrer)
+     * @param string|null $werte nur INSERT: die Wertetupel "(…)" bzw. "(…), (…)"
+     */
+    public function __construct(
+        public readonly int $nr,
+        public readonly string $art,
+        public readonly string $sql,
+        public readonly ?string $tabelle = null,
+        public readonly ?string $kopf = null,
+        public readonly ?string $werte = null,
+    ) {}
+}
+
+/** Abweisung eines Dumps - die Meldung nennt Anweisungsnummer und Anfang. */
+final class DumpAbgelehnt extends \RuntimeException {}
+
+/**
+ * Ergebnis eines Durchlaufs durch den DumpPruefer.
+ *
+ * `tabellen` ist der PLAN: je Tabelle des Dumps die Aktion (ausfuehren /
+ * ueberspringen), die gezählten Zeilen, die REFERENCES-Ziele aus dem CREATE
+ * TABLE und der Grund eines Überspringens. Vorschau, Anwenden und Audit
+ * richten sich nach diesem Plan, nicht nach dem Manifest.
+ */
+final class DumpBefund {
+
+    /**
+     * @param array<string, array{aktion:?string, zeilen:int, verweise:array<int, string>, grund:?string}> $tabellen
+     */
+    public function __construct(
+        public readonly array $tabellen,
+        public readonly ?string $problem = null,
+    ) {}
+
+    /** @return array<string, string> Tabelle => Aktion */
+    public function plan(): array {
+        $plan = [];
+        foreach ($this->tabellen as $t => $info) {
+            $plan[$t] = (string) $info['aktion'];
+        }
+        return $plan;
+    }
+
+    /** @return array<int, string> Tabellen, die der Import tatsächlich ersetzt */
+    public function ersetzt(): array {
+        return array_keys(array_filter(
+            $this->tabellen,
+            static fn(array $i): bool => $i['aktion'] === DumpPruefer::AUSFUEHREN
+        ));
+    }
+
+    /** @return array<string, string> Tabelle => Grund */
+    public function uebersprungen(): array {
+        $aus = [];
+        foreach ($this->tabellen as $t => $info) {
+            if ($info['aktion'] === DumpPruefer::UEBERSPRINGEN) {
+                $aus[$t] = (string) $info['grund'];
+            }
+        }
+        return $aus;
+    }
+}
+
+/**
+ * Prüft database.sql eines Import-Archivs, bevor irgendetwas davon
+ * ausgeführt wird (Audit M1).
+ *
+ * DAS PROBLEM. Ob ein Archiv ein Teilarchiv ist und welche Tabellen es
+ * ersetzt, entnahm der Import bis 1.1.0 allein dem Manifest. Der Dump selbst
+ * lief ungeprüft als ein einziges Multi-Statement durch PDO::exec(). Ein
+ * präpariertes "Teilarchiv Pferde" konnte so nebenbei `INSERT INTO users …`
+ * mitbringen - die Vorschau sagte "alle übrigen Tabellen bleiben
+ * unverändert", und hinterher gab es ein Administratorkonto mehr.
+ *
+ * DIE ANTWORT IST EINE POSITIVLISTE gegen genau das Format, das der Kern
+ * schreibt (App\Service\DatabaseDumper): die SET-Kopf- und -Fußzeilen,
+ * DROP TABLE IF EXISTS, CREATE TABLE und INSERT … VALUES mit reinen
+ * Literalen, je Tabelle genau ein Block DROP -> CREATE -> INSERT*. Alles
+ * andere wird abgewiesen - mit Anweisungsnummer und den ersten 80 Zeichen,
+ * damit der Betreiber sieht, woran es lag. Das ist bewusst streng: Ein Dump,
+ * den der Kern nicht so schreibt, ist entweder nachbearbeitet oder
+ * präpariert, und in beiden Fällen ist Abweisen VOR jeder Änderung die
+ * richtige Antwort.
+ *
+ * ZERLEGEN, streamend und quote-bewusst: Es liegt nur die gerade
+ * unvollständige Anweisung im Speicher. Ein ';' trennt nur außerhalb von
+ * '…', "…" und `…`; in '…' und "…" maskiert ein Backslash das nächste
+ * Zeichen, verdoppelte Anführungszeichen sind Literale. Kommentare gibt es
+ * nur ZWISCHEN Anweisungen und nur in der Server-Semantik: '--' gefolgt von
+ * Leerraum (oder dem Dateiende), bis zum Zeilenende. '--' innerhalb einer
+ * Anweisung, '/* … * /', '#' und DELIMITER werden abgewiesen - an genau
+ * solchen Stellen deuten Client und Server ein Zeichen verschieden, und die
+ * Prüfung sähe etwas anderes als die Datenbank.
+ *
+ * TABELLENNAMEN NUR KLEIN. Auf Servern mit lower_case_table_names=1/2
+ * (Windows, macOS, manche Hoster) träfe ein Block `USERS` die Tabelle users,
+ * liefe in der Gruppenzuordnung aber als "sonstiges" durch - und diese
+ * Gruppe ist per Vorgabe an. Alle Tabellen von Kern und Addons sind
+ * kleingeschrieben.
+ *
+ * DREI BETRIEBSARTEN:
+ *   - Validierung (Tabellenregel, kein Plan): erster Durchlauf. Liefert den
+ *     Plan (befund()), gibt selbst keine Anweisungen zur Ausführung heraus.
+ *     Die Aktion einer Tabelle steht erst nach ihrem CREATE fest, denn erst
+ *     dort stehen die REFERENCES - deshalb überhaupt ein zweiter Durchlauf.
+ *   - Ausführung (Tabellenregel + Plan): zweiter Durchlauf. Prüft erneut und
+ *     hält sich an den Plan; eine Tabelle, die dort fehlt oder deren Aktion
+ *     jetzt anders ausfiele, bricht ab. Liefert die auszuführenden
+ *     Anweisungen - die einer übersprungenen Tabelle nicht.
+ *   - vertrauenswürdig (weder Regel noch Plan): für den eigenen
+ *     Sicherungs-Dump. Jede Tabelle wird ausgeführt, Positivliste und
+ *     Größengrenze gelten trotzdem - sie sind es, die der Vorabprüfung der
+ *     Sicherung ihren Sinn geben (siehe MigrationController::pruefeSicherung()).
+ *
+ * Ohne Framework-Bezug, damit tests/Unit sie ohne Datenbank prüfen kann.
+ */
+final class DumpPruefer {
+
+    public const AUSFUEHREN = 'ausfuehren';
+    public const UEBERSPRINGEN = 'ueberspringen';
+    public const ABLEHNEN = 'ablehnen';
+
+    /** Untergrenze für die Anweisungsgröße - der Aufrufer nimmt max_allowed_packet. */
+    public const MIN_ANWEISUNG = 1048576;
+
+    private const AUSSEN = 0;
+    private const EINFACH = 1;
+    private const DOPPELT = 2;
+    private const BACKTICK = 3;
+
+    /**
+     * Die zulässigen SET-Anweisungen, vollständig. Kopf und Fuß des
+     * DatabaseDumper, dazu die Zeitzonen-Zeilen aus Framework N66 (merken,
+     * auf UTC setzen, zurücksetzen) und ein SQL_MODE, der NUR
+     * NO_AUTO_VALUE_ON_ZERO sein darf - NO_BACKSLASH_ESCAPES oder ANSI_QUOTES
+     * änderten die Bedeutung der Anführungszeichen, auf denen diese Prüfung
+     * beruht.
+     *
+     * @var array<int, string>
+     */
+    private const SET_ZEILEN = [
+        '/^SET\s+FOREIGN_KEY_CHECKS\s*=\s*[01]$/iD',
+        '/^SET\s+NAMES\s+utf8mb4$/iD',
+        "/^SET\s+time_zone\s*=\s*'[+-]\d{2}:\d{2}'$/iD",
+        "/^SET\s+SQL_MODE\s*=\s*'NO_AUTO_VALUE_ON_ZERO'$/iD",
+        '/^SET\s+@hv_dump_zeitzone\s*=\s*@@SESSION\.time_zone$/iD',
+        '/^SET\s+time_zone\s*=\s*@hv_dump_zeitzone$/iD',
+    ];
+
+    /**
+     * Wörter, die außerhalb von Anführungszeichen in einem CREATE TABLE
+     * nichts verloren haben. SHOW CREATE TABLE schreibt keines davon; mit
+     * ihnen würde aus dem Anlegen einer Tabelle ein Lesezugriff (SELECT,
+     * LOAD_FILE), eine Verbindung nach außen (CONNECTION, Fremd-Engines),
+     * eine Datei an beliebiger Stelle (DIRECTORY) oder eine Bremse (SLEEP,
+     * BENCHMARK).
+     *
+     * @var array<int, string>
+     */
+    private const CREATE_VERBOTEN = [
+        'SELECT', 'LIKE', 'DIRECTORY', 'CONNECTION', 'UNION', 'TRIGGER', 'PROCEDURE',
+        'FUNCTION', 'DEFINER', 'LOAD_FILE', 'SLEEP', 'BENCHMARK', 'INTO',
+    ];
+
+    /** @var array<int, string> */
+    private const ENGINES = ['INNODB', 'ARIA', 'MYISAM', 'MEMORY'];
+
+    private string $puffer = '';
+    private int $anfang = 0;
+    private int $pos = 0;
+    private int $zustand = self::AUSSEN;
+    private bool $imKommentar = false;
+    private int $nr = 0;
+
+    /** kopf | drop | block | fuss */
+    private string $phase = 'kopf';
+    private ?string $tabelle = null;
+
+    /** @var array<string, array{aktion:?string, zeilen:int, verweise:array<int, string>, grund:?string}> */
+    private array $tabellen = [];
+
+    /**
+     * @param int $maxAnweisung größte zulässige Anweisung in Byte
+     * @param (\Closure(string, array<int, string>): array{0:string, 1:?string})|null $entscheide
+     *        Tabellenregel: Tabelle + REFERENCES-Ziele -> [Aktion, Grund]
+     * @param array<string, string>|null $plan eingefrorener Plan des ersten Durchlaufs
+     */
+    public function __construct(
+        private readonly int $maxAnweisung,
+        private readonly ?\Closure $entscheide = null,
+        private readonly ?array $plan = null,
+    ) {}
+
+    private function vertrauenswuerdig(): bool {
+        return $this->entscheide === null && $this->plan === null;
+    }
+
+    /** Gibt dieser Durchlauf Anweisungen zur Ausführung heraus? */
+    private function liefert(): bool {
+        return $this->vertrauenswuerdig() || $this->plan !== null;
+    }
+
+    /**
+     * Nimmt den nächsten Block des Dumps und liefert die darin
+     * abgeschlossenen, zugelassenen Anweisungen.
+     *
+     * @return \Generator<int, Anweisung>
+     * @throws DumpAbgelehnt
+     */
+    public function zufuehren(string $chunk): \Generator {
+        $this->puffer .= $chunk;
+        yield from $this->zerlegen(false);
+    }
+
+    /**
+     * Dateiende: Was jetzt noch offen ist, ist ein Fehler - ein offener
+     * Quote oder ein Rest ohne ';'. Leerraum und Kommentare sind erlaubt
+     * (der Kern schreibt die letzte Zeile ohne Zeilenumbruch).
+     *
+     * @return \Generator<int, Anweisung>
+     * @throws DumpAbgelehnt
+     */
+    public function abschliessen(): \Generator {
+        yield from $this->zerlegen(true);
+        if ($this->zustand !== self::AUSSEN) {
+            $this->nr++;
+            $this->ablehnen('Der Dump endet in einer offenen Zeichenkette oder einem offenen Bezeichner',
+                substr($this->puffer, $this->anfang));
+        }
+        $rest = trim(substr($this->puffer, $this->anfang));
+        if ($rest !== '') {
+            $this->nr++;
+            $this->ablehnen('Anweisung ohne abschließendes Semikolon', $rest);
+        }
+        if ($this->phase === 'drop') {
+            $this->ablehnen("Auf DROP TABLE `{$this->tabelle}` folgt kein CREATE TABLE");
+        }
+        if ($this->plan !== null) {
+            foreach (array_keys($this->plan) as $t) {
+                if (!isset($this->tabellen[$t])) {
+                    $this->ablehnen("Tabelle `{$t}` steht im Plan, fehlt aber im Dump");
+                }
+            }
+        }
+    }
+
+    public function befund(?string $problem = null): DumpBefund {
+        return new DumpBefund($this->tabellen, $problem);
+    }
+
+    /** @return \Generator<int, Anweisung> */
+    private function zerlegen(bool $ende): \Generator {
+        $len = strlen($this->puffer);
+        while ($this->pos < $len) {
+            if ($this->imKommentar) {
+                $nl = strpos($this->puffer, "\n", $this->pos);
+                if ($nl === false) {
+                    $this->pos = $this->anfang = $len;
+                    break;
+                }
+                $this->pos = $this->anfang = $nl + 1;
+                $this->imKommentar = false;
+                continue;
+            }
+
+            if ($this->zustand === self::AUSSEN) {
+                if ($this->pos === $this->anfang) {
+                    // Noch kein Zeichen der Anweisung gelesen: Leerraum und
+                    // Kommentare zwischen den Anweisungen überspringen.
+                    $leer = strspn($this->puffer, " \t\r\n", $this->pos);
+                    if ($leer > 0) {
+                        $this->pos += $leer;
+                        $this->anfang = $this->pos;
+                        continue;
+                    }
+                    if ($this->puffer[$this->pos] === '-') {
+                        if ($len - $this->pos < 3 && !$ende) {
+                            break; // Ob Kommentar, entscheidet das nächste Zeichen
+                        }
+                        $drittes = $this->puffer[$this->pos + 2] ?? '';
+                        if (substr($this->puffer, $this->pos, 2) === '--'
+                            && ($drittes === '' || str_contains(" \t\r\n", $drittes))) {
+                            $this->imKommentar = true;
+                            $this->pos += 2;
+                            $this->anfang = $this->pos;
+                            continue;
+                        }
+                    }
+                }
+
+                // Über alles springen, was außerhalb von Quotes nichts bedeutet.
+                $this->pos += strcspn($this->puffer, ";'\"`-#/\\", $this->pos);
+                if ($this->pos >= $len) {
+                    break;
+                }
+                $z = $this->puffer[$this->pos];
+                if ($z === ';') {
+                    $sql = substr($this->puffer, $this->anfang, $this->pos - $this->anfang);
+                    $this->pos++;
+                    $this->anfang = $this->pos;
+                    $anweisung = $this->anweisung($sql);
+                    if ($anweisung !== null) {
+                        yield $anweisung;
+                    }
+                    continue;
+                }
+                if ($z === "'" || $z === '"' || $z === '`') {
+                    $this->zustand = $z === "'" ? self::EINFACH : ($z === '"' ? self::DOPPELT : self::BACKTICK);
+                    $this->pos++;
+                    continue;
+                }
+                if ($z === '#') {
+                    $this->nr++;
+                    $this->ablehnen('#-Kommentare sind nicht zulässig', substr($this->puffer, $this->anfang, 200));
+                }
+                if ($z === '\\') {
+                    $this->nr++;
+                    $this->ablehnen('Backslash außerhalb einer Zeichenkette', substr($this->puffer, $this->anfang, 200));
+                }
+                // '-' oder '/': erst das nächste Zeichen entscheidet.
+                if ($this->pos + 1 >= $len && !$ende) {
+                    break;
+                }
+                $naechstes = $this->puffer[$this->pos + 1] ?? '';
+                if ($z === '-' && $naechstes === '-') {
+                    $this->nr++;
+                    $this->ablehnen('„--“ innerhalb einer Anweisung ist nicht zulässig', substr($this->puffer, $this->anfang, 200));
+                }
+                if ($z === '/' && $naechstes === '*') {
+                    $this->nr++;
+                    $this->ablehnen('/*…*/-Kommentare (auch /*!…*/) sind nicht zulässig', substr($this->puffer, $this->anfang, 200));
+                }
+                $this->pos++;
+                continue;
+            }
+
+            // In einer Zeichenkette oder einem Bezeichner.
+            $quote = $this->zustand === self::EINFACH ? "'" : ($this->zustand === self::DOPPELT ? '"' : '`');
+            $this->pos += strcspn($this->puffer, $this->zustand === self::BACKTICK ? '`' : $quote . '\\', $this->pos);
+            if ($this->pos >= $len) {
+                break;
+            }
+            if ($this->puffer[$this->pos] === '\\') {
+                if ($this->pos + 1 >= $len && !$ende) {
+                    break;
+                }
+                $this->pos += 2;
+                continue;
+            }
+            // Anführungszeichen: verdoppelt ist es ein Literal, sonst das Ende.
+            if ($this->pos + 1 >= $len && !$ende) {
+                break;
+            }
+            if (($this->puffer[$this->pos + 1] ?? '') === $quote) {
+                $this->pos += 2;
+                continue;
+            }
+            $this->zustand = self::AUSSEN;
+            $this->pos++;
+        }
+
+        // Eine Anweisung, die schon jetzt über der Grenze liegt, kann ohnehin
+        // nicht ausgeführt werden - und soll nicht erst den Speicher füllen.
+        if ($this->pos - $this->anfang > $this->maxAnweisung) {
+            $this->nr++;
+            $this->ablehnen('Anweisung ist größer als die Paketgrenze des Servers (max_allowed_packet, '
+                . $this->maxAnweisung . ' Byte)', substr($this->puffer, $this->anfang, 200));
+        }
+        if ($this->anfang > 0) {
+            $this->puffer = substr($this->puffer, $this->anfang);
+            $this->pos -= $this->anfang;
+            $this->anfang = 0;
+        }
+    }
+
+    private function anweisung(string $roh): ?Anweisung {
+        $this->nr++;
+        $sql = rtrim($roh);
+        if ($sql === '') {
+            // So sieht im Dump des Kerns eine View aus: SHOW CREATE TABLE
+            // liefert dort kein "Create Table", geschrieben wird ein leeres ';'.
+            $this->ablehnen('Leere Anweisung (entsteht z. B., wenn die Datenbank eine View enthält)');
+        }
+        if (strlen($sql) > $this->maxAnweisung) {
+            $this->ablehnen('Anweisung ist größer als die Paketgrenze des Servers (max_allowed_packet, '
+                . $this->maxAnweisung . ' Byte)', $sql);
+        }
+        if (preg_match('/^SET\s/i', $sql)) {
+            return $this->setzen($sql);
+        }
+        if (preg_match('/^DROP\s+TABLE\s+IF\s+EXISTS\s+`([^`]*)`$/iD', $sql, $m)) {
+            return $this->drop($sql, $m[1]);
+        }
+        if (preg_match('/^CREATE\s+TABLE\s+`([^`]*)`\s*\(/i', $sql, $m)) {
+            return $this->create($sql, $m[1]);
+        }
+        if (preg_match('/^INSERT\s+INTO\s+`([^`]*)`\s*\(/i', $sql, $m)) {
+            return $this->insert($sql, $m[1]);
+        }
+        $this->ablehnen('Anweisung ist im Dump-Format des Kerns nicht vorgesehen', $sql);
+    }
+
+    private function setzen(string $sql): ?Anweisung {
+        $erlaubt = false;
+        foreach (self::SET_ZEILEN as $muster) {
+            if (preg_match($muster, $sql)) {
+                $erlaubt = true;
+                break;
+            }
+        }
+        if (!$erlaubt) {
+            $this->ablehnen('Diese SET-Anweisung ist nicht zulässig', $sql);
+        }
+        if ($this->phase === 'drop') {
+            $this->ablehnen("Auf DROP TABLE `{$this->tabelle}` folgt kein CREATE TABLE", $sql);
+        }
+        if ($this->phase === 'block') {
+            // SET nach dem ersten Block: ab hier ist es der Fuß.
+            $this->phase = 'fuss';
+            $this->tabelle = null;
+        }
+        return $this->liefert() ? new Anweisung($this->nr, 'set', $sql) : null;
+    }
+
+    private function drop(string $sql, string $name): ?Anweisung {
+        $this->pruefeName($name, $sql);
+        if ($this->phase === 'fuss') {
+            $this->ablehnen('Tabellenblock nach den abschließenden SET-Anweisungen', $sql);
+        }
+        if ($this->phase === 'drop') {
+            $this->ablehnen("Auf DROP TABLE `{$this->tabelle}` folgt kein CREATE TABLE", $sql);
+        }
+        if (isset($this->tabellen[$name])) {
+            $this->ablehnen("Tabelle `{$name}` steht mehrfach im Dump", $sql);
+        }
+        $aktion = null;
+        if ($this->vertrauenswuerdig()) {
+            $aktion = self::AUSFUEHREN;
+        } elseif ($this->plan !== null) {
+            if (!isset($this->plan[$name])) {
+                $this->ablehnen("Tabelle `{$name}` steht nicht im geprüften Plan", $sql);
+            }
+            $aktion = $this->plan[$name];
+        }
+        $this->tabellen[$name] = ['aktion' => $aktion, 'zeilen' => 0, 'verweise' => [], 'grund' => null];
+        $this->phase = 'drop';
+        $this->tabelle = $name;
+        return $aktion === self::AUSFUEHREN ? new Anweisung($this->nr, 'drop', $sql, $name) : null;
+    }
+
+    private function create(string $sql, string $name): ?Anweisung {
+        $this->pruefeName($name, $sql);
+        if ($this->phase !== 'drop' || $this->tabelle !== $name) {
+            $this->ablehnen("CREATE TABLE `{$name}` ohne unmittelbar vorausgehendes DROP TABLE derselben Tabelle", $sql);
+        }
+        $verweise = $this->pruefeCreate($sql);
+        $this->tabellen[$name]['verweise'] = $verweise;
+
+        if ($this->entscheide !== null) {
+            [$aktion, $grund] = ($this->entscheide)($name, $verweise);
+            if ($aktion === self::ABLEHNEN) {
+                $this->ablehnen("Tabelle `{$name}` darf dieses Archiv nicht ersetzen: {$grund}");
+            }
+            if ($this->plan !== null && $aktion !== $this->plan[$name]) {
+                $this->ablehnen("Tabelle `{$name}` weicht vom geprüften Plan ab");
+            }
+            $this->tabellen[$name]['aktion'] = $aktion;
+            $this->tabellen[$name]['grund'] = $grund;
+        }
+        $this->phase = 'block';
+        return $this->tabellen[$name]['aktion'] === self::AUSFUEHREN && $this->liefert()
+            ? new Anweisung($this->nr, 'create', $sql, $name)
+            : null;
+    }
+
+    private function insert(string $sql, string $name): ?Anweisung {
+        $this->pruefeName($name, $sql);
+        if ($this->phase !== 'block') {
+            $this->ablehnen("INSERT INTO `{$name}` außerhalb seines Tabellenblocks (vor CREATE TABLE oder nach dem Abschluss)", $sql);
+        }
+        if ($this->tabelle !== $name) {
+            $this->ablehnen("INSERT INTO `{$name}` im Block der Tabelle `{$this->tabelle}`", $sql);
+        }
+        [$kopf, $werte, $zeilen] = $this->pruefeInsert($sql, $name);
+        $this->tabellen[$name]['zeilen'] += $zeilen;
+        return $this->tabellen[$name]['aktion'] === self::AUSFUEHREN && $this->liefert()
+            ? new Anweisung($this->nr, 'insert', $sql, $name, $kopf, $werte)
+            : null;
+    }
+
+    private function pruefeName(string $name, string $sql): void {
+        if (preg_match('/^[a-z0-9_]{1,64}$/D', $name) !== 1) {
+            $this->ablehnen('Tabellennamen sind nur aus Kleinbuchstaben, Ziffern und _ zulässig', $sql);
+        }
+    }
+
+    /**
+     * @return array<int, string> die REFERENCES-Ziele
+     */
+    private function pruefeCreate(string $sql): array {
+        $verweise = [];
+        $token = self::tokens($sql);
+        $n = count($token);
+        for ($i = 0; $i < $n; $i++) {
+            [$typ, $text] = $token[$i];
+            if ($typ !== 'wort') {
+                continue;
+            }
+            $wort = strtoupper($text);
+            if (in_array($wort, self::CREATE_VERBOTEN, true)) {
+                $this->ablehnen("Schlüsselwort {$wort} ist in CREATE TABLE nicht zulässig", $sql);
+            }
+            if ($wort === 'ENGINE') {
+                $j = $i + 1;
+                if (($token[$j][0] ?? '') === 'zeichen' && $token[$j][1] === '=') {
+                    $j++;
+                }
+                if (($token[$j][0] ?? '') !== 'wort' || !in_array(strtoupper($token[$j][1]), self::ENGINES, true)) {
+                    $this->ablehnen('Nur die Speicher-Engines InnoDB, Aria, MyISAM und MEMORY sind zulässig', $sql);
+                }
+            }
+            if ($wort === 'REFERENCES') {
+                if (($token[$i + 1][0] ?? '') !== 'bezeichner') {
+                    $this->ablehnen('REFERENCES ohne Tabellenbezeichner in Backticks', $sql);
+                }
+                $verweise[] = $token[$i + 1][1];
+            }
+        }
+        return array_values(array_unique($verweise));
+    }
+
+    /**
+     * INSERT INTO `t` (`a`, …) VALUES (lit, …)[, (lit, …)]* - lit ist NULL
+     * oder ein '…'-String, nichts sonst. Damit sind Unterabfragen,
+     * Funktionen, Ausdrücke und ON DUPLICATE KEY UPDATE ausgeschlossen, ohne
+     * dass sie einzeln aufgezählt werden müssten.
+     *
+     * @return array{0:string, 1:string, 2:int} Kopf, Werte, Zahl der Zeilen
+     */
+    private function pruefeInsert(string $sql, string $name): array {
+        $token = self::tokens($sql);
+        $i = 3; // INSERT INTO `name`
+        $erwarte = function (string $typ, ?string $text = null) use (&$token, &$i, $sql): string {
+            $t = $token[$i] ?? null;
+            if ($t === null || $t[0] !== $typ || ($text !== null && strtoupper($t[1]) !== $text)) {
+                $this->ablehnen('INSERT weicht vom Format INSERT INTO `t` (`spalten`) VALUES (\'werte\') ab', $sql);
+            }
+            $i++;
+            return $t[1];
+        };
+        $erwarte('zeichen', '(');
+        $spalten = [];
+        do {
+            $spalten[] = '`' . str_replace('`', '``', $erwarte('bezeichner')) . '`';
+            $weiter = ($token[$i] ?? null) === ['zeichen', ','];
+            if ($weiter) {
+                $i++;
+            }
+        } while ($weiter);
+        $erwarte('zeichen', ')');
+        $erwarte('wort', 'VALUES');
+        $werteAb = $token[$i - 1][2] ?? strlen($sql); // Ende des Worts VALUES
+
+        $zeilen = 0;
+        do {
+            $erwarte('zeichen', '(');
+            $anzahl = 0;
+            do {
+                $t = $token[$i] ?? null;
+                $literal = $t !== null
+                    && (($t[0] === 'text' && $t[1][0] === "'") || ($t[0] === 'wort' && strtoupper($t[1]) === 'NULL'));
+                if (!$literal) {
+                    $this->ablehnen('INSERT enthält einen Wert, der weder NULL noch eine Zeichenkette ist', $sql);
+                }
+                $i++;
+                $anzahl++;
+                $weiter = ($token[$i] ?? null) === ['zeichen', ','];
+                if ($weiter) {
+                    $i++;
+                }
+            } while ($weiter);
+            $erwarte('zeichen', ')');
+            if ($anzahl !== count($spalten)) {
+                $this->ablehnen('INSERT: Zahl der Werte passt nicht zur Spaltenliste', $sql);
+            }
+            $zeilen++;
+            $weiter = ($token[$i] ?? null) === ['zeichen', ','];
+            if ($weiter) {
+                $i++;
+            }
+        } while ($weiter);
+        if ($i !== count($token)) {
+            $this->ablehnen('INSERT enthält nach den Werten weitere Bestandteile', $sql);
+        }
+
+        $kopf = 'INSERT INTO `' . $name . '` (' . implode(', ', $spalten) . ') VALUES ';
+        return [$kopf, trim(substr($sql, $werteAb)), $zeilen];
+    }
+
+    /**
+     * Minimaler Lexer für CREATE und INSERT. Liefert [typ, text] bzw. für
+     * Zeichen [typ, text, position]; Typen: bezeichner (`…`, entmaskiert),
+     * text ('…' oder "…", roh), wort, zeichen. Zeichenketten folgen exakt
+     * derselben Regel wie das Zerlegen oben.
+     *
+     * @return array<int, array{0:string, 1:string, 2?:int}>
+     */
+    private static function tokens(string $sql): array {
+        $aus = [];
+        $len = strlen($sql);
+        $i = 0;
+        while ($i < $len) {
+            $i += strspn($sql, " \t\r\n", $i);
+            if ($i >= $len) {
+                break;
+            }
+            $z = $sql[$i];
+            if ($z === '`') {
+                $j = $i + 1;
+                $name = '';
+                while (true) {
+                    $k = strpos($sql, '`', $j);
+                    if ($k === false) {
+                        $k = $len;
+                        $name .= substr($sql, $j);
+                        $i = $len;
+                        break;
+                    }
+                    $name .= substr($sql, $j, $k - $j);
+                    if (($sql[$k + 1] ?? '') === '`') {
+                        $name .= '`';
+                        $j = $k + 2;
+                        continue;
+                    }
+                    $i = $k + 1;
+                    break;
+                }
+                $aus[] = ['bezeichner', $name];
+                continue;
+            }
+            if ($z === "'" || $z === '"') {
+                $j = $i + 1;
+                while ($j < $len) {
+                    $j += strcspn($sql, $z . '\\', $j);
+                    if ($j >= $len) {
+                        break;
+                    }
+                    if ($sql[$j] === '\\') {
+                        $j += 2;
+                        continue;
+                    }
+                    if (($sql[$j + 1] ?? '') === $z) {
+                        $j += 2;
+                        continue;
+                    }
+                    $j++;
+                    break;
+                }
+                $aus[] = ['text', substr($sql, $i, $j - $i)];
+                $i = $j;
+                continue;
+            }
+            if (preg_match('/\G[A-Za-z0-9_$]+/', $sql, $m, 0, $i)) {
+                $aus[] = ['wort', $m[0], $i + strlen($m[0])];
+                $i += strlen($m[0]);
+                continue;
+            }
+            $aus[] = ['zeichen', $z];
+            $i++;
+        }
+        // Zeichen tragen bewusst keine Position - so bleiben Vergleiche wie
+        // ($token[$i] ?? null) === ['zeichen', ','] einfach. Wo eine Position
+        // gebraucht wird (Anfang der Werte), hängt sie am Wort davor.
+        return $aus;
+    }
+
+    private function ablehnen(string $grund, string $sql = ''): never {
+        $auszug = '';
+        if ($sql !== '') {
+            // Maskiert: Steuerzeichen raus, auf 80 Zeichen gekürzt, gültiges
+            // UTF-8 - die Meldung landet in der Oberfläche.
+            $auszug = mb_scrub(substr(ltrim($sql), 0, 80), 'UTF-8');
+            $auszug = (string) preg_replace('/[\x00-\x1F\x7F]+/u', ' ', $auszug);
+        }
+        throw new DumpAbgelehnt(
+            'Anweisung ' . $this->nr . ': ' . $grund . ($auszug !== '' ? ' – „' . $auszug . '…“' : '') . '.'
+        );
+    }
+}
+
+/**
+ * Führt geprüfte Anweisungen aus - einzeln oder als Sammel-INSERT (Audit
+ * N21).
+ *
+ * Bis 1.1.0 ging der gesamte Dump als EIN Paket an den Server und
+ * scheiterte ab 16 MiB an max_allowed_packet. Jetzt geht jede Anweisung für
+ * sich, und aufeinanderfolgende INSERTs derselben Tabelle mit derselben
+ * Spaltenliste werden bis zur Sammelgrenze zusammengefasst - Zeile für Zeile
+ * wäre bei großen Beständen unnötig langsam.
+ *
+ * Das Callable heißt $senden, nicht $exec: security/plugin-security-scan.sh
+ * wertet `$exec(` als Aufruf der Shell-Funktion exec().
+ */
+final class DumpAusfuehrer {
+
+    private \Closure $senden;
+
+    public function __construct(callable $senden, private readonly int $sammelGrenze) {
+        $this->senden = \Closure::fromCallable($senden);
+    }
+
+    /**
+     * @param iterable<Anweisung> $anweisungen
+     * @return int Zahl der ausgeführten Anweisungen des Dumps
+     */
+    public function ausfuehren(iterable $anweisungen): int {
+        $kopf = null;
+        $werte = [];
+        $groesse = 0;
+        $anzahl = 0;
+        foreach ($anweisungen as $a) {
+            $anzahl++;
+            if ($a->art === 'insert' && $a->kopf !== null && $a->werte !== null) {
+                if ($kopf === $a->kopf && $groesse + 2 + strlen($a->werte) <= $this->sammelGrenze) {
+                    $werte[] = $a->werte;
+                    $groesse += 2 + strlen($a->werte);
+                    continue;
+                }
+                $this->leeren($kopf, $werte);
+                $kopf = $a->kopf;
+                $werte = [$a->werte];
+                $groesse = strlen($kopf) + strlen($a->werte);
+                continue;
+            }
+            $this->leeren($kopf, $werte);
+            $kopf = null;
+            $werte = [];
+            ($this->senden)($a->sql);
+        }
+        $this->leeren($kopf, $werte);
+        return $anzahl;
+    }
+
+    /** @param array<int, string> $werte */
+    private function leeren(?string $kopf, array $werte): void {
+        if ($kopf !== null && $werte !== []) {
+            ($this->senden)($kopf . implode(', ', $werte));
+        }
+    }
+}
+
+/**
+ * Die Tabellenregel des Imports: Darf eine Tabelle aus dem Dump ersetzt
+ * werden? (Audit M1/M3)
+ *
+ * Grundlage ist die Auswahl laut Manifest - aber gegen den TATSÄCHLICHEN
+ * Inhalt des Dumps gehalten, nicht umgekehrt:
+ *
+ *   (a) Weder die alte (bis 1.1.0) noch die neue Gruppe der Tabelle liegt in
+ *       der Auswahl -> ABLEHNEN. Das ist der präparierte Fall: ein
+ *       "Teilarchiv Pferde" mit einem users-Block. `users` selbst und alle
+ *       festen Benutzertabellen landen ohne gewählte Gruppe hier.
+ *   (b) Die neue Gruppe ist "benutzer", die Auswahl enthält sie aber nicht
+ *       -> UEBERSPRINGEN. Das sind ältere Archive, in denen `user_passkeys`
+ *       noch unter "sonstiges" oder eine plugin_-Tabelle mit Verweis auf
+ *       users unter "addons" lief. Ihre Zeilen hingen sonst an fremden
+ *       Konten gleicher Kennung; der Rest des Archivs bleibt einspielbar.
+ *   (c) Sonst -> AUSFUEHREN.
+ *
+ * Die Verweisziele einer Tabelle sind die REFERENCES aus dem Dump UND die
+ * Fremdschlüssel der gleichnamigen Tabelle auf dem Ziel. Ein Dump, dessen
+ * CREATE die REFERENCES einfach weglässt, hebelt die Regel damit nicht aus.
+ */
+final class Importregel {
+
+    private function __construct() {}
+
+    /**
+     * @param array<int, string> $auswahl Gruppen laut Manifest (bereinigt)
+     * @param array<string, array<int, string>> $fkKarte eingefrorene Fremdschlüssel des Ziels: Tabelle => Ziele
+     * @return \Closure(string, array<int, string>): array{0:string, 1:?string}
+     */
+    public static function fuer(array $auswahl, array $fkKarte): \Closure {
+        $gewaehlt = array_flip($auswahl);
+        return static function (string $tabelle, array $verweiseDump) use ($gewaehlt, $fkKarte): array {
+            $ziele = array_values(array_unique(array_merge($verweiseDump, $fkKarte[$tabelle] ?? [])));
+            $neu = Exportauswahl::gruppeFuer($tabelle, $ziele);
+            $alt = Exportauswahl::altGruppeFuer($tabelle);
+            if (!isset($gewaehlt[$neu]) && !isset($gewaehlt[$alt])) {
+                return [DumpPruefer::ABLEHNEN, 'sie gehört zur Gruppe „' . Exportauswahl::label($neu)
+                    . '“, die laut Manifest nicht im Archiv ist'];
+            }
+            if ($neu === Exportauswahl::GRUPPE_BENUTZER && !isset($gewaehlt[Exportauswahl::GRUPPE_BENUTZER])) {
+                return [DumpPruefer::UEBERSPRINGEN, 'verweist auf users, das nicht im Archiv ist; die Zeilen '
+                    . 'hingen sonst an fremden Konten gleicher Kennung'];
+            }
+            return [DumpPruefer::AUSFUEHREN, null];
+        };
+    }
+}
+
+/**
+ * Wartungsmodus nach einem gescheiterten Import (Audit N21).
+ *
+ * Gelingt der Rückweg, ist die Instanz wieder auf dem Stand vor dem Import,
+ * und der Wartungsmodus fällt. Scheitert AUCH der Rückweg, ist die Datenbank
+ * halb ersetzt - dann darf sie auf keinen Fall wieder online gehen. Der
+ * Marker wird deshalb OHNE pid neu geschrieben: Ein solcher Marker gilt für
+ * den Kern als von Hand gesetzt (Maintenance::isStale()) und verfällt nie,
+ * auch nicht, wenn dieser Prozess längst beendet ist. Gelöst wird er erst
+ * von dem, der die Sicherung eingespielt hat (rm var/wartung.lock).
+ *
+ * Bis der Kern dafür eine eigene API hat (Maintenance::enableDauerhaft(),
+ * Framework-Folgeissue), schreibt das Addon den Marker selbst - im Format,
+ * das Maintenance::info() liest.
+ */
+final class Wartung {
+
+    private function __construct() {}
+
+    public static function nachFehlschlag(bool $rueckwegOk, string $grund): void {
+        if ($rueckwegOk) {
+            \App\Service\Maintenance::disable();
+            return;
+        }
+        $marker = json_encode(
+            ['grund' => $grund, 'seit' => date('c')],
+            JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT
+        );
+        if (@file_put_contents(\App\Service\Maintenance::lockFile(), (string) $marker, LOCK_EX) === false) {
+            // Der alte Marker (mit pid) bleibt dann stehen - besser als
+            // keiner, aber er verfällt nach dem Prozessende. Deshalb laut.
+            error_log('Datenmigration: dauerhafter Wartungsmarker konnte nicht geschrieben werden - '
+                . \App\Service\Maintenance::lockFile());
         }
     }
 }
@@ -892,15 +1950,174 @@ class MigrationController extends BaseController {
     }
 
     /**
+     * Die Fremdschlüssel als Karte Tabelle => Verweisziele - die Form, in der
+     * Exportauswahl::gruppeFuer() und die Importregel sie brauchen.
+     *
+     * @param array<int, array{tabelle:string, spalte:string, ziel:string}> $fks
+     * @return array<string, array<int, string>>
+     */
+    private static function fkKarte(array $fks): array {
+        $karte = [];
+        foreach ($fks as $fk) {
+            $karte[$fk['tabelle']][] = $fk['ziel'];
+        }
+        foreach ($karte as $t => $ziele) {
+            $karte[$t] = array_values(array_unique($ziele));
+        }
+        return $karte;
+    }
+
+    /**
+     * Welche Spalten dürfen NULL sein? Entscheidet beim "Trennen", ob eine
+     * abhängige Zeile ihren Verweis verliert (NULL) oder gelöscht wird.
+     *
+     * Wie die Fremdschlüssel wird das VOR dem Import gelesen und
+     * eingefroren: Während der Dump läuft, verschwinden und entstehen
+     * Tabellen, und information_schema zeigt dann einen Zwischenstand.
+     *
+     * @return array<string, array<string, bool>> Tabelle => Spalte => nullbar
+     */
+    private function spaltenNullbar(): array {
+        $sql = 'SELECT TABLE_NAME, COLUMN_NAME, IS_NULLABLE
+                  FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE()';
+        $aus = [];
+        foreach (Database::getInstance()->query($sql)->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $aus[(string) $r['TABLE_NAME']][(string) $r['COLUMN_NAME']] = $r['IS_NULLABLE'] === 'YES';
+        }
+        return $aus;
+    }
+
+    /**
+     * Größte Anweisung, die der Server annimmt - mindestens 1 MiB. Was
+     * größer ist, lässt sich ohnehin nicht ausführen und wird deshalb schon
+     * in der Vorschau gemeldet statt erst mitten im Import.
+     */
+    private static function paketGrenze(PDO $db): int {
+        return max(DumpPruefer::MIN_ANWEISUNG, (int) $db->query('SELECT @@max_allowed_packet')->fetchColumn());
+    }
+
+    /** Obergrenze eines Sammel-INSERTs: ein Viertel der Paketgrenze, höchstens 1 MiB. */
+    private static function sammelGrenze(int $paketGrenze): int {
+        return min(1048576, intdiv($paketGrenze, 4));
+    }
+
+    /**
+     * Die weichen Verweise (ohne Fremdschlüssel): die Konstante des Addons
+     * plus die `weiche_verweise` aus der plugin.json jedes Addons unter
+     * plugins/ - auch deaktivierter, denn deren Tabellen liegen genauso in
+     * der Datenbank. Jede Angabe ist auf eigene plugin_-Tabellen des Addons
+     * beschränkt (siehe Exportauswahl::weicheVerweiseAusManifest());
+     * Verworfenes landet im Serverprotokoll.
+     *
+     * pferd-des-tages steht bewusst nicht darin: Seine Pferdeverweise sind
+     * echte Fremdschlüssel, und die Pferde-Kennungen in seinen
+     * Auswahlkriterien stecken in Konfigurationswerten, nicht in einer
+     * Spalte - das lässt sich als Verweis nicht beschreiben.
+     *
+     * @return array<string, array<int, array{ziel:string, spalte:string, wo:array<string, int|string>, trennen:string}>>
+     */
+    private function weicheVerweise(): array {
+        $listen = [Exportauswahl::WEICHE_VERWEISE];
+        foreach (glob($this->rootDir() . '/plugins/*/plugin.json') ?: [] as $datei) {
+            $roh = @file_get_contents($datei);
+            $manifest = $roh !== false ? json_decode($roh, true) : null;
+            $geprueft = Exportauswahl::weicheVerweiseAusManifest($manifest);
+            foreach ($geprueft['verworfen'] as $grund) {
+                error_log('Datenmigration: weiche_verweise verworfen - ' . $grund);
+            }
+            $listen[] = $geprueft['verweise'];
+        }
+        return Exportauswahl::verweiseZusammenfuehren(...$listen);
+    }
+
+    /**
+     * Bezeichner-Quoting. Backtick als eigene Konstante - siehe
+     * localInventory().
+     */
+    private static function bezeichner(string $name): string {
+        $bt = '`';
+        return $bt . str_replace($bt, $bt . $bt, $name) . $bt;
+    }
+
+    /**
+     * Die WHERE-Bedingung "diese Zeile verweist" für eine Gruppe von
+     * Verweisen derselben Kindtabelle - mit gebundenen Parametern.
+     *
+     * Fremdschlüssel: Spalte IS NOT NULL. Weiche Verweise zusätzlich <> 0
+     * (0 heißt dort "kein Datensatz") und die `wo`-Bedingung, deren Werte
+     * gebunden werden. Alle Bezeichner stammen aus information_schema, der
+     * Addon-Konstante oder einer auf ^[a-z0-9_]+$ geprüften plugin.json und
+     * werden zusätzlich gequotet.
+     *
+     * @param array<int, string> $spalten
+     * @param array<string, int|string> $wo
+     * @return array{0:string, 1:array<int, int|string>}
+     */
+    private static function verweisBedingung(array $spalten, array $wo, bool $weich): array {
+        $oder = [];
+        foreach ($spalten as $spalte) {
+            $q = self::bezeichner($spalte);
+            $oder[] = $weich ? '(' . $q . ' IS NOT NULL AND ' . $q . ' <> 0)' : $q . ' IS NOT NULL';
+        }
+        $bedingung = '(' . implode(' OR ', $oder) . ')';
+        $parameter = [];
+        foreach ($wo as $spalte => $wert) {
+            $bedingung .= ' AND ' . self::bezeichner($spalte) . ' = ?';
+            $parameter[] = $wert;
+        }
+        return [$bedingung, $parameter];
+    }
+
+    /**
+     * Zählt Zeilen unter einer Bedingung aus verweisBedingung(). Eine nicht
+     * zählbare Tabelle (fehlt, andere Spalten) zählt 0 - sie darf die
+     * Warnung der anderen nicht verhindern.
+     *
+     * @param array<int, int|string> $parameter
+     */
+    private static function zaehle(PDO $db, string $tabelle, string $bedingung, array $parameter): int {
+        try {
+            $tabelle = self::bezeichner($tabelle);
+            $stmt = $db->prepare('SELECT COUNT(*) FROM ' . $tabelle . ' WHERE ' . $bedingung);
+            $stmt->execute($parameter);
+            return (int) $stmt->fetchColumn();
+        } catch (\Throwable $e) {
+            return 0;
+        }
+    }
+
+    /**
+     * Weiche Verweise einer Kindtabelle, gruppiert nach Ziel, Bedingung und
+     * Trennart: match_labels verweist über ZWEI Spalten auf dieselben Pferde
+     * - gezählt werden Zeilen, nicht Spalten.
+     *
+     * @param array<int, array{ziel:string, spalte:string, wo:array<string, int|string>, trennen:string}> $eintraege
+     * @return array<int, array{ziel:string, spalten:array<int, string>, wo:array<string, int|string>, trennen:string}>
+     */
+    private static function weicheGruppen(array $eintraege): array {
+        $gruppen = [];
+        foreach ($eintraege as $e) {
+            $schluessel = $e['ziel'] . '|' . json_encode($e['wo']) . '|' . $e['trennen'];
+            $gruppen[$schluessel] ??= ['ziel' => $e['ziel'], 'spalten' => [], 'wo' => $e['wo'], 'trennen' => $e['trennen']];
+            $gruppen[$schluessel]['spalten'][] = $e['spalte'];
+        }
+        return array_values($gruppen);
+    }
+
+    /**
      * Was verliert bei DIESER Auswahl sein Gegenstück? Mit Zahlen.
      *
-     * "Pferde ohne Kontakte" ist eine völlig plausible Auswahl und erzeugt
-     * beim Einspielen verwaiste Verweise - nachgemessen: Die Zeilen bleiben
-     * stehen und sind lesbar, nur zeigen sie ins Leere; erst ein späterer
-     * NEUER Verweis auf die fehlende Kennung scheitert (ERROR 1452). Es fällt
-     * also nichts um, es wird nur still falsch. Deshalb wird die Zahl VOR dem
-     * Erstellen genannt, statt sich auf eine Fehlermeldung zu verlassen, die
-     * nie kommt.
+     * "Pferde ohne Kontakte" ist eine völlig plausible Auswahl - und auf der
+     * Zielinstanz ist das Ergebnis schlimmer als ein leerer Verweis: Die
+     * Zeilen zeigen dort auf die Datensätze MIT DERSELBEN KENNUNG, also in
+     * der Regel auf fremde Kontakte, Pferde oder Konten; nur wo die Kennung
+     * fehlt, zeigen sie ins Leere. Eine Fehlermeldung gibt es dabei nicht.
+     * Deshalb wird die Zahl VOR dem Erstellen genannt.
+     *
+     * Die frühere Sonderwarnung für Tabellen mit Ziel `users` gibt es nicht
+     * mehr: Solche Tabellen gehören seit Audit M3 selbst zur Gruppe
+     * "Benutzer" und können ohne users gar nicht mehr ins Archiv.
      *
      * @param array<int, string> $tabellen Positivliste des Exports
      * @return array<int, string>
@@ -908,44 +2125,32 @@ class MigrationController extends BaseController {
     private function abhaengigkeitsWarnungen(array $tabellen): array {
         $imArchiv = array_flip($tabellen);
         $db = Database::getInstance();
-        // Backtick als eigene Konstante - siehe localInventory().
-        $bt = '`';
-        $quote = static fn(string $n): string => $bt . str_replace($bt, $bt . $bt, $n) . $bt;
 
         /** @var array<string, array<string, int>> $offen  ziel => [tabelle => zeilen] */
         $offen = [];
-        $zaehle = static function (string $tabelle, string $bedingung) use ($db): int {
-            try {
-                return (int) $db->query('SELECT COUNT(*) FROM ' . $tabelle . ' WHERE ' . $bedingung)->fetchColumn();
-            } catch (\Throwable $e) {
-                // Eine nicht zählbare Tabelle darf die Warnung der anderen
-                // nicht verhindern.
-                return 0;
-            }
-        };
-
         foreach ($this->fremdschluessel() as $fk) {
             if (!isset($imArchiv[$fk['tabelle']]) || isset($imArchiv[$fk['ziel']])) {
                 continue;
             }
-            $n = $zaehle($quote($fk['tabelle']), $quote($fk['spalte']) . ' IS NOT NULL');
+            [$bedingung, $parameter] = self::verweisBedingung([$fk['spalte']], [], false);
+            $n = self::zaehle($db, $fk['tabelle'], $bedingung, $parameter);
             if ($n > 0) {
                 $offen[$fk['ziel']][$fk['tabelle']] = ($offen[$fk['ziel']][$fk['tabelle']] ?? 0) + $n;
             }
         }
 
-        foreach (Exportauswahl::WEICHE_VERWEISE as $tabelle => $verweise) {
+        foreach ($this->weicheVerweise() as $tabelle => $eintraege) {
             if (!isset($imArchiv[$tabelle])) {
                 continue;
             }
-            foreach ($verweise as [$ziel, $bedingung]) {
-                if (isset($imArchiv[$ziel])) {
+            foreach (self::weicheGruppen($eintraege) as $g) {
+                if (isset($imArchiv[$g['ziel']])) {
                     continue;
                 }
-                // $bedingung ist eine Konstante aus dem Code, keine Eingabe.
-                $n = $zaehle($quote($tabelle), $bedingung);
+                [$bedingung, $parameter] = self::verweisBedingung($g['spalten'], $g['wo'], true);
+                $n = self::zaehle($db, $tabelle, $bedingung, $parameter);
                 if ($n > 0) {
-                    $offen[$ziel][$tabelle] = ($offen[$ziel][$tabelle] ?? 0) + $n;
+                    $offen[$g['ziel']][$tabelle] = ($offen[$g['ziel']][$tabelle] ?? 0) + $n;
                 }
             }
         }
@@ -959,13 +2164,36 @@ class MigrationController extends BaseController {
                 $teile[] = number_format($n, 0, ',', '.') . ' Zeile(n) in ' . $tabelle;
             }
             $warnungen[] = implode(', ', $teile) . ' verweisen auf ' . $ziel
-                . ' - diese Tabelle ist nicht im Archiv. Die Verweise zeigen nach dem Einspielen ins Leere '
+                . ' - diese Tabelle ist nicht im Archiv. Auf der Zielinstanz zeigen die Verweise auf deren '
+                . 'Datensätze mit derselben Kennung, also in der Regel auf fremde Pferde, Kontakte oder Konten; '
+                . 'nur wo die Kennung fehlt, zeigen sie ins Leere '
                 . '(Gruppe „' . Exportauswahl::label(Exportauswahl::gruppeFuer($ziel)) . '").';
         }
         return $warnungen;
     }
 
     // -- Übersicht ----------------------------------------------------------
+
+    /**
+     * Zwischendateien, die ein abgebrochener Lauf liegen gelassen hat
+     * (Export-Dump, geprüfter Import-Dump). Sie enthalten Datenbankinhalt,
+     * im Fall des Imports womöglich Zugangsmaterial - normalerweise räumen
+     * finally und eine Shutdown-Funktion sie weg, ein harter Abbruch
+     * (getöteter Worker) kommt aber an beidem vorbei. Älter als eine Stunde
+     * heißt: Zu diesem Lauf gehört niemand mehr.
+     */
+    private function raeumeZwischendateienAuf(): void {
+        $dateien = array_merge(
+            glob($this->stageDir() . '/.import-*.sql') ?: [],
+            glob($this->stageDir() . '/.dump-*.sql') ?: []
+        );
+        foreach ($dateien as $datei) {
+            $alter = @filemtime($datei);
+            if ($alter !== false && $alter < time() - 3600) {
+                @unlink($datei);
+            }
+        }
+    }
 
     public function overview(): void {
         $csrf = htmlspecialchars(Router::generateCsrfToken(), ENT_QUOTES, 'UTF-8');
@@ -977,13 +2205,16 @@ class MigrationController extends BaseController {
             . 'Was mitgeht, wird beim Export ausgewählt - Benutzerkonten und Zugangsdaten bleiben dabei '
             . 'per Vorgabe zurück.</p>';
 
+        $this->raeumeZwischendateienAuf();
+
         $notice = $_GET['hinweis'] ?? '';
         if ($notice === 'hochgeladen') {
             $content .= '<p class="alert alert-success">Archiv hochgeladen - unten prüfen und anwenden.</p>';
         }
         if ($notice === 'importiert') {
-            $content .= '<p class="alert alert-success">Teilarchiv eingespielt. Die nicht enthaltenen Tabellen '
-                . 'dieser Instanz blieben unverändert - Ihre Sitzung gilt deshalb weiter.</p>';
+            $content .= '<p class="alert alert-success">Archiv eingespielt. Ersetzt wurden nur die Tabellen, die '
+                . 'die Vorschau nach Prüfung des Dumps mit „wird ersetzt“ geführt hat; alle übrigen blieben '
+                . 'unverändert. Benutzerkonten waren nicht darunter - Ihre Sitzung gilt deshalb weiter.</p>';
         }
 
         if ($canExport) {
@@ -1039,6 +2270,7 @@ class MigrationController extends BaseController {
 
         $inventory = $this->localInventory();
         $vorhandene = array_keys($inventory['tables']);
+        $fkKarte = self::fkKarte($this->fremdschluessel());
         $auswahl = array_key_exists('gruppen', $_GET)
             ? Exportauswahl::bereinige((array) $_GET['gruppen'])
             : Exportauswahl::vorgabe();
@@ -1063,7 +2295,7 @@ class MigrationController extends BaseController {
         foreach (Exportauswahl::GRUPPEN as $key => $meta) {
             $tabellen = $key === Exportauswahl::GRUPPE_DATEIEN
                 ? []
-                : Exportauswahl::tabellen([$key], $vorhandene);
+                : Exportauswahl::tabellen([$key], $vorhandene, $fkKarte);
             // Eine leere Auffanggruppe ist die Regel und kein Thema - sie
             // erscheint nur, wenn sie tatsächlich etwas enthält.
             if ($key === Exportauswahl::GRUPPE_SONSTIGES && $tabellen === []) {
@@ -1120,7 +2352,13 @@ class MigrationController extends BaseController {
         }
 
         $inventory = $this->localInventory();
-        $tabellen = Exportauswahl::tabellen($auswahl, array_keys($inventory['tables']));
+        // Mit den Fremdschlüsseln: Addon-Tabellen mit Verweis auf users
+        // gehören zu "Benutzer" und gehen ohne diese Gruppe nicht mit (M3).
+        $tabellen = Exportauswahl::tabellen(
+            $auswahl,
+            array_keys($inventory['tables']),
+            self::fkKarte($this->fremdschluessel())
+        );
         $vollstaendig = Exportauswahl::istVollstaendig($auswahl);
 
         // Fremdschlüssel: erst warnen, dann erstellen. Ohne den
@@ -1177,14 +2415,18 @@ class MigrationController extends BaseController {
                 // Dump fälschlich als Teilsicherung kennzeichnen.
                 DatabaseDumper::dumpTo(
                     function (string $chunk) use ($fh): void {
-                        if (fwrite($fh, $chunk) === false) {
-                            throw new \RuntimeException('Dump konnte nicht geschrieben werden.');
+                        // Geschriebene Menge prüfen, nicht nur false (M43).
+                        if (fwrite($fh, $chunk) !== strlen($chunk)) {
+                            throw new \RuntimeException('Dump konnte nicht geschrieben werden (Datenträger voll?).');
                         }
                     },
                     $vollstaendig ? null : $tabellen
                 );
             } finally {
-                fclose($fh);
+                $geschlossen = fclose($fh);
+            }
+            if (!$geschlossen) {
+                throw new \RuntimeException('Dump konnte nicht abgeschlossen werden.');
             }
 
             $tar = TarWriter::create($path);
@@ -1230,9 +2472,10 @@ class MigrationController extends BaseController {
 
         $content = '<div class="card"><h1>📦 Export: fehlende Gegenstücke</h1>';
         $content .= '<p>Die Auswahl enthält Tabellen, deren Verweise auf nicht ausgewählte Tabellen zeigen. '
-            . 'Beim Einspielen auf der Zielinstanz bleiben diese Zeilen stehen und sind lesbar - sie zeigen nur '
-            . 'ins Leere: eine Zuordnung ohne Kontakt, ein Addon-Datensatz ohne Pferd. Eine Fehlermeldung gibt es '
-            . 'dabei nicht, der Import läuft durch.</p>';
+            . 'Auf der Zielinstanz zeigen diese Verweise auf deren Datensätze mit derselben Kennung, also in der '
+            . 'Regel auf fremde Pferde, Kontakte oder Konten: eine Zuordnung zum falschen Kontakt, ein '
+            . 'Addon-Datensatz am falschen Pferd. Nur wo die Kennung fehlt, zeigen sie ins Leere. Eine '
+            . 'Fehlermeldung gibt es dabei nicht; die Vorschau des Imports weist aber darauf hin.</p>';
         foreach ($warnungen as $w) {
             $content .= '<p class="alert alert-warning">⚠ ' . $e($w) . '</p>';
         }
@@ -1323,7 +2566,24 @@ class MigrationController extends BaseController {
         $warnings = $this->pluginWarnings($manifest, $local);
         $auswahl = $this->auswahlDesArchivs($manifest);
         $vollstaendig = Exportauswahl::istVollstaendig($auswahl);
-        $imArchiv = array_flip(array_keys((array) ($manifest['tables'] ?? [])));
+        $fks = $this->fremdschluessel();
+        $fkKarte = self::fkKarte($fks);
+
+        // Der Dump wird trocken durch dieselbe Prüfung geschickt wie beim
+        // Anwenden. Was die Vorschau ab hier über Tabellen sagt, stammt aus
+        // database.sql, nicht aus dem Manifest (Audit M1).
+        $pruefung = $this->pruefeArchiv($path, $manifest, $auswahl, $fkKarte, self::paketGrenze(Database::getInstance()));
+        $befund = $pruefung['befund'];
+        if ($pruefung['problem'] !== null) {
+            $problems[] = $pruefung['problem'];
+        }
+        if ($pruefung['hinweis'] !== null) {
+            $warnings[] = $pruefung['hinweis'];
+        }
+        $risiken = $pruefung['problem'] === null
+            ? $this->importRisiken($befund, $fks, $local['tables'], $this->spaltenNullbar())
+            : ['trennbar' => [], 'hinweise' => []];
+        $benutzerErsetzt = $pruefung['problem'] === null && self::benutzerbezogenErsetzt($befund, $fkKarte);
 
         $csrf = htmlspecialchars(Router::generateCsrfToken(), ENT_QUOTES, 'UTF-8');
         $file = htmlspecialchars(basename($path), ENT_QUOTES, 'UTF-8');
@@ -1336,14 +2596,22 @@ class MigrationController extends BaseController {
         // der Tabellenliste weiter unten erschließen muss, erschließt es
         // nicht.
         if ($vollstaendig) {
-            $content .= '<p class="alert alert-warning">⚠ <strong>Vollarchiv.</strong> Der gesamte Datenbestand '
-                . 'dieser Instanz wird ersetzt - einschließlich der Benutzerkonten. Nach dem Anwenden ist Ihre '
-                . 'Sitzung beendet; die Anmeldung erfolgt danach mit den Konten der Quellinstanz.</p>';
+            $content .= '<p class="alert alert-warning">⚠ <strong>Vollarchiv.</strong> Jede Tabelle, die das '
+                . 'Archiv mitbringt, wird ersetzt - einschließlich der Benutzerkonten. Tabellen, die nur diese '
+                . 'Instanz hat (etwa die eines Addons, das auf der Quelle fehlt), bleiben stehen.</p>';
         } else {
             $content .= '<p class="alert alert-warning">⚠ <strong>Teilarchiv.</strong> Es wird '
-                . '<em>zusammengeführt</em>, nicht ersetzt: Nur die unten aufgeführten Tabellen werden durch den '
-                . 'Stand des Archivs überschrieben, alle übrigen bleiben unverändert stehen. Enthaltene Gruppen: '
+                . '<em>zusammengeführt</em>, nicht ersetzt: Nur die unten mit „wird ersetzt“ geführten Tabellen '
+                . 'werden durch den Stand des Archivs überschrieben, alle übrigen bleiben unverändert stehen. '
+                . 'Enthaltene Gruppen laut Manifest: '
                 . $e(implode(', ', array_map([Exportauswahl::class, 'label'], $auswahl))) . '.</p>';
+        }
+        if ($benutzerErsetzt) {
+            // Audit M2: Nicht nur die eigene Sitzung endet.
+            $content .= '<p class="alert alert-warning">⚠ <strong>Benutzerkonten werden ersetzt.</strong> Alle '
+                . 'angemeldeten Sitzungen und API-Schlüssel dieser Instanz werden ungültig - auch Ihre eigene '
+                . 'Sitzung. Danach meldet sich jeder mit den Konten des Archivs neu an; API-Schlüssel sind neu '
+                . 'auszustellen.</p>';
         }
 
         $content .= '<div class="tabelle-scroll"><table class="table"><tr><th></th><th>Archiv (Quelle)</th><th>Diese Instanz (Ziel)</th></tr>'
@@ -1353,26 +2621,34 @@ class MigrationController extends BaseController {
             . '<tr><td>Umfang</td><td>' . ($vollstaendig ? 'Vollarchiv' : 'Teilarchiv') . '</td><td>-</td></tr>'
             . '<tr><td>Upload-Dateien</td><td>' . $e($manifest['uploads_count'] ?? '?') . '</td><td>-</td></tr></table></div>';
 
+        // "Quelle" sind die im Dump gezählten Zeilen, nicht die Angabe des
+        // Manifests - die Vorschau soll zeigen, was tatsächlich eingespielt
+        // würde.
         $content .= '<h2>Datenbestand (Zeilen je Tabelle)</h2><div class="tabelle-scroll"><table class="table">'
-            . '<tr><th>Tabelle</th><th>Quelle</th><th>Ziel</th><th>Was geschieht</th></tr>';
-        $tables = array_unique(array_merge(array_keys($manifest['tables'] ?? []), array_keys($local['tables'])));
+            . '<tr><th>Tabelle</th><th>Quelle (im Dump)</th><th>Ziel</th><th>Was geschieht</th></tr>';
+        $tables = array_unique(array_merge(array_keys($befund->tabellen), array_keys($local['tables'])));
         sort($tables);
         foreach ($tables as $t) {
-            // Bei einem Teilarchiv ist eine fehlende Tabelle KEIN Mangel,
-            // sondern die Auswahl. Der Spaltenkopf hieß früher pauschal
-            // "Ziel (wird ersetzt)" - das war für Teilarchive schlicht falsch.
-            $wirkung = isset($imArchiv[$t])
-                ? 'wird ersetzt'
-                : 'bleibt unverändert';
-            $content .= '<tr><td><code>' . $e($t) . '</code></td><td>' . $e($manifest['tables'][$t] ?? '-')
+            $info = $befund->tabellen[$t] ?? null;
+            if ($info === null) {
+                $wirkung = 'bleibt unverändert';
+            } elseif ($info['aktion'] === DumpPruefer::AUSFUEHREN) {
+                $wirkung = 'wird ersetzt';
+            } elseif ($info['aktion'] === DumpPruefer::UEBERSPRINGEN) {
+                $wirkung = 'wird übersprungen – ' . $e($info['grund']);
+            } else {
+                $wirkung = 'ungeprüft';
+            }
+            $content .= '<tr><td><code>' . $e($t) . '</code></td><td>' . $e($info !== null ? $info['zeilen'] : '-')
                 . '</td><td>' . $e($local['tables'][$t] ?? '-') . '</td><td>' . $wirkung . '</td></tr>';
         }
         $content .= '</table></div>';
 
-        if (!$vollstaendig) {
-            foreach ($this->importRisiken($imArchiv, $local) as $r) {
-                $content .= '<p class="alert alert-warning">⚠ ' . $e($r) . '</p>';
-            }
+        foreach ($risiken['trennbar'] as $r) {
+            $content .= '<p class="alert alert-warning">⚠ ' . $e($r['text']) . '</p>';
+        }
+        foreach ($risiken['hinweise'] as $h) {
+            $content .= '<p class="alert alert-warning">⚠ ' . $e($h) . '</p>';
         }
 
         foreach ($problems as $p) {
@@ -1384,18 +2660,34 @@ class MigrationController extends BaseController {
 
         if (!$problems) {
             $frage = $vollstaendig
-                ? 'Wirklich ALLE Daten dieser Instanz durch das Archiv ersetzen?'
+                ? 'Wirklich die Daten dieser Instanz durch das Archiv ersetzen?'
                 : 'Wirklich die im Archiv enthaltenen Tabellen dieser Instanz überschreiben?';
-            $zusage = $vollstaendig
-                ? 'Mir ist klar: Sämtliche Daten dieser Instanz (inkl. Benutzerkonten) werden ersetzt.'
-                : 'Mir ist klar: Die oben mit „wird ersetzt" gekennzeichneten Tabellen werden vollständig durch '
-                    . 'den Stand des Archivs überschrieben; die übrigen bleiben stehen und können danach auf '
-                    . 'fehlende Gegenstücke verweisen.';
+            $zusage = 'Mir ist klar: Die oben mit „wird ersetzt" gekennzeichneten Tabellen werden vollständig durch '
+                . 'den Stand des Archivs überschrieben'
+                . ($vollstaendig ? ' (bei diesem Vollarchiv einschließlich der Benutzerkonten)' : '')
+                . '; die übrigen bleiben stehen. Wo sie auf ersetzte Tabellen verweisen, gilt die Entscheidung '
+                . 'unten.';
             $content .= '<form method="POST" action="/plugin/datenmigration/import/anwenden" '
                 . 'onsubmit="return confirm(\'' . $frage . '\');">'
                 . '<input type="hidden" name="csrf_token" value="' . $csrf . '">'
-                . '<input type="hidden" name="datei" value="' . $file . '">'
-                . '<div class="form-group"><label><input type="checkbox" name="bestaetigt" value="1" required> '
+                . '<input type="hidden" name="datei" value="' . $file . '">';
+            if ($risiken['trennbar'] !== []) {
+                // Pflichtwahl OHNE Vorgabe (Audit N23): Ob die stehenden Zeilen
+                // zu den Datensätzen des Archivs passen, weiß nur der
+                // Betreiber - haben Quelle und Ziel dieselbe Abstammung, sind
+                // sie richtig, sonst hängen sie an Fremden.
+                $content .= '<fieldset class="form-group"><legend><strong>Abhängige Zeilen, die stehen bleiben</strong> '
+                    . '(siehe Hinweise oben) - bitte entscheiden:</legend>'
+                    . '<label><input type="radio" name="abhaengige" value="trennen" required> <strong>trennen</strong> - '
+                    . 'die Verweise werden nach dem Einspielen gelöst: auf NULL bzw. 0 gesetzt, wo die Spalte das '
+                    . 'zulässt, sonst wird die Zeile gelöscht. Richtig, wenn Quelle und Ziel verschiedene Bestände '
+                    . 'sind.</label><br>'
+                    . '<label><input type="radio" name="abhaengige" value="stehen_lassen" required> <strong>stehen '
+                    . 'lassen</strong> - die Zeilen bleiben unverändert und gehören danach zu den Datensätzen des '
+                    . 'Archivs mit derselben Kennung. Richtig nur, wenn das Archiv von dieser Instanz stammt.</label>'
+                    . '</fieldset>';
+            }
+            $content .= '<div class="form-group"><label><input type="checkbox" name="bestaetigt" value="1" required> '
                 . $zusage . ' '
                 . 'Ein Sicherungs-Dump wird vorher nach <code>var/datenmigration/</code> geschrieben.</label></div>'
                 . '<button type="submit" class="btn btn-danger">Import anwenden</button></form>';
@@ -1423,41 +2715,263 @@ class MigrationController extends BaseController {
     }
 
     /**
-     * Was ein Teilarchiv auf DIESER Instanz anrichten kann, mit Zahlen.
+     * Liest ein Archiv in EINEM Durchlauf: database.sql durch den Prüfer
+     * (und, beim Anwenden, zugleich in die Zwischendatei), Uploads - beim
+     * Anwenden - in das Nebenverzeichnis. Mehrfache Einträge database.sql
+     * oder manifest.json werden abgewiesen: tar erlaubt sie, und dann sähen
+     * Vorschau und Anwenden womöglich verschiedene Einträge.
+     *
+     * @param resource|null $zwischen
+     * @return array{uebersprungen:int, dateien:int}
+     */
+    private function leseArchiv(string $path, DumpPruefer $pruefer, $zwischen = null, ?string $uploadsNew = null): array {
+        $stand = ['sql' => 0, 'manifest' => 0, 'uebersprungen' => 0, 'dateien' => 0];
+        $reader = new TarReader($path);
+        try {
+            $reader->each(function (string $name, int $size, callable $read) use (&$stand, $pruefer, $zwischen, $uploadsNew) {
+                if ($name === 'database.sql') {
+                    if (++$stand['sql'] > 1) {
+                        throw new \RuntimeException('database.sql steht mehrfach im Archiv - so schreibt dieses Addon kein Archiv.');
+                    }
+                    while (($chunk = $read()) !== '') {
+                        if ($zwischen !== null && fwrite($zwischen, $chunk) !== strlen($chunk)) {
+                            throw new \RuntimeException('Zwischendatei nicht schreibbar (Datenträger voll?).');
+                        }
+                        foreach ($pruefer->zufuehren($chunk) as $_) {
+                            // Erster Durchlauf: nur prüfen, nichts ausführen.
+                        }
+                    }
+                    foreach ($pruefer->abschliessen() as $_) {
+                    }
+                    return;
+                }
+                if ($name === 'manifest.json' && ++$stand['manifest'] > 1) {
+                    throw new \RuntimeException('manifest.json steht mehrfach im Archiv - so schreibt dieses Addon kein Archiv.');
+                }
+                if ($uploadsNew !== null && str_starts_with($name, 'uploads/')) {
+                    $rel = substr($name, strlen('uploads/'));
+                    // Pfadhärtung: keine Traversal, keine absoluten Pfade.
+                    if ($rel === '' || str_contains($rel, '..') || str_starts_with($rel, '/') || str_contains($rel, "\0")) {
+                        throw new \RuntimeException("Unzulässiger Pfad im Archiv: {$name}");
+                    }
+                    // ... und keine ausführbaren Dateien. Die Pfadhärtung
+                    // darüber prüfte, WOHIN geschrieben wird, aber nicht WAS -
+                    // und das Ziel ist am Ende public/uploads. Der Inhalt
+                    // stammt aus einer hochgeladenen Datei, das Recht dafür ist
+                    // an jede Gruppe vergebbar. Ohne diese Prüfung genügte ein
+                    // Archiv mit einer .php darin für Codeausführung.
+                    // Webserver-Steuerdateien werden verworfen, nicht
+                    // übernommen - der Ausführungsschutz des Zielverzeichnisses
+                    // darf nicht aus dem Archiv stammen. Er wird nach dem
+                    // Umschalten neu geschrieben.
+                    if (UploadNamePolicy::istWebserverSteuerdatei($rel)) {
+                        $stand['uebersprungen']++;
+                        while ($read() !== '') { // Datenstrom verwerfen
+                        }
+                        return;
+                    }
+                    UploadNamePolicy::assertAllowed($rel);
+
+                    $target = $uploadsNew . '/' . $rel;
+                    if (!is_dir(dirname($target))) {
+                        mkdir(dirname($target), 0755, true);
+                    }
+                    $out = fopen($target, 'wb');
+                    while (($chunk = $read()) !== '') {
+                        fwrite($out, $chunk);
+                    }
+                    fclose($out);
+                    $stand['dateien']++;
+                    return;
+                }
+                while ($read() !== '') { // manifest.json u. ä.: konsumieren
+                }
+            });
+        } finally {
+            $reader->close();
+        }
+        if ($stand['sql'] === 0) {
+            throw new \RuntimeException('database.sql fehlt im Archiv.');
+        }
+        return ['uebersprungen' => $stand['uebersprungen'], 'dateien' => $stand['dateien']];
+    }
+
+    /**
+     * Erster Durchlauf durch database.sql: Positivliste, Blockreihenfolge,
+     * Tabellenregel - und bei Format 2 der Abgleich mit der Tabellenliste
+     * des Manifests. Das Ergebnis ist der PLAN, nach dem Vorschau und
+     * Anwenden sich richten.
+     *
+     * @param array<int, string> $auswahl
+     * @param array<string, array<int, string>> $fkKarte eingefroren
+     * @param resource|null $zwischen
+     * @return array{befund:DumpBefund, problem:?string, hinweis:?string, stand:array{uebersprungen:int, dateien:int}}
+     */
+    private function pruefeArchiv(string $path, array $manifest, array $auswahl, array $fkKarte, int $paketGrenze,
+                                  $zwischen = null, ?string $uploadsNew = null): array {
+        $pruefer = new DumpPruefer($paketGrenze, Importregel::fuer($auswahl, $fkKarte));
+        $stand = ['uebersprungen' => 0, 'dateien' => 0];
+        try {
+            $stand = $this->leseArchiv($path, $pruefer, $zwischen, $uploadsNew);
+        } catch (\Throwable $e) {
+            return [
+                'befund' => $pruefer->befund(),
+                'problem' => 'Der Datenbank-Dump des Archivs ist nicht einspielbar: ' . $e->getMessage(),
+                'hinweis' => null,
+                'stand' => $stand,
+            ];
+        }
+        $befund = $pruefer->befund();
+
+        // Tabellenliste gegen das Manifest. Format 2 schreibt beide aus
+        // derselben Liste; weichen sie ab, ist das Archiv nachbearbeitet.
+        // Format 1 (v0.7) ist immer ein Vollarchiv - dort nur ein Hinweis.
+        $imDump = array_keys($befund->tabellen);
+        $imManifest = array_map('strval', array_keys((array) ($manifest['tables'] ?? [])));
+        $nurDump = array_diff($imDump, $imManifest);
+        $nurManifest = array_diff($imManifest, $imDump);
+        $problem = null;
+        $hinweis = null;
+        if ($nurDump !== [] || $nurManifest !== []) {
+            $text = 'Die Tabellen in database.sql stimmen nicht mit dem Manifest überein'
+                . ($nurDump !== [] ? '; nur im Dump: ' . implode(', ', $nurDump) : '')
+                . ($nurManifest !== [] ? '; nur im Manifest: ' . implode(', ', $nurManifest) : '') . '.';
+            if ((int) ($manifest['format'] ?? 0) === 1) {
+                $hinweis = $text . ' Bei einem Archiv im alten Format 1 wird der Dump trotzdem eingespielt.';
+            } else {
+                $problem = $text . ' Das Archiv wurde nach dem Export verändert und wird nicht eingespielt.';
+            }
+        }
+        return ['befund' => $befund, 'problem' => $problem, 'hinweis' => $hinweis, 'stand' => $stand];
+    }
+
+    /**
+     * Ersetzt der Plan eine Tabelle, die zu den Benutzerkonten gehört (neue
+     * Zuordnung, Audit M3)? Dann sind nach dem Import alle Sitzungen zu
+     * beenden (M2). Übersprungen heißt dabei nicht ersetzt.
+     *
+     * @param array<string, array<int, string>> $fkKarte
+     */
+    private static function benutzerbezogenErsetzt(DumpBefund $befund, array $fkKarte): bool {
+        foreach ($befund->ersetzt() as $t) {
+            $ziele = array_merge($befund->tabellen[$t]['verweise'], $fkKarte[$t] ?? []);
+            if (Exportauswahl::gruppeFuer($t, $ziele) === Exportauswahl::GRUPPE_BENUTZER) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Was ein Import auf DIESER Instanz anrichten kann, mit Zahlen - für
+     * Teil- UND Vollarchive (Audit N23).
      *
      * Nachgemessen (MariaDB 11.8): Der Dump setzt FOREIGN_KEY_CHECKS=0, wirft
      * die enthaltenen Tabellen weg und legt sie neu an. Zeilen in Tabellen,
-     * die NICHT im Archiv sind, bleiben stehen - auch dann, wenn ihr Verweis
-     * jetzt ins Leere zeigt. Das abschließende FOREIGN_KEY_CHECKS=1 prüft den
-     * Bestand nicht nach; die Fremdschlüssel selbst überleben das Neuanlegen
-     * und greifen erst wieder beim nächsten NEUEN Verweis (dann ERROR 1452).
+     * die der Import NICHT ersetzt, bleiben stehen. Ihre Verweise zeigen
+     * danach nicht "ins Leere", wie es hier bis 1.1.0 hieß, sondern auf die
+     * Datensätze des ARCHIVS mit derselben Kennung - bei zwei verschiedenen
+     * Beständen also auf fremde: das Inserat am falschen Pferd, die
+     * Kontaktanfrage an die falsche Person. Das abschließende
+     * FOREIGN_KEY_CHECKS=1 prüft den Bestand nicht nach.
      *
-     * Es ist eine Obergrenze, keine exakte Zahl: Wie viele Kennungen das
-     * Archiv tatsächlich mitbringt, wüsste man erst nach dem Einspielen.
+     * Auch ein Vollarchiv lässt Tabellen stehen: die eines Addons, das die
+     * Quelle nicht hat - darunter solche mit Verweis auf users. Deshalb läuft
+     * die Prüfung seit 1.2.0 für jedes Archiv.
      *
-     * @param array<string, int|string> $imArchiv Tabellen des Archivs als Schlüssel
-     * @param array{tables:array<string,int>} $local
-     * @return array<int, string>
+     * `trennbar` sind die Fälle "Eltern ersetzt, Kind bleibt" - für sie
+     * verlangt die Vorschau die Entscheidung trennen/stehen lassen.
+     * `hinweise` ist die umgekehrte Richtung (Kind ersetzt, Eltern bleiben):
+     * Dort bringt das Archiv die Zeilen mit, trennen hieße sie gleich wieder
+     * wegzuwerfen - also nur ein Hinweis.
+     *
+     * @param array<int, array{tabelle:string, spalte:string, ziel:string}> $fks eingefroren
+     * @param array<string, int> $lokal Zeilen je Tabelle auf dem Ziel
+     * @param array<string, array<string, bool>> $nullbar eingefroren
+     * @return array{trennbar: array<int, array{kind:string, ziel:string, spalten:array<int, string>, wo:array<string, int|string>, weich:bool, trennen:string, zeilen:int, text:string}>, hinweise: array<int, string>}
      */
-    private function importRisiken(array $imArchiv, array $local): array {
-        $risiken = [];
-        foreach ($this->fremdschluessel() as $fk) {
-            // Elterntabelle wird ersetzt, Kindtabelle bleibt stehen: genau
-            // die Kombination, aus der verwaiste Verweise entstehen.
-            if (!isset($imArchiv[$fk['ziel']]) || isset($imArchiv[$fk['tabelle']])) {
+    private function importRisiken(DumpBefund $befund, array $fks, array $lokal, array $nullbar): array {
+        $plan = $befund->plan();
+        $ersetzt = static fn(string $t): bool => ($plan[$t] ?? null) === DumpPruefer::AUSFUEHREN;
+        $db = Database::getInstance();
+        $trennbar = [];
+        $hinweise = [];
+
+        $kandidaten = [];
+        foreach ($fks as $fk) {
+            $kandidaten[] = [
+                'kind' => $fk['tabelle'], 'ziel' => $fk['ziel'], 'spalten' => [$fk['spalte']], 'wo' => [],
+                'weich' => false,
+                'trennen' => ($nullbar[$fk['tabelle']][$fk['spalte']] ?? false) ? 'null' : 'loeschen',
+            ];
+        }
+        foreach ($this->weicheVerweise() as $kind => $eintraege) {
+            foreach (self::weicheGruppen($eintraege) as $g) {
+                $kandidaten[] = [
+                    'kind' => $kind, 'ziel' => $g['ziel'], 'spalten' => $g['spalten'], 'wo' => $g['wo'],
+                    'weich' => true, 'trennen' => $g['trennen'],
+                ];
+            }
+        }
+
+        foreach ($kandidaten as $k) {
+            // Eltern ersetzt, Kind bleibt stehen (und existiert hier).
+            if (!$ersetzt($k['ziel']) || $ersetzt($k['kind']) || !isset($lokal[$k['kind']])) {
                 continue;
             }
-            $n = (int) ($local['tables'][$fk['tabelle']] ?? 0);
+            [$bedingung, $parameter] = self::verweisBedingung($k['spalten'], $k['wo'], $k['weich']);
+            $n = self::zaehle($db, $k['kind'], $bedingung, $parameter);
             if ($n === 0) {
                 continue;
             }
-            $risiken[$fk['tabelle'] . '|' . $fk['ziel']] = 'Bis zu '
-                . number_format($n, 0, ',', '.') . ' Zeile(n) in ' . $fk['tabelle']
-                . ' verweisen auf ' . $fk['ziel'] . '. Diese Tabelle wird ersetzt, ' . $fk['tabelle']
-                . ' nicht - Verweise auf Kennungen, die das Archiv nicht mitbringt, zeigen danach ins Leere.';
+            $folge = match ($k['trennen']) {
+                'null' => 'Beim Trennen wird der Verweis auf NULL gesetzt.',
+                'null_wert' => 'Beim Trennen wird der Verweis auf 0 („Datensatz entfernt“) gesetzt.',
+                default => 'Beim Trennen werden diese Zeilen gelöscht.',
+            };
+            $k['zeilen'] = $n;
+            $k['text'] = number_format($n, 0, ',', '.') . ' Zeile(n) in ' . $k['kind']
+                . ' (' . implode(', ', $k['spalten']) . ') verweisen auf ' . $k['ziel'] . '. ' . $k['ziel']
+                . ' wird durch das Archiv ersetzt, ' . $k['kind'] . ' nicht: Die Zeilen hängen danach an den '
+                . 'Datensätzen des Archivs mit derselben Kennung - bei verschiedenen Beständen also an fremden; '
+                . 'nur wo die Kennung im Archiv fehlt, zeigen sie ins Leere. ' . $folge;
+            $trennbar[] = $k;
         }
-        ksort($risiken);
-        return array_values($risiken);
+
+        // Umgekehrte Richtung: Kind ersetzt, Eltern bleiben. Verweisziele aus
+        // dem Dump (REFERENCES) und den Fremdschlüsseln dieser Instanz.
+        $paare = [];
+        foreach ($befund->tabellen as $kind => $info) {
+            if ($info['aktion'] !== DumpPruefer::AUSFUEHREN || $info['zeilen'] === 0) {
+                continue;
+            }
+            foreach ($info['verweise'] as $ziel) {
+                $paare[$kind . '|' . $ziel] = [$kind, $ziel];
+            }
+        }
+        foreach ($fks as $fk) {
+            if ($ersetzt($fk['tabelle']) && ($befund->tabellen[$fk['tabelle']]['zeilen'] ?? 0) > 0) {
+                $paare[$fk['tabelle'] . '|' . $fk['ziel']] = [$fk['tabelle'], $fk['ziel']];
+            }
+        }
+        foreach ($this->weicheVerweise() as $kind => $eintraege) {
+            if ($ersetzt($kind) && ($befund->tabellen[$kind]['zeilen'] ?? 0) > 0) {
+                foreach ($eintraege as $e) {
+                    $paare[$kind . '|' . $e['ziel']] = [$kind, $e['ziel']];
+                }
+            }
+        }
+        ksort($paare);
+        foreach ($paare as [$kind, $ziel]) {
+            // users: Solche Tabellen werden ohne users gar nicht ersetzt (M3).
+            if ($kind === $ziel || $ziel === 'users' || $ersetzt($ziel) || !isset($lokal[$ziel])) {
+                continue;
+            }
+            $hinweise[] = $kind . ' wird ersetzt, ' . $ziel . ' nicht - die Zeilen des Archivs hängen danach an '
+                . 'den Datensätzen dieser Instanz mit gleicher Kennung.';
+        }
+
+        return ['trennbar' => $trennbar, 'hinweise' => $hinweise];
     }
 
     /** @return array<int, string> Harte Hindernisse (Import wird verweigert) */
@@ -1503,9 +3017,13 @@ class MigrationController extends BaseController {
 
     private function readManifest(string $path): array {
         $json = null;
+        $anzahl = ['manifest.json' => 0, 'database.sql' => 0];
         $reader = new TarReader($path);
         try {
-            $reader->each(function (string $name, int $size, callable $read) use (&$json) {
+            $reader->each(function (string $name, int $size, callable $read) use (&$json, &$anzahl) {
+                if (isset($anzahl[$name])) {
+                    $anzahl[$name]++;
+                }
                 $data = '';
                 while (($chunk = $read()) !== '') {
                     if ($json === null && $name === 'manifest.json') {
@@ -1521,6 +3039,14 @@ class MigrationController extends BaseController {
             });
         } finally {
             $reader->close();
+        }
+        // Doppelte Einträge: tar erlaubt sie, beim Lesen gewönne je nach
+        // Stelle der erste oder der letzte - Vorschau und Anwenden sähen dann
+        // verschiedene Inhalte.
+        foreach ($anzahl as $eintrag => $n) {
+            if ($n > 1) {
+                throw new \RuntimeException("{$eintrag} steht mehrfach im Archiv - so schreibt dieses Addon kein Archiv.");
+            }
         }
         if ($json === null) {
             throw new \RuntimeException('manifest.json fehlt im Archiv.');
@@ -1550,8 +3076,14 @@ class MigrationController extends BaseController {
             $this->fail('Archiv nicht gefunden.');
             return;
         }
-        $manifest = $this->readManifest($path);
-        $problems = $this->compatibilityProblems($manifest, $this->localInventory());
+        try {
+            $manifest = $this->readManifest($path);
+        } catch (\Throwable $e) {
+            $this->fail('Import abgebrochen, nichts verändert: ' . $e->getMessage());
+            return;
+        }
+        $local = $this->localInventory();
+        $problems = $this->compatibilityProblems($manifest, $local);
         if ($problems) {
             $this->fail(implode(' ', $problems));
             return;
@@ -1559,153 +3091,220 @@ class MigrationController extends BaseController {
         $auswahl = $this->auswahlDesArchivs($manifest);
         $vollstaendig = Exportauswahl::istVollstaendig($auswahl);
 
-        // 1. Rückweg sichern: Dump der Zielinstanz VOR dem Import.
+        // Einmal lesen und einfrieren: Fremdschlüssel, Nullbarkeit und die
+        // Paketgrenze. DROP/CREATE ändern information_schema, während der
+        // Dump läuft - Plan und Trennen dürfen sich nicht nach einem
+        // Zwischenstand richten.
+        $fks = $this->fremdschluessel();
+        $fkKarte = self::fkKarte($fks);
+        $nullbar = $this->spaltenNullbar();
+        $paketGrenze = self::paketGrenze(Database::getInstance());
+
+        // 1. Archiv prüfen und entpacken - VOR der Sicherung, dem
+        //    Wartungsmodus und jedem Schreibzugriff auf die Datenbank.
+        //
+        //    database.sql läuft durch den Prüfer und zugleich in eine
+        //    Zwischendatei (0600, außerhalb des Webroots): Sie ist die Quelle
+        //    des zweiten Durchlaufs, der tatsächlich ausführt. Sie enthält
+        //    womöglich Zugangsmaterial und verschwindet deshalb in jedem Fall -
+        //    im finally, und für die Wege, die mit exit enden oder hart
+        //    abbrechen, zusätzlich per Shutdown-Funktion (und in der Übersicht
+        //    nach einer Stunde, siehe raeumeZwischendateienAuf()).
+        //
+        //    Das Nebenverzeichnis für die Uploads liegt AUSSERHALB von
+        //    public/. Vorher hieß es "public/uploads.import-neu" und lag damit
+        //    im Webroot: Zwischen dem ersten geschriebenen Eintrag und dem
+        //    Umschalten war jede Datei des Archivs unter ihrem eigenen Namen
+        //    über den Webserver erreichbar - inklusive einer .php.
+        $uploadsNew = $this->stageDir() . '/uploads-neu';
+        $this->removeDir($uploadsNew);
+        mkdir($uploadsNew, 0755, true);
+        $zwischenPfad = $this->stageDir() . '/.import-' . bin2hex(random_bytes(8)) . '.sql';
+        register_shutdown_function(static function () use ($zwischenPfad): void {
+            if (is_file($zwischenPfad)) {
+                @unlink($zwischenPfad);
+            }
+        });
+        try {
+            $this->importiere($path, $manifest, $auswahl, $vollstaendig, $local, $fks, $fkKarte, $nullbar,
+                $paketGrenze, $zwischenPfad, $uploadsNew);
+        } finally {
+            if (is_file($zwischenPfad)) {
+                @unlink($zwischenPfad);
+            }
+        }
+    }
+
+    /**
+     * Der eigentliche Ablauf, in dieser Reihenfolge:
+     * Archiv prüfen -> Vollsicherung -> Sicherung trocken prüfen ->
+     * Wartungsmodus -> Dump -> Trennen -> Sitzungen beenden -> bei Fehler
+     * Rückweg -> Wartungsmodus aufheben (außer der Rückweg ist gescheitert).
+     *
+     * @param array<int, string> $auswahl
+     * @param array{tables:array<string,int>} $local
+     * @param array<int, array{tabelle:string, spalte:string, ziel:string}> $fks
+     * @param array<string, array<int, string>> $fkKarte
+     * @param array<string, array<string, bool>> $nullbar
+     */
+    private function importiere(string $path, array $manifest, array $auswahl, bool $vollstaendig, array $local,
+                                array $fks, array $fkKarte, array $nullbar, int $paketGrenze,
+                                string $zwischenPfad, string $uploadsNew): void {
+        $zh = @fopen($zwischenPfad, 'xb');
+        if ($zh === false) {
+            $this->removeDir($uploadsNew);
+            $this->fail('Zwischendatei nicht anlegbar - nichts verändert.');
+            return;
+        }
+        @chmod($zwischenPfad, 0600);
+        try {
+            $pruefung = $this->pruefeArchiv($path, $manifest, $auswahl, $fkKarte, $paketGrenze, $zh, $uploadsNew);
+        } finally {
+            $geschlossen = fclose($zh);
+        }
+        if ($pruefung['problem'] === null && !$geschlossen) {
+            $pruefung['problem'] = 'Zwischendatei konnte nicht abgeschlossen werden.';
+        }
+        if ($pruefung['problem'] !== null) {
+            $this->removeDir($uploadsNew);
+            $this->fail('Import abgebrochen, nichts verändert: ' . $pruefung['problem']);
+            return;
+        }
+        $befund = $pruefung['befund'];
+        $plan = $befund->plan();
+
+        // 2. Pflichtwahl für stehenbleibende abhängige Zeilen - serverseitig
+        //    neu berechnet, nicht dem Formular geglaubt.
+        $risiken = $this->importRisiken($befund, $fks, $local['tables'], $nullbar);
+        $abhaengige = (string) ($_POST['abhaengige'] ?? '');
+        if ($risiken['trennbar'] !== [] && !in_array($abhaengige, ['trennen', 'stehen_lassen'], true)) {
+            $this->removeDir($uploadsNew);
+            $this->fail('Import abgebrochen, nichts verändert: Abhängige Zeilen dieser Instanz verweisen auf Tabellen, '
+                . 'die das Archiv ersetzt. Bitte in der Vorschau „trennen“ oder „stehen lassen“ wählen.');
+            return;
+        }
+
+        // 3. Rückweg sichern: Dump der Zielinstanz VOR dem Import.
         //
         // Immer VOLLSTÄNDIG, auch wenn nur ein Teilarchiv eingespielt wird -
         // die Sicherung ist der Rückweg, und ein Rückweg, der nur die Hälfte
         // kennt, ist keiner. Über dumpTo() in die Datei statt über dump() in
         // einen String: Der Speicherbedarf bleibt damit unabhängig von der
-        // Instanzgröße (Framework#231).
+        // Instanzgröße (Framework#231). Erst jetzt, nach der Prüfung des
+        // Archivs: Ein abgewiesenes Archiv hinterlässt keine Sicherung.
         $backupName = 'sicherung-vor-import-' . gmdate('Ymd-His') . '.sql' . (function_exists('gzencode') ? '.gz' : '');
         $backupPfad = $this->stageDir() . '/' . $backupName;
         $gz = function_exists('gzopen') && str_ends_with($backupName, '.gz');
         $bh = $gz ? gzopen($backupPfad, 'wb6') : fopen($backupPfad, 'wb');
         if ($bh === false) {
+            $this->removeDir($uploadsNew);
             $this->fail('Sicherungs-Dump nicht schreibbar - nichts verändert.');
             return;
         }
         try {
             DatabaseDumper::dumpTo(function (string $chunk) use ($bh, $gz): void {
+                // gzwrite() meldet einen Schreibfehler mit 0, nicht false (M43).
                 $ok = $gz ? gzwrite($bh, $chunk) : fwrite($bh, $chunk);
-                if ($ok === false) {
-                    throw new \RuntimeException('Sicherungs-Dump konnte nicht geschrieben werden.');
+                if ($ok !== strlen($chunk)) {
+                    throw new \RuntimeException('Sicherungs-Dump konnte nicht geschrieben werden (Datenträger voll?).');
                 }
             });
         } catch (\Throwable $e) {
             $gz ? gzclose($bh) : fclose($bh);
             @unlink($backupPfad);
+            $this->removeDir($uploadsNew);
             $this->fail('Sicherungs-Dump fehlgeschlagen, Import abgebrochen: ' . $e->getMessage());
             return;
         }
-        $gz ? gzclose($bh) : fclose($bh);
+        if (!($gz ? gzclose($bh) : fclose($bh))) {
+            @unlink($backupPfad);
+            $this->removeDir($uploadsNew);
+            $this->fail('Sicherungs-Dump konnte nicht abgeschlossen werden, Import abgebrochen - nichts verändert.');
+            return;
+        }
 
-        // 2. Archiv in einem Durchlauf anwenden: SQL sammeln, Uploads in ein
-        //    Nebenverzeichnis entpacken; erst wenn beides fehlerfrei durch ist,
-        //    wird umgeschaltet.
-        //
-        // Das Nebenverzeichnis liegt AUSSERHALB von public/. Vorher hieß es
-        // "public/uploads.import-neu" und lag damit im Webroot: Zwischen dem
-        // ersten geschriebenen Eintrag und dem Umschalten war jede Datei des
-        // Archivs unter ihrem eigenen Namen über den Webserver erreichbar -
-        // inklusive einer .php. Es kostet nichts, das Fenster ganz zu
-        // schließen; var/ ist ohnehin schon die Ablage dieses Addons.
-        $uploadsNew = $this->stageDir() . '/uploads-neu';
-        $this->removeDir($uploadsNew);
-        mkdir($uploadsNew, 0755, true);
-        $sql = null;
-        $uebersprungen = 0;
-        // Ob Uploads angefasst werden, entscheidet der TATSÄCHLICHE Inhalt des
-        // Archivs, nicht das Manifest. Ein Manifest ist eine Behauptung; das
-        // Verzeichnis public/uploads zu leeren, weil in einer JSON-Datei
-        // "dateien" stand, wäre die teuerste Art, ihr zu glauben.
-        $dateienImArchiv = 0;
-        $reader = new TarReader($path);
+        // 4. Die Sicherung einmal trocken prüfen, BEVOR sich etwas ändert.
+        //    Sonst fiele der Rückweg genau dann aus, wenn er gebraucht wird -
+        //    etwa an einer View (für die der Kern eine leere Anweisung
+        //    schreibt) oder an einer Zeile über max_allowed_packet.
         try {
-            $reader->each(function (string $name, int $size, callable $read) use (&$sql, &$uebersprungen, &$dateienImArchiv, $uploadsNew) {
-                if ($name === 'database.sql') {
-                    $data = '';
-                    while (($chunk = $read()) !== '') {
-                        $data .= $chunk;
-                    }
-                    $sql = $data;
-                    return;
-                }
-                if (str_starts_with($name, 'uploads/')) {
-                    $rel = substr($name, strlen('uploads/'));
-                    // Pfadhärtung: keine Traversal, keine absoluten Pfade.
-                    if ($rel === '' || str_contains($rel, '..') || str_starts_with($rel, '/') || str_contains($rel, "\0")) {
-                        throw new \RuntimeException("Unzulässiger Pfad im Archiv: {$name}");
-                    }
-                    // ... und keine ausführbaren Dateien. Die Pfadhärtung
-                    // darüber prüfte, WOHIN geschrieben wird, aber nicht WAS -
-                    // und das Ziel ist am Ende public/uploads. Der Inhalt
-                    // stammt aus einer hochgeladenen Datei, das Recht dafür ist
-                    // an jede Gruppe vergebbar. Ohne diese Prüfung genügte ein
-                    // Archiv mit einer .php darin für Codeausführung.
-                    // Webserver-Steuerdateien werden verworfen, nicht
-                    // übernommen - der Ausführungsschutz des Zielverzeichnisses
-                    // darf nicht aus dem Archiv stammen. Er wird nach dem
-                    // Umschalten neu geschrieben.
-                    if (UploadNamePolicy::istWebserverSteuerdatei($rel)) {
-                        $uebersprungen++;
-                        while ($read() !== '') { // Datenstrom verwerfen
-                        }
-                        return;
-                    }
-                    UploadNamePolicy::assertAllowed($rel);
-
-                    $target = $uploadsNew . '/' . $rel;
-                    if (!is_dir(dirname($target))) {
-                        mkdir(dirname($target), 0755, true);
-                    }
-                    $out = fopen($target, 'wb');
-                    while (($chunk = $read()) !== '') {
-                        fwrite($out, $chunk);
-                    }
-                    fclose($out);
-                    $dateienImArchiv++;
-                    return;
-                }
-                while ($read() !== '') { // manifest.json u. ä.: konsumieren
-                }
-            });
+            $this->pruefeSicherung($backupPfad, $paketGrenze);
         } catch (\Throwable $e) {
-            $reader->close();
+            @unlink($backupPfad);
             $this->removeDir($uploadsNew);
-            $this->fail('Import abgebrochen, nichts verändert: ' . $e->getMessage());
-            return;
-        }
-        $reader->close();
-        if ($sql === null) {
-            $this->removeDir($uploadsNew);
-            $this->fail('database.sql fehlt im Archiv - nichts verändert.');
+            $this->fail('Die Sicherung dieser Instanz ließe sich nicht zurückspielen - Import abgebrochen, nichts '
+                . 'verändert. Grund: ' . $e->getMessage());
             return;
         }
 
-        // 3. Datenbank ersetzen (Dump bringt DROP/CREATE/INSERT je Tabelle mit).
+        // 5. Datenbank ersetzen - unter Wartungsmodus, und das ist keine
+        //    Kosmetik: Der Dump wirft jede Tabelle einzeln weg und legt sie
+        //    neu an. Zwischen dem DROP der ersten und dem letzten INSERT gibt
+        //    es ein Zeitfenster, in dem parallele Anfragen auf eine halb
+        //    ersetzte Datenbank träfen. DDL in MariaDB ist zudem
+        //    transaktions-autocommittend: Ein "einfach in eine Transaktion
+        //    packen" gibt es hier nicht, der Wartungsmodus ist die vorhandene
+        //    und richtige Antwort (App\Service\Maintenance, vom Kern in
+        //    public/index.php vor jedem DB-Zugriff geprüft).
         //
-        // Unter Wartungsmodus, und das ist keine Kosmetik: Der Dump wirft jede
-        // Tabelle einzeln weg und legt sie neu an. Zwischen dem DROP der
-        // ersten und dem letzten INSERT gibt es ein Zeitfenster von Sekunden
-        // bis Minuten, in dem parallele Anfragen auf eine halb ersetzte
-        // Datenbank treffen - Besucher sehen Fehlerseiten, ein laufender
-        // Cron-Lauf schreibt in Tabellen, die gleich wieder verschwinden, und
-        // der Kern legt beim nächsten Verbindungsaufbau womöglich mitten im
-        // Import eine Migration los. DDL in MariaDB ist zudem
-        // transaktions-autocommittend: Ein "einfach in eine Transaktion
-        // packen" gibt es hier nicht, der Wartungsmodus ist die vorhandene und
-        // richtige Antwort (App\Service\Maintenance, vom Kern in
-        // public/index.php vor jedem DB-Zugriff geprüft).
-        //
-        // Schlägt das Einspielen fehl, wird der zuvor geschriebene
-        // Sicherungs-Dump zurückgespielt. Ohne das bliebe die Zielinstanz mit
-        // halbem Bestand stehen, und der Rückweg wäre Handarbeit auf einer
-        // Datenbank, die niemand mehr benutzen kann.
+        //    Ein abgebrochener Browser oder ein Zeitlimit darf den Lauf
+        //    zwischen DROP und Rückweg nicht beenden.
+        ignore_user_abort(true);
+        @set_time_limit(0);
         \App\Service\Maintenance::enable('Datenmigrations-Import läuft');
+
+        $benutzerErsetzt = self::benutzerbezogenErsetzt($befund, $fkKarte);
+        $getrennt = [];
         try {
-            Database::getInstance()->exec($sql);
-        } catch (\Throwable $e) {
-            $this->rollbackFromBackup($backupName, $e);
-            \App\Service\Maintenance::disable();
-            $this->removeDir($uploadsNew);
-            $this->fail(
-                'Import fehlgeschlagen, der Sicherungsstand wurde zurückgespielt: ' . $e->getMessage()
+            $imp = $this->importVerbindung();
+
+            // Höchste session_version VOR dem ersten DROP (M2) - danach steht
+            // in users schon der Stand des Archivs.
+            $maxVorher = 0;
+            try {
+                $maxVorher = (int) $imp->query('SELECT COALESCE(MAX(session_version), 0) FROM users')->fetchColumn();
+            } catch (\Throwable $e) {
+                // Keine users-Tabelle: dann gibt es auch keine Sitzung.
+            }
+
+            // Zweiter Durchlauf über die Zwischendatei: erneut geprüft, an den
+            // Plan gebunden, ausgeführt.
+            $this->spieleDumpEin(
+                $zwischenPfad,
+                $imp,
+                new DumpPruefer($paketGrenze, Importregel::fuer($auswahl, $fkKarte), $plan),
+                self::sammelGrenze($paketGrenze)
             );
+
+            if ($abhaengige === 'trennen') {
+                $getrennt = $this->trenneAbhaengige($imp, $risiken['trennbar']);
+            }
+
+            if ($benutzerErsetzt) {
+                $this->beendeAlleSitzungen($imp, $maxVorher);
+            }
+        } catch (\Throwable $e) {
+            $imp = null;
+            $this->removeDir($uploadsNew);
+            @unlink($zwischenPfad);
+            $rueckwegOk = $this->rueckwegEinspielen($backupName, $e);
+            Wartung::nachFehlschlag(
+                $rueckwegOk,
+                'Datenmigrations-Import und Rückweg gescheitert - Sicherung von Hand einspielen: '
+                    . $backupPfad . ', danach diese Datei löschen'
+            );
+            if (!$rueckwegOk) {
+                $this->renderNotfallseite($backupPfad, $e);
+                return;
+            }
+            $this->fail('Import fehlgeschlagen, der Sicherungsstand wurde zurückgespielt: ' . $e->getMessage());
             return;
         }
+        $imp = null;
         \App\Service\Maintenance::disable();
+        @unlink($zwischenPfad);
 
-        // 4. Uploads.
+        // 6. Uploads.
         //
         // Drei Fälle, und der erste ist der, wegen dem dieser Block seit #121
         // überhaupt eine Fallunterscheidung hat:
@@ -1721,6 +3320,13 @@ class MigrationController extends BaseController {
         //       ihre übrigen Dateien; überschriebene Originale wandern vorher
         //       nach var/datenmigration/ersetzte-dateien-…, damit auch dieser
         //       Weg einen Rückweg hat.
+        //
+        // Ob Uploads angefasst werden, entscheidet der TATSÄCHLICHE Inhalt des
+        // Archivs, nicht das Manifest. Ein Manifest ist eine Behauptung; das
+        // Verzeichnis public/uploads zu leeren, weil in einer JSON-Datei
+        // "dateien" stand, wäre die teuerste Art, ihr zu glauben.
+        $dateienImArchiv = $pruefung['stand']['dateien'];
+        $uebersprungen = $pruefung['stand']['uebersprungen'];
         $dateiBericht = 'Uploads unverändert';
         if ($dateienImArchiv === 0) {
             $this->removeDir($uploadsNew);
@@ -1753,29 +3359,284 @@ class MigrationController extends BaseController {
         // die Methode merkt das selbst und tut dann nichts.
         $this->restoreUploadsProtection();
 
+        // Die Audit-Zeile nennt, was TATSÄCHLICH ersetzt wurde - die geprüfte
+        // Liste, nicht die Behauptung des Manifests.
+        $uebersprungeneTabellen = $befund->uebersprungen();
+        $abhaengigBericht = '';
+        if ($risiken['trennbar'] !== []) {
+            $abhaengigBericht = $abhaengige === 'trennen'
+                ? ', abhängige Zeilen getrennt: ' . implode(', ', $getrennt)
+                : ', abhängige Zeilen stehen gelassen';
+        }
         PluginAudit::log(
             'datenmigration',
             'Import angewendet',
             basename($path),
             ($vollstaendig ? 'Vollarchiv' : 'Teilarchiv: ' . implode(', ', $auswahl))
                 . ' - Quelle: ' . (string) ($manifest['site_name'] ?? '?')
+                . ', ersetzt: ' . (implode(', ', $befund->ersetzt()) ?: 'keine Tabelle')
+                . ($uebersprungeneTabellen !== [] ? ', übersprungen: ' . implode(', ', array_keys($uebersprungeneTabellen)) : '')
+                . $abhaengigBericht
+                . ($benutzerErsetzt ? ', alle Sitzungen und API-Schlüssel beendet' : '')
                 . ', Sicherung: ' . $backupName
                 . ', ' . $dateiBericht
                 . ($uebersprungen > 0 ? ', ' . $uebersprungen . ' Webserver-Steuerdatei(en) verworfen' : '')
         );
 
-        // 5. Sitzung beenden - aber nur, wenn die Benutzerkonten tatsächlich
-        //    ausgetauscht wurden. Bei einem Teilarchiv ohne die Gruppe
-        //    "Benutzer, Gruppen, Rechte" ist das angemeldete Konto dasselbe
-        //    wie vorher; die Sitzung zu zerstören wäre dann nur eine
-        //    unerklärliche Abmeldung mitten in der Arbeit.
-        if (in_array(Exportauswahl::GRUPPE_BENUTZER, $auswahl, true)) {
+        // 7. Eigene Sitzung beenden - aber nur, wenn tatsächlich eine
+        //    benutzerbezogene Tabelle ersetzt wurde. Bei einem Teilarchiv
+        //    ohne Benutzerkonten ist das angemeldete Konto dasselbe wie
+        //    vorher; die Sitzung zu zerstören wäre dann nur eine
+        //    unerklärliche Abmeldung mitten in der Arbeit. Die übrigen
+        //    Sitzungen hat beendeAlleSitzungen() schon ungültig gemacht.
+        if ($benutzerErsetzt) {
             session_destroy();
             header('Location: /login?import=fertig');
             exit;
         }
         header('Location: /plugin/datenmigration/uebersicht?hinweis=importiert');
         exit;
+    }
+
+    /**
+     * Frische Datenbankverbindung nur für den Import (Audit N21).
+     *
+     * Warum nicht die Verbindung der App (Database::getInstance())?
+     *   - Der Dump setzt Sitzungsvariablen (FOREIGN_KEY_CHECKS, NAMES,
+     *     time_zone). An der App-Verbindung blieben sie hängen, und über sie
+     *     laufen danach Audit und Seitenaufbau.
+     *   - Bricht eine Anweisung die Verbindung ab (1153 "Paket zu groß", 2006
+     *     "Server gone away"), ist die App-Verbindung für den Rest der Anfrage
+     *     tot - und der gepinnte Kern hat keine API, sie neu aufzubauen. Der
+     *     Rückweg braucht aber eine funktionierende Verbindung.
+     *
+     * Aufbau wie Database::getInstance() (DSN mit Unix-Socket bei führendem
+     * '/', SSL-Optionen, echte Prepared Statements), dazu:
+     *   - ATTR_MULTI_STATEMENTS = false: Tiefenverteidigung. Auch wenn
+     *     DumpPruefer und Server ein Zeichen einmal verschieden deuten, kann
+     *     kein zweites Statement mitlaufen.
+     *   - sql_mode ohne NO_BACKSLASH_ESCAPES und ANSI_QUOTES - der Prüfer setzt
+     *     Backslash-Escapes und "…" als Zeichenkette voraus.
+     *   - time_zone = PHP-Versatz, nachgebaut nach dem privaten
+     *     Database::alignSessionTimeZone(). Ältere Dumps ohne eigenes
+     *     `SET time_zone` und die Sicherung wurden in diesem Versatz
+     *     geschrieben; ohne die Zeile verschöbe der Import jeden TIMESTAMP.
+     *     Ein `SET time_zone` im Dump (Framework N66) gilt danach.
+     *   - KEIN ensureSchemaUpToDate - mitten im Import wäre eine Migration
+     *     das Letzte, was man will.
+     *
+     * Folgeissue im Framework: Database::neueVerbindung() im Kern, dann
+     * hierauf umstellen - der Nachbau hier kann vom Kern abweichen.
+     */
+    private function importVerbindung(): PDO {
+        $host = (string) \DB_HOST;
+        $port = defined('DB_PORT') ? (string) \constant('DB_PORT') : '3306';
+        $dsn = str_starts_with($host, '/')
+            ? 'mysql:unix_socket=' . $host . ';dbname=' . \DB_NAME . ';charset=utf8mb4'
+            : 'mysql:host=' . $host . ';port=' . $port . ';dbname=' . \DB_NAME . ';charset=utf8mb4';
+        $optionen = [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::ATTR_EMULATE_PREPARES => false,
+            \Pdo\Mysql::ATTR_MULTI_STATEMENTS => false,
+        ];
+        if (defined('DB_SSL') && \constant('DB_SSL')) {
+            if (defined('DB_SSL_CA') && !empty(\constant('DB_SSL_CA'))) {
+                $optionen[\Pdo\Mysql::ATTR_SSL_CA] = \constant('DB_SSL_CA');
+            }
+            $optionen[\Pdo\Mysql::ATTR_SSL_VERIFY_SERVER_CERT] = defined('DB_SSL_VERIFY') && \constant('DB_SSL_VERIFY');
+        }
+        $db = new PDO($dsn, (string) \DB_USER, (string) \DB_PASS, $optionen);
+
+        $modus = (string) $db->query('SELECT @@SESSION.sql_mode')->fetchColumn();
+        $bereinigt = array_filter(
+            array_map('trim', explode(',', $modus)),
+            static fn(string $m): bool => $m !== '' && !in_array(strtoupper($m), ['NO_BACKSLASH_ESCAPES', 'ANSI_QUOTES', 'ANSI'], true)
+        );
+        $db->prepare('SET SESSION sql_mode = ?')->execute([implode(',', $bereinigt)]);
+        $db->prepare('SET time_zone = ?')->execute([(new \DateTimeImmutable('now'))->format('P')]);
+        return $db;
+    }
+
+    /**
+     * Spielt einen Dump streamend ein: Blöcke zu 512 KiB durch den Prüfer,
+     * dessen Anweisungen durch den DumpAusfuehrer auf $db. Der
+     * Speicherbedarf bleibt unabhängig von der Größe des Dumps.
+     */
+    private function spieleDumpEin(string $pfad, PDO $db, DumpPruefer $pruefer, int $sammelGrenze): void {
+        $fh = function_exists('gzopen') ? gzopen($pfad, 'rb') : fopen($pfad, 'rb');
+        if ($fh === false) {
+            throw new \RuntimeException('Dump nicht lesbar: ' . basename($pfad));
+        }
+        try {
+            $strom = (static function () use ($fh, $pruefer): \Generator {
+                while (true) {
+                    $chunk = function_exists('gzread') ? gzread($fh, 524288) : fread($fh, 524288);
+                    if ($chunk === false) {
+                        throw new \RuntimeException('Lesefehler im Dump.');
+                    }
+                    if ($chunk === '') {
+                        break;
+                    }
+                    yield from $pruefer->zufuehren($chunk);
+                }
+                yield from $pruefer->abschliessen();
+            })();
+            $ausfuehrer = new DumpAusfuehrer(static function (string $sql) use ($db): void {
+                $db->exec($sql);
+            }, $sammelGrenze);
+            $ausfuehrer->ausfuehren($strom);
+        } finally {
+            function_exists('gzclose') ? gzclose($fh) : fclose($fh);
+        }
+    }
+
+    /**
+     * Prüft die eben geschriebene Sicherung, ohne sie auszuführen: Sie muss
+     * vollständig durch den DumpPruefer laufen (vertrauenswürdig - jede
+     * Tabelle zählt, aber Positivliste und Paketgrenze gelten), und bei gzip
+     * muss der Trailer (CRC32 und Länge) zum gelesenen Inhalt passen. gzread()
+     * bemerkt ein abgeschnittenes Ende sonst nicht (Framework D26).
+     */
+    private function pruefeSicherung(string $pfad, int $paketGrenze): void {
+        $pruefer = new DumpPruefer($paketGrenze);
+        $gz = str_ends_with($pfad, '.gz');
+        $fh = $gz ? gzopen($pfad, 'rb') : fopen($pfad, 'rb');
+        if ($fh === false) {
+            throw new \RuntimeException('Sicherung nicht lesbar.');
+        }
+        $crc = hash_init('crc32b');
+        $laenge = 0;
+        try {
+            while (true) {
+                $chunk = $gz ? gzread($fh, 524288) : fread($fh, 524288);
+                if ($chunk === false) {
+                    throw new \RuntimeException('Lesefehler in der Sicherung.');
+                }
+                if ($chunk === '') {
+                    break;
+                }
+                hash_update($crc, $chunk);
+                $laenge += strlen($chunk);
+                foreach ($pruefer->zufuehren($chunk) as $_) {
+                }
+            }
+            foreach ($pruefer->abschliessen() as $_) {
+            }
+        } finally {
+            $gz ? gzclose($fh) : fclose($fh);
+        }
+        if (!$gz) {
+            return;
+        }
+        $roh = fopen($pfad, 'rb');
+        $kopf = $roh !== false ? fread($roh, 2) : false;
+        $trailer = ($roh !== false && fseek($roh, -8, SEEK_END) === 0) ? fread($roh, 8) : false;
+        if ($roh !== false) {
+            fclose($roh);
+        }
+        if ($kopf !== "\x1f\x8b" || !is_string($trailer) || strlen($trailer) !== 8) {
+            throw new \RuntimeException('Sicherung ist keine vollständige gzip-Datei.');
+        }
+        $werte = unpack('Vcrc/Vlaenge', $trailer);
+        if (sprintf('%08x', $werte['crc']) !== hash_final($crc) || $werte['laenge'] !== ($laenge & 0xFFFFFFFF)) {
+            throw new \RuntimeException('Prüfsumme der Sicherung stimmt nicht (Datei abgeschnitten oder beschädigt).');
+        }
+    }
+
+    /**
+     * Löst die Verweise stehenbleibender Zeilen auf ersetzte Tabellen
+     * ("trennen", Audit N23) - auf der Importverbindung, unter
+     * Wartungsmodus, nach dem Dump. Fremdschlüssel auf eine nullbare Spalte
+     * werden NULL, sonst wird die Zeile gelöscht; weiche Verweise nach ihrer
+     * Angabe. Ein Fehler führt wie jeder Importfehler zum Rückweg.
+     *
+     * Beim Löschen verschwinden auch Dateiverweise in Addon-Zeilen; die
+     * Dateien selbst bleiben liegen (README).
+     *
+     * @param array<int, array{kind:string, ziel:string, spalten:array<int, string>, wo:array<string, int|string>, weich:bool, trennen:string}> $risiken
+     * @return array<int, string> "tabelle: n" je Verweis
+     */
+    private function trenneAbhaengige(PDO $db, array $risiken): array {
+        $bericht = [];
+        foreach ($risiken as $r) {
+            [$bedingung, $parameter] = self::verweisBedingung($r['spalten'], $r['wo'], $r['weich']);
+            $tabelle = self::bezeichner($r['kind']);
+            if ($r['trennen'] === 'loeschen') {
+                $stmt = $db->prepare('DELETE FROM ' . $tabelle . ' WHERE ' . $bedingung);
+            } else {
+                $wert = $r['trennen'] === 'null' ? 'NULL' : '0';
+                $setzen = implode(', ', array_map(
+                    static fn(string $s): string => self::bezeichner($s) . ' = ' . $wert,
+                    $r['spalten']
+                ));
+                $stmt = $db->prepare('UPDATE ' . $tabelle . ' SET ' . $setzen . ' WHERE ' . $bedingung);
+            }
+            $stmt->execute($parameter);
+            $bericht[] = $r['kind'] . '.' . implode('/', $r['spalten']) . ' ('
+                . ($r['trennen'] === 'loeschen' ? 'gelöscht' : 'gelöst') . ': ' . $stmt->rowCount() . ')';
+        }
+        return $bericht;
+    }
+
+    /**
+     * Beendet ALLE Sitzungen und entwertet alle API-Schlüssel, nachdem
+     * Benutzerkonten ersetzt wurden (Audit M2).
+     *
+     * Der Kern prüft je Anfrage $_SESSION['session_version'] gegen
+     * users.session_version (BaseController::checkAuth) und je API-Aufruf
+     * api_keys.issued_session_version gegen denselben Wert
+     * (ApiKey::authenticate). Nach dem Import steht in users aber der Stand
+     * des ARCHIVS: Eine laufende Sitzung auf Konto 7 lief weiter - jetzt als
+     * das Konto 7 der Quelle, bis hin zu dessen Administratorrechten.
+     *
+     * GREATEST statt eines schlichten +1: Ein Konto des Archivs könnte sonst
+     * zufällig genau auf den Wert einer lebenden Sitzung dieser Instanz
+     * springen. Über dem bisherigen Höchstwert liegt keine. Der zufällige
+     * Zuschlag (einer für alle Zeilen) deckt Sitzungen hart gelöschter Konten
+     * ab, deren Werte in MAX() nicht mehr auftauchen. Ein INT-Überlauf ist
+     * erst nach weit über 2.000 Importen denkbar.
+     *
+     * Halb angemeldete Sitzungen (pending_2fa_user_id) sind kein Umweg: Sie
+     * brauchen den zweiten Faktor des nun importierten Kontos und übernehmen
+     * beim Abschluss die dann aktuelle session_version (AuthController).
+     *
+     * Die Platzhalter heißen verschieden - mit echten Prepared Statements
+     * (EMULATE_PREPARES=false) darf ein Name nicht zweimal vorkommen.
+     */
+    private function beendeAlleSitzungen(PDO $db, int $maxVorher): void {
+        $stmt = $db->prepare('UPDATE users SET session_version = GREATEST(session_version, :max) + 1 + :zufall');
+        $stmt->execute(['max' => $maxVorher, 'zufall' => random_int(1, 1000000)]);
+    }
+
+    /**
+     * Fehlerseite nach gescheitertem Import UND gescheitertem Rückweg.
+     *
+     * Bewusst schlichtes HTML ohne PluginPage::render(): Das Layout liest
+     * Einstellungen und Navigation aus der Datenbank, und die ist gerade halb
+     * ersetzt. Die Seite nennt, was jetzt zu tun ist - der Wartungsmodus
+     * bleibt aktiv und sperrt auch Administratoren aus.
+     */
+    private function renderNotfallseite(string $backupPfad, \Throwable $ursache): void {
+        $e = static fn(string $v): string => htmlspecialchars($v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        http_response_code(500);
+        header('Content-Type: text/html; charset=UTF-8');
+        header('Cache-Control: no-store');
+        // theming-ausnahme: Notfallseite bei halb ersetzter Datenbank - das Layout liest Settings/Navigation aus der DB
+        echo '<!DOCTYPE html><html lang="de"><head><meta charset="utf-8">'
+            . '<title>Datenmigration: Wartungsmodus bleibt aktiv</title></head><body>'
+            . '<h1>Import gescheitert - und das Zurückspielen der Sicherung ebenfalls</h1>'
+            . '<p>Fehler beim Import: ' . $e($ursache->getMessage()) . '</p>'
+            . '<p><strong>Die Datenbank ist in einem unvollständigen Zustand.</strong> Die Instanz bleibt deshalb im '
+            . 'Wartungsmodus - für alle, auch für Administratoren -, bis sie von Hand wiederhergestellt ist:</p>'
+            . '<ol><li>Die Sicherung einspielen: <code>' . $e($backupPfad) . '</code><br>'
+            . 'z. B. <code>gunzip -c ' . $e(basename($backupPfad)) . ' | mysql -u BENUTZER -p DATENBANK</code> '
+            . '(bei einer Datei ohne .gz: <code>mysql -u BENUTZER -p DATENBANK &lt; DATEI</code>) oder über '
+            . 'phpMyAdmin („Importieren“).</li>'
+            . '<li>Danach die Datei <code>' . $e(\App\Service\Maintenance::lockFile()) . '</code> löschen - erst '
+            . 'dann ist die Instanz wieder erreichbar.</li></ol>'
+            . '<p>Einzelheiten stehen im Audit-Log (Kategorie „security“) und im Serverprotokoll.</p>'
+            . '</body></html>';
     }
 
     /**
@@ -1874,27 +3735,46 @@ class MigrationController extends BaseController {
 
     /**
      * Spielt den unmittelbar vor dem Import geschriebenen Sicherungs-Dump
-     * zurück. Wirft NICHT weiter: Der Aufrufer meldet dem Benutzer den
-     * ursprünglichen Fehler, und ein zweiter Fehler beim Zurückrollen darf
-     * die Meldung nicht verdrängen - er gehört ins Protokoll, weil dann
-     * Handarbeit nötig ist.
+     * zurück - streamend, geprüft und über eine NEUE Importverbindung (die
+     * des gescheiterten Imports kann tot sein). Meldet Erfolg oder
+     * Fehlschlag; bis 1.1.0 lief das als ein einziges Paket über die
+     * App-Verbindung, scheiterte bei großen Instanzen an max_allowed_packet,
+     * und die Meldung behauptete trotzdem "zurückgespielt".
+     *
+     * Wirft NICHT weiter: Der Aufrufer meldet dem Benutzer den ursprünglichen
+     * Fehler, und ein zweiter Fehler beim Zurückrollen darf die Meldung
+     * nicht verdrängen - er gehört ins Protokoll, weil dann Handarbeit nötig
+     * ist (siehe Wartung::nachFehlschlag()).
      */
-    private function rollbackFromBackup(string $backupName, \Throwable $ursache): void {
+    private function rueckwegEinspielen(string $backupName, \Throwable $ursache): bool {
         $pfad = $this->stageDir() . '/' . $backupName;
 
         try {
             if (!is_file($pfad)) {
                 throw new \RuntimeException("Sicherungs-Dump nicht gefunden: {$backupName}");
             }
-            $dump = str_ends_with($backupName, '.gz')
-                ? (string) gzdecode((string) file_get_contents($pfad))
-                : (string) file_get_contents($pfad);
-            if ($dump === '') {
-                throw new \RuntimeException('Sicherungs-Dump ist leer.');
+            $db = $this->importVerbindung();
+            $grenze = self::paketGrenze($db);
+            $this->spieleDumpEin($pfad, $db, new DumpPruefer($grenze), self::sammelGrenze($grenze));
+        } catch (\Throwable $e) {
+            error_log('Datenmigration: Rollback fehlgeschlagen - ' . $e->getMessage());
+            try {
+                AuditLogger::log(
+                    'Datenmigration: Zurückrollen FEHLGESCHLAGEN',
+                    'security',
+                    'Import scheiterte (' . $ursache->getMessage() . '), das Zurückspielen von '
+                    . $backupName . ' ebenfalls (' . $e->getMessage() . ') - die Datenbank ist in einem '
+                    . 'unvollständigen Zustand und muss von Hand aus var/datenmigration/' . $backupName
+                    . ' wiederhergestellt werden. Der Wartungsmodus bleibt bis dahin aktiv.'
+                );
+            } catch (\Throwable $auchDas) {
+                // Die Datenbank ist halb ersetzt - das Serverprotokoll oben
+                // ist dann der einzige Weg, der sicher ankommt.
             }
+            return false;
+        }
 
-            Database::getInstance()->exec($dump);
-
+        try {
             PluginAudit::log(
                 'datenmigration',
                 'Import zurückgerollt',
@@ -1902,16 +3782,9 @@ class MigrationController extends BaseController {
                 'Grund: ' . $ursache->getMessage() . ' - Sicherung eingespielt'
             );
         } catch (\Throwable $e) {
-            AuditLogger::log(
-                'Datenmigration: Zurückrollen FEHLGESCHLAGEN',
-                'security',
-                'Import scheiterte (' . $ursache->getMessage() . '), das Zurückspielen von '
-                . $backupName . ' ebenfalls (' . $e->getMessage() . ') - die Datenbank ist in einem '
-                . 'unvollständigen Zustand und muss von Hand aus var/datenmigration/' . $backupName
-                . ' wiederhergestellt werden.'
-            );
-            error_log('Datenmigration: Rollback fehlgeschlagen - ' . $e->getMessage());
+            error_log('Datenmigration: Rückweg gelungen, Audit-Eintrag nicht - ' . $e->getMessage());
         }
+        return true;
     }
 
     /** Rückfall für rename() über Dateisystemgrenzen hinweg. */

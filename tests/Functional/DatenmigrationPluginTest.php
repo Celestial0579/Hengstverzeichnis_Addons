@@ -7,8 +7,12 @@ use App\Database;
 
 require_once __DIR__ . '/../../plugins/datenmigration/Plugin.php';
 
+use App\Security\ApiKey;
+use App\Service\DatabaseDumper;
+use Plugin\Datenmigration\DumpPruefer;
 use Plugin\Datenmigration\Exportauswahl;
 use Plugin\Datenmigration\TarReader;
+use Plugin\Datenmigration\TarWriter;
 
 /**
  * End-to-End-Test für plugins/datenmigration: exportiert die laufende
@@ -216,7 +220,7 @@ class DatenmigrationPluginTest extends FunctionalTestCase {
             'csrf_token' => $preview->formField('csrf_token') ?? '',
             'datei' => $stagedName,
             'bestaetigt' => '1',
-        ]);
+        ] + $this->pflichtwahl($preview));
         $this->assertSame('/login?import=fertig', $apply->location(), "Import fehlgeschlagen, Body: {$apply->body}");
 
         // Rundreise geprüft: Pferdename wieder original, Upload-Datei zurück.
@@ -496,12 +500,15 @@ class DatenmigrationPluginTest extends FunctionalTestCase {
         $this->assertSame(200, $preview->statusCode);
         $this->assertStringContainsString('Teilarchiv', $preview->body);
         $this->assertStringContainsString('bleibt unverändert', $preview->body);
+        // Keine Benutzertabelle ersetzt -> kein Hinweis auf beendete Sitzungen.
+        $this->assertStringNotContainsString('Sitzungen und API-Schlüssel', $preview->body);
 
+        $sessionVersionen = $this->sessionVersionen();
         $apply = $admin->post('/plugin/datenmigration/import/anwenden', [
             'csrf_token' => $preview->formField('csrf_token') ?? '',
             'datei' => $stagedName,
             'bestaetigt' => '1',
-        ]);
+        ] + $this->pflichtwahl($preview));
         $this->assertSame(
             '/plugin/datenmigration/uebersicht?hinweis=importiert',
             $apply->location(),
@@ -529,7 +536,10 @@ class DatenmigrationPluginTest extends FunctionalTestCase {
         );
 
         // Die Sitzung bleibt gültig - die Konten wurden ja nicht getauscht.
+        // Gegenprobe zu Audit M2: Ohne ersetzte Benutzertabelle bleibt auch
+        // jede session_version, wie sie war.
         $this->assertSame(200, $admin->get('/admin/plugins')->statusCode);
+        $this->assertSame($sessionVersionen, $this->sessionVersionen());
 
         // Aufräumen.
         unlink($uploadAbs);
@@ -571,7 +581,7 @@ class DatenmigrationPluginTest extends FunctionalTestCase {
             'csrf_token' => $preview->formField('csrf_token') ?? '',
             'datei' => $stagedName,
             'bestaetigt' => '1',
-        ]);
+        ] + $this->pflichtwahl($preview));
         $this->assertSame(
             '/plugin/datenmigration/uebersicht?hinweis=importiert',
             $apply->location(),
@@ -639,6 +649,9 @@ class DatenmigrationPluginTest extends FunctionalTestCase {
         $this->assertSame(200, $warnung->statusCode);
         $this->assertStringContainsString('fehlende Gegenstücke', $warnung->body);
         $this->assertStringContainsString('verweisen auf contacts', $warnung->body);
+        // Audit M3: Die Verweise zeigen auf dem Ziel nicht "ins Leere",
+        // sondern auf fremde Datensätze gleicher Kennung.
+        $this->assertStringContainsString('Datensätze mit derselben Kennung', $warnung->body);
         $this->assertStringContainsString('Archiv trotzdem so erstellen', $warnung->body);
         // Kein Archiv, solange nicht bestätigt wurde.
         $this->assertStringNotContainsString('attachment', (string) $warnung->header('Content-Disposition'));
@@ -664,5 +677,640 @@ class DatenmigrationPluginTest extends FunctionalTestCase {
 
         $stmt = $db->prepare('UPDATE horses SET breeding_station_id = NULL WHERE name = ?');
         $stmt->execute([$horseName]);
+    }
+
+    // -- Hilfen für die Import-Prüfung (Audit M1, M2, M3, N21, N23) -------
+
+    /**
+     * Die Pflichtwahl der Vorschau (Audit N23), falls sie erscheint. Welche
+     * Addon-Tabellen mit Zeilen gerade in der geteilten Testdatenbank stehen,
+     * hängt von der Reihenfolge der Suite ab - Tests, die NICHT die
+     * Pflichtwahl prüfen, lassen die Zeilen stehen, wie sie sind.
+     *
+     * @return array<string, string>
+     */
+    private function pflichtwahl(\Tests\Support\HttpResponse $preview): array {
+        return str_contains($preview->body, 'name="abhaengige"') ? ['abhaengige' => 'stehen_lassen'] : [];
+    }
+
+    /** @return array<int, int> id => session_version */
+    private function sessionVersionen(): array {
+        $aus = [];
+        foreach (Database::getInstance()->query('SELECT id, session_version FROM users ORDER BY id')->fetchAll() as $r) {
+            $aus[(int) $r['id']] = (int) $r['session_version'];
+        }
+        return $aus;
+    }
+
+    /** @return array<int, string> Sicherungs-Dumps in der Ablage */
+    private function sicherungen(): array {
+        return glob($this->stageDir() . '/sicherung-vor-import-*') ?: [];
+    }
+
+    private function wartungAktiv(): bool {
+        return is_file($this->frameworkRoot() . '/var/wartung.lock');
+    }
+
+    /**
+     * Exportiert die Gruppen und liefert Manifest und Dump des Archivs - der
+     * Ausgangsstoff für handgebaute und manipulierte Archive.
+     *
+     * @param array<int, string> $gruppen
+     * @return array{manifest: array<string, mixed>, sql: string, body: string, name: string}
+     */
+    private function exportiere(\Tests\Support\HttpClient $admin, array $gruppen): array {
+        $archiv = $this->erstelleArchiv($admin, $gruppen);
+        $pfad = sys_get_temp_dir() . '/dm-quelle-' . uniqid() . (str_ends_with($archiv['name'], '.gz') ? '.tar.gz' : '.tar');
+        file_put_contents($pfad, $archiv['body']);
+        $eintraege = $this->archivEintraege($pfad);
+        unlink($pfad);
+        return [
+            'manifest' => json_decode($eintraege['manifest.json'], true),
+            'sql' => $eintraege['database.sql'],
+            'body' => $archiv['body'],
+            'name' => $archiv['name'],
+        ];
+    }
+
+    /** Legt das (Export-)Archiv unter eigenem Namen in die Ablage. */
+    private function legeAb(string $body, string $praefix): string {
+        $name = $praefix . '-' . uniqid() . '.tar' . (str_starts_with($body, "\x1f\x8b") ? '.gz' : '');
+        file_put_contents($this->stageDir() . '/' . $name, $body);
+        $this->aufzuraeumen[] = $this->stageDir() . '/' . $name;
+        return $name;
+    }
+
+    /**
+     * Baut ein Archiv von Hand in die Ablage.
+     *
+     * @param array<int, array{0:string, 1:string}> $eintraege [Name, Inhalt]
+     */
+    private function baueArchiv(string $praefix, array $eintraege): string {
+        $name = $praefix . '-' . uniqid() . '.tar';
+        $tar = TarWriter::create($this->stageDir() . '/' . $name);
+        foreach ($eintraege as [$eintrag, $inhalt]) {
+            $tar->addString($eintrag, $inhalt);
+        }
+        $tar->close();
+        $this->aufzuraeumen[] = $this->stageDir() . '/' . $name;
+        return $name;
+    }
+
+    /** Hängt Blöcke vor den abschließenden SET-Zeilen an einen Dump. */
+    private static function vorDemFuss(string $sql, string $zusatz): string {
+        $fuss = strrpos($sql, 'SET FOREIGN_KEY_CHECKS=1;');
+        return substr($sql, 0, (int) $fuss) . $zusatz . substr($sql, (int) $fuss);
+    }
+
+    private function legePferdAn(string $name): int {
+        $db = Database::getInstance();
+        $db->prepare("INSERT INTO horses (name, status, sex, breed, birth_year) VALUES (?, 'active', 'stallion', 'Fjordpferd', 2015)")
+            ->execute([$name]);
+        return (int) $db->lastInsertId();
+    }
+
+    /** Admin-Konto dieser Suite: [id, password_hash]. */
+    private function adminKonto(): array {
+        $stmt = Database::getInstance()->prepare('SELECT id, password_hash FROM users WHERE email = ?');
+        $stmt->execute([self::$adminEmail]);
+        $r = $stmt->fetch();
+        return [(int) $r['id'], (string) $r['password_hash']];
+    }
+
+    /**
+     * Die Prüfung im Functional-Lauf gegen den TATSÄCHLICHEN Dump des
+     * gepinnten Kerns - mit den Kern- und den hier aktivierten
+     * Addon-Tabellen, so wie SHOW CREATE TABLE des laufenden Servers sie
+     * schreibt. Fällt dieser Test, weist der Import echte Archive ab.
+     */
+    public function testEchterDumpDesGepinntenKernsBestehtDiePruefung(): void {
+        $this->aktiviertesAddon();
+        $dump = DatabaseDumper::dump();
+        $pruefer = new DumpPruefer(1 << 24);
+        $anzahl = 0;
+        foreach (str_split($dump, 7919) as $teil) {
+            foreach ($pruefer->zufuehren($teil) as $_) {
+                $anzahl++;
+            }
+        }
+        foreach ($pruefer->abschliessen() as $_) {
+            $anzahl++;
+        }
+        $this->assertGreaterThan(40, $anzahl);
+        $this->assertArrayHasKey('users', $pruefer->befund()->tabellen);
+    }
+
+    /**
+     * Audit M1, der Kern der Sache: Ein "Teilarchiv Pferde", dessen Dump
+     * zusätzlich an users schreibt. Bis 1.1.0 sagte die Vorschau "alle
+     * übrigen Tabellen bleiben unverändert", und der Dump legte nebenbei ein
+     * Konto an. Jetzt: Fehler in der Vorschau, kein Knopf, und auch ein
+     * direkter POST ändert nichts - ohne Sicherung, ohne Wartungsmodus, denn
+     * die Prüfung liegt vor beidem.
+     */
+    public function testManipuliertesTeilarchivWirdAbgewiesen(): void {
+        $admin = $this->aktiviertesAddon();
+        $db = Database::getInstance();
+        $quelle = $this->exportiere($admin, ['pferde']);
+        [$adminId, $hashVorher] = $this->adminKonto();
+        $benutzerVorher = (int) $db->query('SELECT COUNT(*) FROM users')->fetchColumn();
+
+        $boeseZeile = "INSERT INTO `users` (`id`, `username`, `email`, `password_hash`) "
+            . "VALUES ('" . $adminId . "', 'boese', 'boese@example.com', 'x');\n";
+        $varianten = [
+            // INSERT in eine fremde Tabelle innerhalb eines Pferde-Blocks
+            'fremdes INSERT' => self::vorDemFuss($quelle['sql'], $boeseZeile),
+            // ein vollständiger users-Block, den das Manifest nicht nennt
+            'users-Block' => self::vorDemFuss($quelle['sql'], "DROP TABLE IF EXISTS `users`;\n"
+                . "CREATE TABLE `users` (\n  `id` int(11) NOT NULL,\n  `username` varchar(50) NOT NULL,\n"
+                . "  `email` varchar(100) NOT NULL,\n  `password_hash` varchar(255) NOT NULL,\n  PRIMARY KEY (`id`)\n"
+                . ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;\n" . $boeseZeile . "\n"),
+        ];
+
+        foreach ($varianten as $art => $sql) {
+            $name = $this->baueArchiv('manipuliert', [
+                ['manifest.json', json_encode($quelle['manifest'])],
+                ['database.sql', $sql],
+            ]);
+            $sicherungenVorher = $this->sicherungen();
+
+            $preview = $admin->get('/plugin/datenmigration/import/pruefen?datei=' . urlencode($name));
+            $this->assertSame(200, $preview->statusCode);
+            $this->assertStringContainsString('alert-error', $preview->body, $art);
+            $this->assertStringContainsString('nicht einspielbar', $preview->body, $art);
+            $this->assertStringNotContainsString('Import anwenden</button>', $preview->body, $art);
+
+            $apply = $admin->post('/plugin/datenmigration/import/anwenden', [
+                'csrf_token' => $this->currentCsrfToken($admin),
+                'datei' => $name,
+                'bestaetigt' => '1',
+                'abhaengige' => 'stehen_lassen',
+            ]);
+            $this->assertSame(200, $apply->statusCode, $art);
+            $this->assertStringContainsString('nichts verändert', $apply->body, $art);
+
+            $this->assertSame($benutzerVorher, (int) $db->query('SELECT COUNT(*) FROM users')->fetchColumn(), $art);
+            $this->assertSame($hashVorher, $this->adminKonto()[1], "{$art}: Passwort-Hash des Admins verändert");
+            $this->assertFalse($this->wartungAktiv(), "{$art}: Wartungsmodus aktiv");
+            $this->assertSame($sicherungenVorher, $this->sicherungen(), "{$art}: Sicherung vor der Prüfung geschrieben");
+        }
+        // Die Sitzung lebt - users wurde nicht angefasst.
+        $this->assertSame(200, $admin->get('/admin/plugins')->statusCode);
+    }
+
+    /**
+     * Format 2 schreibt Manifest und Dump aus derselben Tabellenliste.
+     * Weichen sie ab, wurde das Archiv nachbearbeitet - abweisen.
+     */
+    public function testDumpUndManifestMuessenUebereinstimmen(): void {
+        $admin = $this->aktiviertesAddon();
+        $quelle = $this->exportiere($admin, ['pferde']);
+        $manifest = $quelle['manifest'];
+        unset($manifest['tables']['match_labels']);
+        $manifest['tables']['horse_media'] = 0;
+        $name = $this->baueArchiv('abweichend', [
+            ['manifest.json', json_encode($manifest)],
+            ['database.sql', $quelle['sql']],
+        ]);
+
+        $preview = $admin->get('/plugin/datenmigration/import/pruefen?datei=' . urlencode($name));
+        $this->assertStringContainsString('stimmen nicht mit dem Manifest überein', $preview->body);
+        $this->assertStringContainsString('nur im Dump: match_labels', $preview->body);
+        $this->assertStringContainsString('nur im Manifest: horse_media', $preview->body);
+        $this->assertStringNotContainsString('Import anwenden</button>', $preview->body);
+
+        $sicherungenVorher = $this->sicherungen();
+        $apply = $admin->post('/plugin/datenmigration/import/anwenden', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'datei' => $name,
+            'bestaetigt' => '1',
+        ]);
+        $this->assertStringContainsString('stimmen nicht mit dem Manifest überein', $apply->body);
+        $this->assertSame($sicherungenVorher, $this->sicherungen());
+    }
+
+    /**
+     * tar erlaubt doppelte Einträge; welcher gewinnt, hing vom Lesepfad ab -
+     * Vorschau und Anwenden hätten verschiedene Dumps sehen können.
+     */
+    public function testDoppelteDatabaseSqlImArchivWirdAbgewiesen(): void {
+        $admin = $this->aktiviertesAddon();
+        $quelle = $this->exportiere($admin, ['pferde']);
+        $name = $this->baueArchiv('doppelt', [
+            ['manifest.json', json_encode($quelle['manifest'])],
+            ['database.sql', $quelle['sql']],
+            ['database.sql', "DROP TABLE IF EXISTS `users`;\n"],
+        ]);
+
+        $preview = $admin->get('/plugin/datenmigration/import/pruefen?datei=' . urlencode($name));
+        $this->assertStringContainsString('database.sql steht mehrfach im Archiv', $preview->body);
+        $this->assertStringNotContainsString('Import anwenden</button>', $preview->body);
+
+        $apply = $admin->post('/plugin/datenmigration/import/anwenden', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'datei' => $name,
+            'bestaetigt' => '1',
+        ]);
+        $this->assertStringContainsString('database.sql steht mehrfach im Archiv', $apply->body);
+        $this->assertFalse($this->wartungAktiv());
+
+        $doppeltesManifest = $this->baueArchiv('doppelt', [
+            ['manifest.json', json_encode($quelle['manifest'])],
+            ['manifest.json', json_encode(['format' => 1] + $quelle['manifest'])],
+            ['database.sql', $quelle['sql']],
+        ]);
+        $preview = $admin->get('/plugin/datenmigration/import/pruefen?datei=' . urlencode($doppeltesManifest));
+        $this->assertStringContainsString('manifest.json steht mehrfach im Archiv', $preview->body);
+    }
+
+    /**
+     * Audit M2: Werden Benutzerkonten ersetzt, enden ALLE Sitzungen und alle
+     * API-Schlüssel - nicht nur die des Importierenden.
+     *
+     * Der Aufbau ist der ungünstigste: Redakteur und Schlüssel existieren
+     * schon VOR dem Export, stehen also mit derselben session_version im
+     * Archiv. Ohne die Anhebung liefe die Sitzung danach einfach weiter -
+     * als das gleichnamige Konto der Quelle.
+     */
+    public function testImportDerBenutzerBeendetAlleSitzungen(): void {
+        $admin = $this->aktiviertesAddon();
+        $unique = uniqid();
+        $db = Database::getInstance();
+
+        $redakteur = $this->createAndLoginEditor(
+            $admin,
+            "dmsitzung{$unique}",
+            "dm-sitzung-{$unique}@example.com",
+            [$this->findBuiltinGroupId($admin, 'Editor')]
+        );
+        $stmt = $db->prepare('SELECT id FROM users WHERE username = ?');
+        $stmt->execute(["dmsitzung{$unique}"]);
+        $redakteurId = (int) $stmt->fetchColumn();
+        $schluessel = ApiKey::create($redakteurId, 'DatenmigrationTest ' . $unique, null);
+        $this->assertTrue($schluessel['ok'], 'API-Schlüssel nicht ausgestellt');
+        $bearer = ['Authorization' => 'Bearer ' . $schluessel['token']];
+
+        $this->assertSame(200, $redakteur->get('/admin/horses')->statusCode);
+        $this->assertSame(200, $this->newClient()->get('/api/horses', $bearer)->statusCode);
+
+        $quelle = $this->exportiere($admin, [Exportauswahl::GRUPPE_BENUTZER]);
+        $this->assertArrayHasKey('users', $quelle['manifest']['tables']);
+        $name = $this->legeAb($quelle['body'], 'benutzer');
+
+        $preview = $admin->get('/plugin/datenmigration/import/pruefen?datei=' . urlencode($name));
+        $this->assertStringContainsString('Sitzungen und API-Schlüssel dieser Instanz werden ungültig', $preview->body);
+        $maxVorher = max($this->sessionVersionen());
+
+        $apply = $admin->post('/plugin/datenmigration/import/anwenden', [
+            'csrf_token' => $preview->formField('csrf_token') ?? '',
+            'datei' => $name,
+            'bestaetigt' => '1',
+        ] + $this->pflichtwahl($preview));
+        $this->assertSame('/login?import=fertig', $apply->location(), "Import fehlgeschlagen, Body: {$apply->body}");
+
+        // Die fremde Sitzung ist beendet ...
+        $nachher = $redakteur->get('/admin/horses');
+        $this->assertSame(302, $nachher->statusCode, 'Die Sitzung des Redakteurs lebt nach dem Import weiter.');
+        $this->assertStringContainsString('/login', (string) $nachher->location());
+        // ... der Schlüssel ebenso ...
+        $this->assertSame(401, $this->newClient()->get('/api/horses', $bearer)->statusCode);
+        // ... und jede session_version liegt über dem bisherigen Höchstwert.
+        foreach ($this->sessionVersionen() as $id => $version) {
+            $this->assertGreaterThan($maxVorher, $version, "session_version von Konto {$id} nicht angehoben");
+        }
+        // Die eigene Sitzung ist ebenfalls beendet, eine neue Anmeldung geht.
+        $this->assertSame(302, $admin->get('/admin/plugins')->statusCode);
+        $this->assertSame(200, $this->authenticatedClient()->get('/admin/plugins')->statusCode);
+
+        foreach ($this->sicherungen() as $b) {
+            unlink($b);
+        }
+        $db->prepare('DELETE FROM api_keys WHERE label = ?')->execute(['DatenmigrationTest ' . $unique]);
+    }
+
+    /** Audit M3: Die Standardauswahl nimmt Passkeys und E-Mail-Anmeldecodes nicht mehr mit. */
+    public function testStandardTeilarchivEnthaeltKeinePasskeys(): void {
+        $admin = $this->aktiviertesAddon();
+        $quelle = $this->exportiere($admin, Exportauswahl::vorgabe());
+        foreach (['user_passkeys', 'email_2fa_codes', 'users'] as $tabelle) {
+            $this->assertArrayNotHasKey($tabelle, $quelle['manifest']['tables']);
+            $this->assertStringNotContainsString("DROP TABLE IF EXISTS `{$tabelle}`", $quelle['sql']);
+        }
+        $this->assertStringContainsString('DROP TABLE IF EXISTS `horses`', $quelle['sql']);
+    }
+
+    /**
+     * Audit M3, Altarchive: Bis 1.1.0 lief user_passkeys unter "sonstiges".
+     * Ein solches Archiv wird weiter eingespielt - die Passkeys aber
+     * übersprungen, sonst hingen sie an fremden Konten gleicher Kennung.
+     * Übersprungen heißt nicht ersetzt: keine Anhebung der session_version.
+     */
+    public function testAltesTeilarchivMitPasskeysUeberspringtDiese(): void {
+        $admin = $this->aktiviertesAddon();
+        $unique = uniqid();
+        $db = Database::getInstance();
+        [$adminId] = $this->adminKonto();
+
+        $quelle = $this->exportiere($admin, ['pferde']);
+        $create = (string) $db->query('SHOW CREATE TABLE `user_passkeys`')->fetch()['Create Table'];
+        $passkeyBlock = "-- Tabelle: user_passkeys\nDROP TABLE IF EXISTS `user_passkeys`;\n{$create};\n"
+            . "INSERT INTO `user_passkeys` (`id`, `user_id`, `credential_id`, `credential`, `label`, `sign_count`, `created_at`, `last_used_at`) "
+            . "VALUES ('990001', '{$adminId}', 'fremd-{$unique}', '{}', 'Fremd', '0', '2026-01-01 00:00:00', NULL);\n\n";
+        $manifest = $quelle['manifest'];
+        $manifest['auswahl'] = ['pferde', Exportauswahl::GRUPPE_SONSTIGES];
+        $manifest['tables']['user_passkeys'] = 1;
+        $name = $this->baueArchiv('altarchiv', [
+            ['manifest.json', json_encode($manifest)],
+            ['database.sql', self::vorDemFuss($quelle['sql'], $passkeyBlock)],
+        ]);
+
+        $db->prepare("INSERT INTO user_passkeys (user_id, credential_id, credential, label, created_at) VALUES (?, ?, '{}', 'Ziel', NOW())")
+            ->execute([$adminId, "ziel-{$unique}"]);
+        try {
+            $versionen = $this->sessionVersionen();
+            $preview = $admin->get('/plugin/datenmigration/import/pruefen?datei=' . urlencode($name));
+            $this->assertStringContainsString('wird übersprungen', $preview->body);
+            $this->assertStringContainsString('Import anwenden</button>', $preview->body);
+            $this->assertStringNotContainsString('Sitzungen und API-Schlüssel', $preview->body);
+
+            $apply = $admin->post('/plugin/datenmigration/import/anwenden', [
+                'csrf_token' => $preview->formField('csrf_token') ?? '',
+                'datei' => $name,
+                'bestaetigt' => '1',
+            ] + $this->pflichtwahl($preview));
+            $this->assertSame('/plugin/datenmigration/uebersicht?hinweis=importiert', $apply->location(), $apply->body);
+
+            $stmt = $db->prepare('SELECT COUNT(*) FROM user_passkeys WHERE credential_id = ?');
+            $stmt->execute(["ziel-{$unique}"]);
+            $this->assertSame(1, (int) $stmt->fetchColumn(), 'Der Passkey der Zielinstanz ist verschwunden.');
+            $stmt->execute(["fremd-{$unique}"]);
+            $this->assertSame(0, (int) $stmt->fetchColumn(), 'Der fremde Passkey wurde eingespielt.');
+            $this->assertSame($versionen, $this->sessionVersionen());
+        } finally {
+            $db->prepare('DELETE FROM user_passkeys WHERE credential_id IN (?, ?)')
+                ->execute(["ziel-{$unique}", "fremd-{$unique}"]);
+            foreach ($this->sicherungen() as $b) {
+                unlink($b);
+            }
+        }
+    }
+
+    /**
+     * Audit N21: Ein Bestand über max_allowed_packet. Bis 1.1.0 ging der
+     * Dump als EIN Paket an den Server und scheiterte - jetzt Anweisung für
+     * Anweisung. Die Größe richtet sich nach dem Server; ab 64 MiB wäre der
+     * Test unverhältnismäßig und wird übersprungen.
+     */
+    public function testGrosserImportUeberMaxAllowedPacket(): void {
+        $db = Database::getInstance();
+        $paket = (int) $db->query('SELECT @@max_allowed_packet')->fetchColumn();
+        if ($paket > 64 * 1048576) {
+            $this->markTestSkipped("max_allowed_packet ist {$paket} Byte - zu groß für diesen Test.");
+        }
+        $admin = $this->aktiviertesAddon();
+        $marker = 'dm-gross-' . uniqid();
+        $zeile = str_repeat('x', 60000);
+        $zeilen = intdiv($paket + 2 * 1048576, 60000) + 1;
+        try {
+            for ($i = 0; $i < $zeilen; $i += 10) {
+                $n = min(10, $zeilen - $i);
+                $db->prepare('INSERT INTO audit_logs (action, category, details) VALUES '
+                    . implode(', ', array_fill(0, $n, '(?, ?, ?)')))
+                    ->execute(array_merge(...array_fill(0, $n, [$marker, 'test', $zeile])));
+            }
+            $stichprobe = $db->prepare('SELECT id, created_at, UNIX_TIMESTAMP(created_at) AS ts FROM audit_logs WHERE action = ? ORDER BY id LIMIT 1');
+            $stichprobe->execute([$marker]);
+            $vorher = $stichprobe->fetch();
+
+            $quelle = $this->exportiere($admin, Exportauswahl::schluessel());
+            $this->assertGreaterThan($paket, strlen($quelle['sql']));
+            $name = $this->legeAb($quelle['body'], 'gross');
+            $db->prepare('DELETE FROM audit_logs WHERE action = ?')->execute([$marker]);
+
+            $preview = $admin->get('/plugin/datenmigration/import/pruefen?datei=' . urlencode($name));
+            $this->assertStringContainsString('Import anwenden</button>', $preview->body);
+            $apply = $admin->post('/plugin/datenmigration/import/anwenden', [
+                'csrf_token' => $preview->formField('csrf_token') ?? '',
+                'datei' => $name,
+                'bestaetigt' => '1',
+            ] + $this->pflichtwahl($preview));
+            $this->assertSame('/login?import=fertig', $apply->location(), "Großer Import fehlgeschlagen: {$apply->body}");
+
+            $stmt = $db->prepare('SELECT COUNT(*) FROM audit_logs WHERE action = ?');
+            $stmt->execute([$marker]);
+            $this->assertSame($zeilen, (int) $stmt->fetchColumn());
+            $stichprobe->execute([$marker]);
+            $nachher = $stichprobe->fetch();
+            $this->assertSame($vorher['created_at'], $nachher['created_at'], 'TIMESTAMP beim Import verschoben');
+            $this->assertSame($vorher['ts'], $nachher['ts']);
+            $this->assertFalse($this->wartungAktiv());
+        } finally {
+            $db->prepare('DELETE FROM audit_logs WHERE action = ?')->execute([$marker]);
+            foreach ($this->sicherungen() as $b) {
+                unlink($b);
+            }
+        }
+    }
+
+    /**
+     * Audit N21: Scheitert der Dump mittendrin (hier ein doppelter
+     * Primärschlüssel), wird die Sicherung zurückgespielt - und die Meldung
+     * stimmt: Die Pferde stehen wieder auf dem Stand VOR dem Import, der
+     * Wartungsmodus ist aufgehoben.
+     */
+    public function testFehlschlagMittenImDumpRolltZurueck(): void {
+        $admin = $this->aktiviertesAddon();
+        $unique = uniqid();
+        $db = Database::getInstance();
+        $id = $this->legePferdAn("RueckwegPferd-{$unique}");
+
+        $quelle = $this->exportiere($admin, ['pferde']);
+        preg_match('/^INSERT INTO `horses` .*$/m', $quelle['sql'], $m);
+        $this->assertNotEmpty($m, 'Kein Pferd im Dump');
+        $kaputt = str_replace($m[0], $m[0] . "\n" . $m[0], $quelle['sql']);
+        $name = $this->baueArchiv('kaputt', [
+            ['manifest.json', json_encode($quelle['manifest'])],
+            ['database.sql', $kaputt],
+        ]);
+
+        // Stand nach dem Export verändern: Genau DIESER Stand muss nach dem
+        // Rückweg wieder da sein.
+        $db->prepare('UPDATE horses SET name = ? WHERE id = ?')->execute(["NachExport-{$unique}", $id]);
+        $vorher = $db->query('SELECT id, name FROM horses ORDER BY id')->fetchAll();
+
+        $preview = $admin->get('/plugin/datenmigration/import/pruefen?datei=' . urlencode($name));
+        $apply = $admin->post('/plugin/datenmigration/import/anwenden', [
+            'csrf_token' => $preview->formField('csrf_token') ?? '',
+            'datei' => $name,
+            'bestaetigt' => '1',
+        ] + $this->pflichtwahl($preview));
+        $this->assertSame(200, $apply->statusCode);
+        $this->assertStringContainsString('Sicherungsstand wurde zurückgespielt', $apply->body);
+        $this->assertSame($vorher, $db->query('SELECT id, name FROM horses ORDER BY id')->fetchAll());
+        $this->assertFalse($this->wartungAktiv(), 'Nach gelungenem Rückweg muss der Wartungsmodus aufgehoben sein.');
+        $this->assertSame(200, $admin->get('/admin/plugins')->statusCode);
+
+        $db->prepare('DELETE FROM horses WHERE id = ?')->execute([$id]);
+        foreach ($this->sicherungen() as $b) {
+            unlink($b);
+        }
+    }
+
+    /**
+     * Audit N21: Ließe sich die Sicherung dieser Instanz selbst nicht wieder
+     * einspielen (hier wegen einer View - der Kern schreibt dafür eine leere
+     * Anweisung), bricht der Import ab, BEVOR sich etwas ändert. Sonst fiele
+     * der Rückweg genau dann aus, wenn er gebraucht wird.
+     */
+    public function testNichtEinspielbareSicherungVerhindertImport(): void {
+        $admin = $this->aktiviertesAddon();
+        $unique = uniqid();
+        $db = Database::getInstance();
+        $id = $this->legePferdAn("SicherungPferd-{$unique}");
+        $quelle = $this->exportiere($admin, ['pferde']);
+        $name = $this->legeAb($quelle['body'], 'view');
+        $db->prepare('UPDATE horses SET name = ? WHERE id = ?')->execute(["NachExport-{$unique}", $id]);
+
+        $db->exec('CREATE OR REPLACE VIEW `dm_testansicht` AS SELECT id FROM horses');
+        try {
+            $sicherungenVorher = $this->sicherungen();
+            $preview = $admin->get('/plugin/datenmigration/import/pruefen?datei=' . urlencode($name));
+            $apply = $admin->post('/plugin/datenmigration/import/anwenden', [
+                'csrf_token' => $preview->formField('csrf_token') ?? '',
+                'datei' => $name,
+                'bestaetigt' => '1',
+            ] + $this->pflichtwahl($preview));
+            $this->assertStringContainsString('ließe sich nicht zurückspielen', $apply->body);
+            $this->assertStringContainsString('Leere Anweisung', $apply->body);
+            $this->assertFalse($this->wartungAktiv());
+            $this->assertSame($sicherungenVorher, $this->sicherungen(), 'Die unbrauchbare Sicherung blieb liegen.');
+            $stmt = $db->prepare('SELECT name FROM horses WHERE id = ?');
+            $stmt->execute([$id]);
+            $this->assertSame("NachExport-{$unique}", $stmt->fetchColumn(), 'Der Import hat trotzdem etwas verändert.');
+        } finally {
+            $db->exec('DROP VIEW IF EXISTS `dm_testansicht`');
+            $db->prepare('DELETE FROM horses WHERE id = ?')->execute([$id]);
+        }
+    }
+
+    /**
+     * Audit N23: Ein Teilarchiv [pferde, kontakte] ersetzt Pferde und
+     * Kontakte - die Kontaktanfragen, Opt-outs und Gesundheitstests des
+     * Ziels bleiben stehen und hingen danach an den Datensätzen des Archivs
+     * mit derselben Kennung. Die Vorschau sagt das, verlangt eine Wahl ohne
+     * Vorgabe, und "trennen" löst die Verweise.
+     */
+    public function testTeilimportTrenntAbhaengigeAddonZeilen(): void {
+        $admin = $this->aktiviertesAddon();
+        foreach (['kontaktanfrage', 'gesundheitstests'] as $slug) {
+            $toggle = $admin->post('/admin/plugins/toggle', [
+                'csrf_token' => $this->currentCsrfToken($admin),
+                'slug' => $slug,
+                'enable' => '1',
+            ]);
+            $this->assertSame('/admin/plugins?success=1', $toggle->location());
+        }
+        $unique = uniqid();
+        $db = Database::getInstance();
+        $kontaktId = $this->createContact($admin, "TrennKontakt-{$unique}");
+        $pferdId = $this->legePferdAn("TrennPferd-{$unique}");
+
+        $quelle = $this->exportiere($admin, ['pferde', 'kontakte']);
+        $name = $this->legeAb($quelle['body'], 'trennen');
+        $mail = "trennen-{$unique}@example.test";
+
+        $zeilenAnlegen = function () use ($db, $kontaktId, $pferdId, $mail): void {
+            $db->prepare("INSERT INTO plugin_kontaktanfrage_requests (contact_id, reason_key, reason_label, requester_name, requester_email)
+                          VALUES (?, 'x', 'X', 'Anfragender', ?)")->execute([$kontaktId, $mail]);
+            $db->prepare('INSERT IGNORE INTO plugin_kontaktanfrage_optout (contact_id) VALUES (?)')->execute([$kontaktId]);
+            $db->prepare("INSERT INTO plugin_gesundheitstests (horse_id, test_type) VALUES (?, ?)")->execute([$pferdId, $mail]);
+        };
+        $stand = function () use ($db, $kontaktId, $mail): array {
+            $s = $db->prepare('SELECT contact_id FROM plugin_kontaktanfrage_requests WHERE requester_email = ? ORDER BY id DESC LIMIT 1');
+            $s->execute([$mail]);
+            $o = $db->prepare('SELECT COUNT(*) FROM plugin_kontaktanfrage_optout WHERE contact_id = ?');
+            $o->execute([$kontaktId]);
+            $g = $db->prepare('SELECT COUNT(*) FROM plugin_gesundheitstests WHERE test_type = ?');
+            $g->execute([$mail]);
+            return ['anfrage' => (int) $s->fetchColumn(), 'optout' => (int) $o->fetchColumn(), 'test' => (int) $g->fetchColumn()];
+        };
+        $anwenden = function (array $wahl) use ($admin, $name): \Tests\Support\HttpResponse {
+            $preview = $admin->get('/plugin/datenmigration/import/pruefen?datei=' . urlencode($name));
+            return $admin->post('/plugin/datenmigration/import/anwenden', [
+                'csrf_token' => $preview->formField('csrf_token') ?? '',
+                'datei' => $name,
+                'bestaetigt' => '1',
+            ] + $wahl);
+        };
+
+        try {
+            $zeilenAnlegen();
+
+            $preview = $admin->get('/plugin/datenmigration/import/pruefen?datei=' . urlencode($name));
+            $this->assertStringContainsString('an den Datensätzen des Archivs', $preview->body);
+            $this->assertStringContainsString('plugin_kontaktanfrage_requests', $preview->body);
+            $this->assertStringContainsString('plugin_kontaktanfrage_optout', $preview->body);
+            $this->assertStringContainsString('plugin_gesundheitstests', $preview->body);
+            $this->assertStringContainsString('name="abhaengige" value="trennen" required', $preview->body);
+            $this->assertStringNotContainsString('value="trennen" checked', $preview->body);
+            $this->assertStringNotContainsString('value="stehen_lassen" checked', $preview->body);
+
+            // Ohne Wahl: nichts verändert, keine Sicherung.
+            $sicherungenVorher = $this->sicherungen();
+            $ohne = $anwenden([]);
+            $this->assertStringContainsString('„trennen“ oder „stehen lassen“', $ohne->body);
+            $this->assertSame($sicherungenVorher, $this->sicherungen());
+            $this->assertSame(['anfrage' => $kontaktId, 'optout' => 1, 'test' => 1], $stand());
+
+            // Trennen: Anfrage auf 0 ("Datensatz entfernt"), Opt-out und
+            // Gesundheitstest (NOT-NULL-Fremdschlüssel) gelöscht.
+            $trennen = $anwenden(['abhaengige' => 'trennen']);
+            $this->assertSame('/plugin/datenmigration/uebersicht?hinweis=importiert', $trennen->location(), $trennen->body);
+            $this->assertSame(['anfrage' => 0, 'optout' => 0, 'test' => 0], $stand());
+
+            // Stehen lassen: unverändert.
+            $zeilenAnlegen();
+            $lassen = $anwenden(['abhaengige' => 'stehen_lassen']);
+            $this->assertSame('/plugin/datenmigration/uebersicht?hinweis=importiert', $lassen->location(), $lassen->body);
+            $this->assertSame(['anfrage' => $kontaktId, 'optout' => 1, 'test' => 1], $stand());
+        } finally {
+            $db->prepare('DELETE FROM plugin_kontaktanfrage_requests WHERE requester_email = ?')->execute([$mail]);
+            $db->prepare('DELETE FROM plugin_kontaktanfrage_optout WHERE contact_id = ?')->execute([$kontaktId]);
+            $db->prepare('DELETE FROM plugin_gesundheitstests WHERE test_type = ?')->execute([$mail]);
+            $db->prepare('DELETE FROM horses WHERE id = ?')->execute([$pferdId]);
+            foreach ($this->sicherungen() as $b) {
+                unlink($b);
+            }
+        }
+    }
+
+    /**
+     * Audit N23: Auch ein Vollarchiv lässt Tabellen stehen - die eines
+     * Addons, das die Quelle nicht hat. Bis 1.1.0 lief die Prüfung nur für
+     * Teilarchive.
+     */
+    public function testVollarchivMeldetStehenbleibendeAddonTabellen(): void {
+        $admin = $this->aktiviertesAddon();
+        $unique = uniqid();
+        $db = Database::getInstance();
+        $pferdId = $this->legePferdAn("VollPferd-{$unique}");
+        $quelle = $this->exportiere($admin, Exportauswahl::schluessel());
+        $name = $this->legeAb($quelle['body'], 'voll');
+
+        $db->exec('CREATE TABLE IF NOT EXISTS `plugin_dmtest_kind` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `horse_id` INT NOT NULL,
+            FOREIGN KEY (`horse_id`) REFERENCES `horses`(`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB');
+        try {
+            $db->prepare('INSERT INTO plugin_dmtest_kind (horse_id) VALUES (?)')->execute([$pferdId]);
+            $preview = $admin->get('/plugin/datenmigration/import/pruefen?datei=' . urlencode($name));
+            $this->assertStringContainsString('Vollarchiv', $preview->body);
+            $this->assertStringContainsString('Zeile(n) in plugin_dmtest_kind (horse_id) verweisen auf horses', $preview->body);
+            $this->assertStringContainsString('name="abhaengige"', $preview->body);
+        } finally {
+            $db->exec('DROP TABLE IF EXISTS `plugin_dmtest_kind`');
+            $db->prepare('DELETE FROM horses WHERE id = ?')->execute([$pferdId]);
+        }
     }
 }

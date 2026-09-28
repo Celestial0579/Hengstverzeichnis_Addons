@@ -10,6 +10,50 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ### Sicherheit
 
+- **`datenmigration` (1.2.0): Der Import prüft `database.sql`, bevor er
+  etwas ausführt** (Audit M1). Ob ein Archiv ein Teilarchiv ist und welche
+  Tabellen es ersetzt, entnahm der Import bisher allein dem Manifest; der Dump
+  lief ungeprüft durch. Ein präpariertes „Teilarchiv Pferde“ konnte so nebenbei
+  ein Administratorkonto anlegen, während die Vorschau „alle übrigen Tabellen
+  bleiben unverändert“ zusagte. Der Dump wird jetzt Anweisung für Anweisung
+  gegen das Format des Kern-Dumpers geprüft:
+  - Zugelassen sind nur die `SET`-Kopfzeilen (auch die Zeitzonen-Zeilen aus
+    Framework N66), `DROP TABLE IF EXISTS`, `CREATE TABLE` und
+    `INSERT … VALUES` mit reinen Literalen, nur für Tabellen der Auswahl und
+    mit kleingeschriebenen Namen.
+  - Jede Abweichung verhindert den Import, bevor die Sicherung geschrieben
+    oder etwas verändert wird.
+  - Die Vorschau zeigt, was tatsächlich im Dump steht.
+  - Ausgeführt wird über eine eigene Verbindung ohne Mehrfachanweisungen.
+
+  **Für Betreiber:** Archive, deren `database.sql` vom Format des Kerns
+  abweicht, werden abgewiesen – handgebaute oder nachbearbeitete Dumps,
+  Views, Trigger, Routinen, `UPDATE`/`DELETE`, `/* */`-, `/*! */`- und
+  `#`-Kommentare, Tabellennamen mit Großbuchstaben, Anweisungen über
+  `max_allowed_packet`, Archive mit abweichender Tabellenliste (Format 2) und
+  Archive mit doppelten Einträgen. Die Import-Sicherung entsteht erst nach
+  dieser Prüfung; ein abgewiesenes Archiv hinterlässt keine Sicherungsdatei
+  mehr.
+
+- **`datenmigration` (1.2.0): Nach dem Import von Benutzerkonten sind alle
+  Sitzungen ungültig** (Audit M2). Bisher endete nur die Sitzung des
+  importierenden Administrators. Andere Sitzungen liefen unter derselben
+  Kontonummer weiter, nach dem Import aber als das Konto der Quellinstanz,
+  bis hin zu dessen Administratorrechten. Die `session_version` aller Konten
+  wird jetzt über jeden bisherigen Wert angehoben.
+
+  **Für Betreiber:** Nach einem Import mit Benutzertabellen melden sich alle
+  neu an; API-Schlüssel sind neu auszustellen.
+
+- **`datenmigration` (1.2.0): Passkeys und E-Mail-Codes verlassen die
+  Instanz nicht mehr mit der Standardauswahl** (Audit M3). `user_passkeys`,
+  `email_2fa_codes` und jede Tabelle mit Fremdschlüssel auf `users` gehören
+  jetzt zur Gruppe „Benutzer, Gruppen, Rechte“. Beim Einspielen hängten sich
+  solche Zeilen sonst an fremde Konten gleicher Kennung, und die eigenen
+  Passkeys der Zielinstanz waren gelöscht. Ältere Archive mit diesen Tabellen
+  ohne `users` werden weiter eingespielt; die Tabellen werden dabei
+  übersprungen. Der Standardexport enthält damit weniger Tabellen als bisher.
+
 - **`mitglieder-konten` (1.0.1): Das Recht „Mitglieder-Konten anlegen“ führt
   nicht mehr zu Administrator-Konten.** Die Gruppe für neue Konten wurde
   ungeprüft gespeichert, und die Auswahl bot auch „Administrator“ und jede
@@ -95,6 +139,40 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ### Behoben
 
+- **`datenmigration` (1.2.0): Große Instanzen lassen sich importieren**
+  (Audit N21). Der Dump ging als ein einziges Datenbankpaket an den Server
+  und scheiterte ab 16 MiB an `max_allowed_packet`. Die Meldung behauptete
+  trotzdem, der Sicherungsstand sei zurückgespielt. Jetzt gilt:
+  - Import und Rückweg laufen streamend, Anweisung für Anweisung, über eine
+    eigene Verbindung in der Zeitzone der Anwendung.
+  - Die Sicherung wird vor dem Import darauf geprüft, ob sie sich wieder
+    einspielen lässt (einschließlich gzip-Prüfsumme). Lässt sie sich nicht
+    einspielen, etwa wegen einer View, wird der Import verweigert, bevor sich
+    etwas ändert.
+  - Scheitert auch das Zurückspielen, bleibt der Wartungsmodus aktiv, und die
+    Meldung nennt Sicherungsdatei und nötige Schritte (Sicherung einspielen,
+    danach `var/wartung.lock` löschen).
+  - Schreibfehler beim Archiv, beim Export-Dump und bei der Sicherung werden
+    an der geschriebenen Menge erkannt; `gzwrite()` meldet eine volle Platte
+    mit 0 statt `false` (Audit M43, Duplikat im Addon).
+
+- **`datenmigration` (1.2.0): Importe ordnen Addon-Daten nicht mehr still
+  fremden Datensätzen zu** (Audit N23). Ersetzt ein Archiv Pferde, Kontakte
+  oder Konten, ohne die abhängigen Addon-Tabellen mitzubringen, zeigen deren
+  Zeilen nicht „ins Leere“. Sie hängen an den Datensätzen des Archivs mit
+  derselben Kennung, etwa Inserate, Befunde, Mitgliedsstatus und
+  Kontaktanfragen. Die Vorschau sagt das jetzt auch bei Vollarchiven, nennt
+  die Kontaktanfrage-Tabellen und verlangt eine Entscheidung zwischen
+  „trennen“ und „stehen lassen“. Addons können eigene Verweise ohne
+  Fremdschlüssel über `weiche_verweise` in ihrer `plugin.json` angeben
+  (nur für eigene `plugin_`-Tabellen aus `owns.tables`).
+
+- **`kontaktanfrage` (1.1.1): Keine Weiterleitung an einen Kontakt, der
+  jünger ist als die Anfrage** (Audit N23). Wurde eine Kontaktkennung neu
+  vergeben, ging die Anfrage an eine fremde Person. Solche Anfragen erscheinen
+  jetzt als „Datensatz entfernt“ und werden nicht weitergeleitet. Die
+  `plugin.json` nennt beide Kontaktanfrage-Tabellen unter `weiche_verweise`.
+
 - **`mitglieder-konten` (1.1.0): keine Massensperre mehr durch eine leere
   oder gefilterte CiviCRM-Antwort** (Audit N30). Der tägliche Lauf fragt den
   Status der zugeordneten Mitgliedschaften gezielt per ID ab; der Filter
@@ -148,6 +226,9 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   dort `>=0.5.1`.
 
 ### Geändert
+
+- **`datenmigration` 1.2.0, `kontaktanfrage` 1.1.1.** `core_compatibility`
+  und `core_supported_max` bleiben unverändert (Linie 0.9).
 
 - **Neuer Manifest-Test: Die Kern-Untergrenze muss zu den genutzten Kern-APIs
   passen.** `tests/Manifest/KernMindestversionTest.php` sammelt je Addon die
