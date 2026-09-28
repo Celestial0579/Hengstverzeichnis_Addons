@@ -1204,9 +1204,11 @@ class AnfrageController extends BaseController {
         // steht VOR der Aufgabe, weil ein POST ohne Recht gar nicht erst
         // verarbeitet werden soll, und HINTER dem IP-Zähler, damit auch
         // solche POSTs begrenzt bleiben. Captcha::clear(), damit keine
-        // ausgegebene Aufgabe in der Sitzung liegen bleibt.
+        // ausgegebene Aufgabe in der Sitzung liegen bleibt - nur die dieses
+        // Formulars; die anderer Formulare derselben Sitzung bleiben gültig
+        // (Audit N3).
         if (!$this->hasPermission('contacts', 'view')) {
-            Captcha::clear();
+            Captcha::clear(Formular::CAPTCHA_KONTEXT);
             $this->zurueck($id, 'erfolg');
         }
 

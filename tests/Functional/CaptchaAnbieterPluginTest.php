@@ -28,6 +28,9 @@ use Tests\Support\HttpClient;
  */
 class CaptchaAnbieterPluginTest extends FunctionalTestCase {
 
+    use HorseListHelper;
+    use PersonStationHelper;
+
     private const TURNSTILE = 'captcha-turnstile';
     private const HCAPTCHA = 'captcha-hcaptcha';
     private const ALTCHA = 'captcha-altcha';
@@ -164,8 +167,15 @@ class CaptchaAnbieterPluginTest extends FunctionalTestCase {
             $formular->body,
             'Der Besucher muss im Formular erfahren, wohin seine Daten gehen.'
         );
+        // Die eingebaute Aufgabe hiesse hier `captcha-dsgvo` (Kontext-ID, Audit
+        // N3); ihr Feldname `captcha` ist unabhängig davon immer derselbe.
         $this->assertStringNotContainsString(
-            'id="captcha"',
+            'name="captcha"',
+            $formular->body,
+            'Bei gewähltem Drittanbieter darf die eingebaute Rechenaufgabe nicht zusätzlich erscheinen.'
+        );
+        $this->assertStringNotContainsString(
+            'id="captcha-dsgvo"',
             $formular->body,
             'Bei gewähltem Drittanbieter darf die eingebaute Rechenaufgabe nicht zusätzlich erscheinen.'
         );
@@ -266,6 +276,124 @@ class CaptchaAnbieterPluginTest extends FunctionalTestCase {
         );
 
         self::anbieterSetzen('builtin');
+    }
+
+    /**
+     * Audit N3: ALTCHA mit ZWEI Formularen auf einer Seite - Deckanfrage und
+     * Verkaufsbörse auf derselben Hengstseite, in einer Sitzung.
+     *
+     * Bis 1.0.1 lag der Nachweis in einem einzigen Platz der Sitzung und die
+     * Rückfall-Aufgabe im gemeinsamen Platz des Kerns. Das zweite Widget
+     * überschrieb beim Rendern beides, und das erste Formular kam nie durch.
+     * Geprüft werden beide Wege aus je EINEM Seitenaufruf: erst der
+     * Rechennachweis, dann die Rückfall-Aufgabe des Kerns.
+     */
+    public function testAltchaZweiFormulareAufEinerSeiteHabenJeEigeneAufgaben(): void {
+        $admin = $this->authenticatedClient();
+        $this->addonsAktivieren($admin);
+        foreach (['deckanfrage', 'verkaufsboerse'] as $slug) {
+            $admin->post('/admin/plugins/toggle', [
+                'csrf_token' => $this->currentCsrfToken($admin),
+                'slug' => $slug,
+                'enable' => '1',
+            ]);
+        }
+        $rueckfallVorher = self::rueckfallEinstellung();
+
+        // Beide Formulare sind im Captcha-Katalog angemeldet und damit je
+        // Formular wählbar (die Liste erscheint, sobald es mehr als einen
+        // Anbieter gibt - ALTCHA ist aktiv).
+        $einstellungen = $admin->get('/admin/system-settings');
+        foreach (['deckanfrage', 'verkaufsboerse'] as $kontext) {
+            $this->assertStringContainsString('id="captcha_ctx_' . $kontext . '"', $einstellungen->body,
+                "Der Formular-Kontext '{$kontext}' fehlt in den Systemeinstellungen.");
+        }
+
+        $eindeutig = uniqid();
+        $stationId = $this->createContact($admin, "AltchaStation-{$eindeutig}", [
+            'email' => "altcha-station-{$eindeutig}@example.test",
+            'contact_public' => '1',
+        ]);
+        $horseId = $this->createHorse($admin, "AltchaHengst-{$eindeutig}", [
+            'status' => 'active',
+            'persons' => [['role' => 'owner', 'station_contact_id' => (string) $stationId]],
+        ]);
+        $form = $admin->get('/admin/horses/edit?id=' . $horseId);
+        $inserat = $admin->post('/plugin/verkaufsboerse/verwaltung/store', [
+            'csrf_token' => $form->formField('csrf_token') ?? '',
+            'horse_id' => (string) $horseId,
+            'price' => '1000.00',
+            'contact_email' => "altcha-inserent-{$eindeutig}@example.test",
+        ]);
+        $this->assertSame('/admin/horses/edit?id=' . $horseId, $inserat->location());
+
+        self::anbieterSetzen(self::ALTCHA);
+        self::formularZaehlerZuruecksetzen();
+        try {
+            self::rueckfallEinstellungSetzen('1');
+            $besucher = $this->newClient();
+
+            // (a) Rechennachweis: zwei Widgets, zwei verschiedene Aufgaben.
+            $seite = $besucher->get("/horse?id={$horseId}");
+            $this->assertSame(200, $seite->statusCode);
+            $deck = self::aufgabeAuslesen($seite->body, 'deckanfrage');
+            $verkauf = self::aufgabeAuslesen($seite->body, 'verkaufsboerse');
+            $this->assertNotSame($deck['salt'], $verkauf['salt'], 'Jedes Formular braucht seine eigene Aufgabe.');
+            $csrf = $seite->formField('csrf_token') ?? '';
+
+            $antwort = $besucher->post('/plugin/deckanfrage/anfrage', self::anfrageFelder($csrf, $horseId, [
+                'altcha_payload' => self::nutzlast($deck, self::nachweisLoesen($deck)),
+            ]));
+            $this->assertSame("/horse?id={$horseId}&deckanfrage=fehler", $antwort->location(),
+                'Der Nachweis der Deckanfrage muss durchgehen, obwohl die Verkaufsbörse danach gerendert wurde.');
+            $antwort = $besucher->post('/plugin/verkaufsboerse/kontakt', self::anfrageFelder($csrf, $horseId, [
+                'altcha_payload' => self::nutzlast($verkauf, self::nachweisLoesen($verkauf)),
+            ]));
+            $this->assertSame("/horse?id={$horseId}&verkaufsanfrage=fehler", $antwort->location(),
+                'Der Nachweis der Verkaufsbörse muss durchgehen.');
+
+            // Gegenprobe: Der Nachweis eines Formulars taugt nicht für das
+            // andere - die Aufgaben sind getrennt, nicht nur verdoppelt.
+            self::formularZaehlerZuruecksetzen();
+            $seite = $besucher->get("/horse?id={$horseId}");
+            $deck = self::aufgabeAuslesen($seite->body, 'deckanfrage');
+            $antwort = $besucher->post('/plugin/verkaufsboerse/kontakt', self::anfrageFelder($seite->formField('csrf_token') ?? '', $horseId, [
+                'altcha_payload' => self::nutzlast($deck, self::nachweisLoesen($deck)),
+            ]));
+            $this->assertSame("/horse?id={$horseId}&verkaufsanfrage=captcha", $antwort->location(),
+                'Der Nachweis der Deckanfrage darf die Verkaufsbörse nicht öffnen.');
+
+            // (b) Rückfall-Aufgabe des Kerns, je Kontext gestellt
+            //     (Captcha::issue($kontext)).
+            self::formularZaehlerZuruecksetzen();
+            $seite = $besucher->get("/horse?id={$horseId}");
+            $frageDeck = self::rueckfallFrage($seite->body, 'deckanfrage');
+            $frageVerkauf = self::rueckfallFrage($seite->body, 'verkaufsboerse');
+            $csrf = $seite->formField('csrf_token') ?? '';
+            sleep(\App\Security\Captcha::MIN_SOLVE_SECONDS);
+
+            $antwort = $besucher->post('/plugin/deckanfrage/anfrage', self::anfrageFelder($csrf, $horseId, [
+                'altcha_payload' => '',
+                'captcha' => self::aufgabeRechnen($frageDeck),
+            ]));
+            $this->assertSame("/horse?id={$horseId}&deckanfrage=fehler", $antwort->location(),
+                'Die Rückfall-Aufgabe der Deckanfrage muss durchgehen.');
+            $antwort = $besucher->post('/plugin/verkaufsboerse/kontakt', self::anfrageFelder($csrf, $horseId, [
+                'altcha_payload' => '',
+                'captcha' => self::aufgabeRechnen($frageVerkauf),
+            ]));
+            $this->assertSame("/horse?id={$horseId}&verkaufsanfrage=fehler", $antwort->location(),
+                'Die Rückfall-Aufgabe der Verkaufsbörse muss durchgehen.');
+        } finally {
+            self::rueckfallEinstellungSetzen($rueckfallVorher);
+            self::anbieterSetzen('builtin');
+            self::formularZaehlerZuruecksetzen();
+            // In den Papierkorb: zucht-suche und statistik-dashboard prüfen
+            // Listen fester Seitengröße über denselben Datenbestand.
+            $db = Database::getInstance();
+            $db->prepare('UPDATE horses SET deleted_at = NOW() WHERE id = ?')->execute([$horseId]);
+            $db->prepare('UPDATE contacts SET deleted_at = NOW() WHERE id = ?')->execute([$stationId]);
+        }
     }
 
     /**
@@ -607,11 +735,14 @@ class CaptchaAnbieterPluginTest extends FunctionalTestCase {
      *
      * @return array{algorithm:string, challenge:string, salt:string, maxnumber:int}
      */
-    private static function aufgabeAuslesen(string $html): array {
+    private static function aufgabeAuslesen(string $html, ?string $kontext = null): array {
+        $muster = $kontext === null
+            ? '/data-hv-altcha="([^"]*)"/'
+            : '/id="hv-altcha-' . preg_quote($kontext, '/') . '" data-hv-altcha="([^"]*)"/';
         self::assertSame(
             1,
-            preg_match('/data-hv-altcha="([^"]*)"/', $html, $treffer),
-            'Im Formular steht keine ALTCHA-Aufgabe.'
+            preg_match($muster, $html, $treffer),
+            'Im Formular steht keine ALTCHA-Aufgabe' . ($kontext === null ? '.' : " für '{$kontext}'.")
         );
 
         $json = html_entity_decode($treffer[1], ENT_QUOTES, 'UTF-8');
@@ -637,6 +768,40 @@ class CaptchaAnbieterPluginTest extends FunctionalTestCase {
         }
 
         self::fail('Die gestellte Aufgabe hat innerhalb der Obergrenze keine Lösung - das darf nicht vorkommen.');
+    }
+
+    /** Die Rückfall-Aufgabe des Kerns im verborgenen Block des Widgets `$kontext`. */
+    private static function rueckfallFrage(string $html, string $kontext): string {
+        self::assertSame(
+            1,
+            preg_match('#hv-altcha-' . preg_quote($kontext, '#') . '-rueckfall-feld">\s*<strong>([^<]+)</strong>#u', $html, $treffer),
+            "Keine Rückfall-Aufgabe für '{$kontext}'."
+        );
+        return $treffer[1];
+    }
+
+    /**
+     * Felder für Deckanfrage bzw. Verkaufsbörse - beide Formulare lesen
+     * dieselben Namen.
+     *
+     * @param array<string, string> $zusatz
+     * @return array<string, string>
+     */
+    private static function anfrageFelder(string $csrf, int $horseId, array $zusatz): array {
+        return array_merge([
+            'csrf_token' => $csrf,
+            'horse_id' => (string) $horseId,
+            'requester_name' => 'Altcha-Test',
+            'requester_email' => 'altcha-anfrage@example.test',
+            'message' => 'Zwei Formulare, eine Seite.',
+        ], $zusatz);
+    }
+
+    /** IP- und Inseratszähler von Deckanfrage und Verkaufsbörse. */
+    private static function formularZaehlerZuruecksetzen(): void {
+        Database::getInstance()->exec(
+            "DELETE FROM login_attempts WHERE type IN ('deckanfrage', 'verkaufsboerse', 'verkaufsinserat')"
+        );
     }
 
     /**

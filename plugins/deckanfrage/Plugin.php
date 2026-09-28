@@ -313,8 +313,10 @@ class AnfrageController extends BaseController {
         // Honeypot ausgefüllt: stillschweigend verwerfen, als Erfolg ausgeben.
         // Geprüft wird über den Kern-Helfer, damit Feldname und Prüfung nicht
         // auseinanderlaufen können (siehe Plugin::addDetailSection()).
+        // Captcha::clear() nur für den eigenen Kontext: Die Aufgabe der
+        // Verkaufsbörse auf derselben Hengstseite bleibt gültig (Audit N3).
         if (Captcha::honeypotTripped($_POST)) {
-            Captcha::clear();
+            Captcha::clear(Plugin::CAPTCHA_CONTEXT);
             $this->redirectBack($horseId, 'erfolg');
         }
 
@@ -339,7 +341,7 @@ class AnfrageController extends BaseController {
         // ueber einzelne IDs. Captcha::clear(), damit keine ausgegebene
         // Aufgabe in der Sitzung liegen bleibt.
         if (!$this->hasPermission('horses', 'view') || !$this->hasPermission('contacts', 'view')) {
-            Captcha::clear();
+            Captcha::clear(Plugin::CAPTCHA_CONTEXT);
             $this->redirectBack($horseId, 'erfolg');
         }
 

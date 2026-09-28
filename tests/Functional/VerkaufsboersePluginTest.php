@@ -26,12 +26,23 @@ namespace Tests\Functional;
 class VerkaufsboersePluginTest extends FunctionalTestCase {
 
     use HorseListHelper;
+    use PersonStationHelper;
     use PferdesucheHelper;
 
     private const SLUG = 'verkaufsboerse';
 
     /** Die entfallene Verwaltungsseite (#119) - hier nur noch als Negativprobe. */
     private const ALTE_SEITE = '/plugin/verkaufsboerse/verwaltung';
+
+    /** POST-Ziele und Status-Parameter der beiden Formulare einer Hengstseite. */
+    private const ZIEL = [
+        'deckanfrage' => '/plugin/deckanfrage/anfrage',
+        'verkaufsboerse' => '/plugin/verkaufsboerse/kontakt',
+    ];
+    private const STATUS = [
+        'deckanfrage' => 'deckanfrage',
+        'verkaufsboerse' => 'verkaufsanfrage',
+    ];
 
     /** `login_attempts.type` des Zählers je Inserat (Plugin::INSERAT_LIMIT_TYPE). */
     private const INSERAT_TYP = 'verkaufsinserat';
@@ -140,6 +151,10 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
         $this->assertStringContainsString('name="requester_name" required maxlength="150"', $detailAfter->body);
         $this->assertStringContainsString('name="requester_email" required maxlength="150"', $detailAfter->body);
         $this->assertStringContainsString('name="message" required rows="3" maxlength="5000"', $detailAfter->body);
+        // Sicherheitsfrage des Kerns im eigenen Kontext (1.4.0, Audit N3):
+        // eigene Feld-ID, der Feldname bleibt der des Kerns.
+        $this->assertStringContainsString('<label for="captcha-verkaufsboerse">', $detailAfter->body);
+        $this->assertStringContainsString('id="captcha-verkaufsboerse" name="captcha"', $detailAfter->body);
 
         // 6b. Upsert (horse_id ist UNIQUE): Erneutes Speichern aktualisiert das
         //     Inserat, es entsteht kein zweites. Damit trägt derselbe Abschnitt
@@ -241,10 +256,29 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
         $this->assertSame(0, $this->zaehlerStand('verkaufsboerse'), 'Ein Honeypot-Treffer zählt nicht als Versuch');
         $this->assertSame(0, $this->zaehlerStand(self::INSERAT_TYP));
 
-        // 9. Echte Anfrage: Versand schlägt mangels SMTP-Konfiguration
-        //    kontrolliert fehl. Der Zähler je Inserat bucht genau einmal.
-        $realResponse = $visitor->post('/plugin/verkaufsboerse/kontakt', [
-            'csrf_token' => $csrfToken,
+        // 9. Ohne gelöste Sicherheitsfrage (1.4.0): eigener Status "captcha",
+        //    kein Versand, und der Zähler je Inserat bucht nichts - sonst
+        //    sperrten ungelöste Versuche das Inserat. 99 liegt ausserhalb
+        //    jedes möglichen Ergebnisses und ist trotzdem formal gültig.
+        $ungeloest = $visitor->post('/plugin/verkaufsboerse/kontakt', [
+            'horse_id' => (string) $horseId,
+            'requester_name' => 'Kaufinteressent',
+            'requester_email' => 'kaufinteressent@example.test',
+            'message' => 'Ist der Preis verhandelbar?',
+        ] + ['captcha' => '99'] + $this->formularVorbereiten($visitor, $horseId));
+        $this->assertSame("/horse?id={$horseId}&verkaufsanfrage=captcha", $ungeloest->location());
+        $this->assertSame(0, $this->zaehlerStand(self::INSERAT_TYP), 'Eine ungelöste Aufgabe bucht den Inseratszähler nicht');
+        $this->assertSame(0, $this->versandversuche($contactEmail), 'Ohne gelöste Aufgabe keine Mail an den Inserenten');
+        $this->assertStringContainsString(
+            'Sicherheitsfrage wurde nicht korrekt beantwortet',
+            $visitor->get("/horse?id={$horseId}&verkaufsanfrage=captcha")->body
+        );
+        self::zaehlerLeeren();
+
+        // 9b. Echte Anfrage mit gelöster Aufgabe: Versand schlägt mangels
+        //     SMTP-Konfiguration kontrolliert fehl. Der Zähler je Inserat
+        //     bucht genau einmal.
+        $realResponse = $visitor->post('/plugin/verkaufsboerse/kontakt', $this->formularVorbereiten($visitor, $horseId) + [
             'horse_id' => (string) $horseId,
             'requester_name' => 'Kaufinteressent',
             'requester_email' => 'kaufinteressent@example.test',
@@ -252,6 +286,7 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
         ]);
         $this->assertSame("/horse?id={$horseId}&verkaufsanfrage=fehler", $realResponse->location());
         $this->assertSame(1, $this->zaehlerStand(self::INSERAT_TYP, "inserat:{$horseId}"));
+        $this->assertGreaterThan(0, $this->versandversuche($contactEmail), 'Mit gelöster Aufgabe wird versendet');
         self::zaehlerLeeren();
 
         // 10. CSRF-Schutz.
@@ -404,9 +439,7 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
         try {
             // Limit erreicht: "fehler", kein Versand, keine weitere Buchung.
             $this->zaehlerFuellen("inserat:{$horseId}", 10);
-            $antwort = $visitor->post('/plugin/verkaufsboerse/kontakt', [
-                'csrf_token' => $this->token($visitor, $horseId),
-            ] + $gueltig);
+            $antwort = $visitor->post('/plugin/verkaufsboerse/kontakt', $this->formularVorbereiten($visitor, $horseId) + $gueltig);
             $this->assertSame("/horse?id={$horseId}&verkaufsanfrage=fehler", $antwort->location());
             $this->assertSame(10, $this->zaehlerStand(self::INSERAT_TYP, "inserat:{$horseId}"), 'Eine abgewiesene Anfrage bucht nicht');
             $this->assertSame(0, $this->versandversuche($inserentMail), 'Über dem Limit darf keine Mail an den Inserenten gehen');
@@ -422,9 +455,7 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
                 'Name als Array' => ['requester_name' => ['a', 'b']],
             ];
             foreach ($faelle as $fall => $abweichung) {
-                $antwort = $visitor->post('/plugin/verkaufsboerse/kontakt', [
-                    'csrf_token' => $this->token($visitor, $horseId),
-                ] + $abweichung + $gueltig);
+                $antwort = $visitor->post('/plugin/verkaufsboerse/kontakt', $this->formularVorbereiten($visitor, $horseId) + $abweichung + $gueltig);
                 $this->assertSame(302, $antwort->statusCode, "{$fall}: erwartet eine Weiterleitung");
                 $this->assertSame("/horse?id={$horseId}&verkaufsanfrage=fehler", $antwort->location(), $fall);
                 $this->assertSame(0, $this->zaehlerStand(self::INSERAT_TYP), "{$fall}: keine Buchung");
@@ -491,8 +522,9 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
         $visitor = $this->newClient();
         try {
             foreach (['kein Inserat' => $ohneInserat, 'abgelaufen' => $abgelaufen, 'unveröffentlicht' => $verborgen] as $fall => $id) {
-                $antwort = $visitor->post('/plugin/verkaufsboerse/kontakt', [
-                    'csrf_token' => $this->token($visitor, $horseId),
+                // Die Aufgabe gilt je Sitzung und Kontext, nicht je Pferd -
+                // gelöst wird sie auf der Seite mit dem Formular.
+                $antwort = $visitor->post('/plugin/verkaufsboerse/kontakt', $this->formularVorbereiten($visitor, $horseId) + [
                     'horse_id' => (string) $id,
                 ] + $felder);
                 $this->assertSame("/horse?id={$id}&verkaufsanfrage=erfolg", $antwort->location(), $fall);
@@ -524,6 +556,12 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
         $stmt->execute(['127.0.0.1', 'verkaufsboerse']);
         $stmt->execute(["inserat:{$horseId}", self::INSERAT_TYP]);
         $stmt->execute([$fremd, 'deckanfrage']);
+        $einstellung = $db->prepare(
+            'INSERT INTO settings (setting_key, setting_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)'
+        );
+        $einstellung->execute(['captcha_provider_verkaufsboerse', 'builtin']);
+        $fremdeWahlVorher = $this->einstellung('captcha_provider_deckanfrage');
+        $einstellung->execute(['captcha_provider_deckanfrage', 'builtin']);
 
         try {
             require_once __DIR__ . '/../../plugins/verkaufsboerse/Plugin.php';
@@ -536,9 +574,219 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
             $this->assertSame(0, $this->zaehlerStand(self::INSERAT_TYP));
             $this->assertSame(1, $this->zaehlerStand('deckanfrage', $fremd), 'Fremde Zähler bleiben stehen');
             $this->assertSame(1, $this->countListings($horseId), 'Die Inserate bleiben');
+            $this->assertNull(
+                $this->einstellung('captcha_provider_verkaufsboerse'),
+                'Die Anbieterwahl der Sicherheitsfrage dieses Formulars gehört dem Addon und geht mit (1.4.0).'
+            );
+            $this->assertSame('builtin', $this->einstellung('captcha_provider_deckanfrage'), 'Die Wahl eines fremden Formulars bleibt');
         } finally {
             $db->prepare('DELETE FROM login_attempts WHERE identifier = ? AND type = ?')->execute([$fremd, 'deckanfrage']);
+            $db->prepare('DELETE FROM settings WHERE setting_key = ?')->execute(['captcha_provider_verkaufsboerse']);
+            if ($fremdeWahlVorher === null) {
+                $db->prepare('DELETE FROM settings WHERE setting_key = ?')->execute(['captcha_provider_deckanfrage']);
+            } else {
+                $einstellung->execute(['captcha_provider_deckanfrage', $fremdeWahlVorher]);
+            }
         }
+    }
+
+    /**
+     * Audit N3: Deckanfrage und Verkaufsbörse auf DERSELBEN Hengstseite, in
+     * EINER Sitzung, beide mit der eingebauten Rechenaufgabe.
+     *
+     * Bis zur Kern-Aufgabe je Kontext lag die Aufgabe in einem einzigen Platz
+     * der Sitzung: Das zweite Formular überschrieb beim Rendern die Aufgabe
+     * des ersten, und das erste endete beim Absenden immer auf "captcha".
+     * Hier werden beide Aufgaben aus EINEM Seitenaufruf gelöst und beide
+     * Formulare abgeschickt; keines darf an der Sicherheitsfrage scheitern.
+     * Ohne SMTP endet der Versand beider auf "fehler" - das ist der Beleg,
+     * dass die Anfrage an der Aufgabe vorbeikam.
+     */
+    public function testDeckanfrageUndVerkaufsboerseAufEinerHengstseite(): void {
+        $admin = $this->authenticatedClient();
+        $admin->post('/admin/plugins/toggle', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'slug' => 'deckanfrage',
+            'enable' => '1',
+        ]);
+        $unique = uniqid();
+        $inserentMail = "zwei-formulare-inserent-{$unique}@example.test";
+        $stationId = $this->createContact($admin, "ZweiFormulareStation-{$unique}", [
+            'email' => "zwei-formulare-station-{$unique}@example.test",
+            'contact_public' => '1',
+        ]);
+        $horseId = $this->inseratAnlegen($admin, "ZweiFormulareHengst-{$unique}", $inserentMail, [], [
+            'persons' => [['role' => 'owner', 'station_contact_id' => (string) $stationId]],
+        ]);
+
+        self::zaehlerLeeren();
+        $this->leereTyp('deckanfrage');
+        try {
+            $besucher = $this->newClient();
+            $seite = $besucher->get("/horse?id={$horseId}");
+            $this->assertSame(200, $seite->statusCode);
+            $this->assertStringContainsString('/plugin/deckanfrage/anfrage', $seite->body, 'Das Deckanfrage-Formular fehlt');
+            $this->assertStringContainsString('/plugin/verkaufsboerse/kontakt', $seite->body, 'Das Verkaufsformular fehlt');
+
+            // Zwei Felder, zwei IDs - keine doppelte ID auf der Seite.
+            $this->assertSame(1, substr_count($seite->body, 'id="captcha-deckanfrage"'));
+            $this->assertSame(1, substr_count($seite->body, 'id="captcha-verkaufsboerse"'));
+            $this->assertStringNotContainsString('id="captcha"', $seite->body);
+
+            $antwortDeck = $this->aufgabeLoesen($seite->body, 'deckanfrage');
+            $antwortVerkauf = $this->aufgabeLoesen($seite->body, 'verkaufsboerse');
+            $csrf = $seite->formField('csrf_token') ?? '';
+            sleep(\App\Security\Captcha::MIN_SOLVE_SECONDS);
+
+            // Zuerst das Formular, dessen Aufgabe zuerst ausgegeben wurde -
+            // genau das scheiterte mit einem gemeinsamen Platz.
+            $deck = $besucher->post('/plugin/deckanfrage/anfrage', [
+                'csrf_token' => $csrf,
+                'captcha' => $antwortDeck,
+                'horse_id' => (string) $horseId,
+                'requester_name' => 'Zwei-Formulare-Test',
+                'requester_email' => "deck-{$unique}@example.test",
+                'message' => 'Steht der Hengst zur Verfügung?',
+            ]);
+            $this->assertSame(
+                "/horse?id={$horseId}&deckanfrage=fehler",
+                $deck->location(),
+                'Die Deckanfrage darf nicht an der Aufgabe scheitern, nur weil die Verkaufsbörse danach gerendert wurde.'
+            );
+
+            $verkauf = $besucher->post('/plugin/verkaufsboerse/kontakt', [
+                'csrf_token' => $csrf,
+                'captcha' => $antwortVerkauf,
+                'horse_id' => (string) $horseId,
+                'requester_name' => 'Zwei-Formulare-Test',
+                'requester_email' => "verkauf-{$unique}@example.test",
+                'message' => 'Ist der Preis verhandelbar?',
+            ]);
+            $this->assertSame(
+                "/horse?id={$horseId}&verkaufsanfrage=fehler",
+                $verkauf->location(),
+                'Die Verkaufsanfrage darf nicht an der Aufgabe scheitern - und die Deckanfrage davor darf ihre Aufgabe nicht verbraucht haben.'
+            );
+            $this->assertGreaterThan(0, $this->versandversuche($inserentMail), 'Die Verkaufsanfrage ging bis zum Versand');
+
+            // Ein Honeypot-Treffer verwirft die Aufgabe DIESES Formulars (sie
+            // ist danach verbraucht) - und nur diese: Die des anderen
+            // Formulars derselben Seite bleibt gültig. In beide Richtungen.
+            foreach (['verkaufsboerse' => 'deckanfrage', 'deckanfrage' => 'verkaufsboerse'] as $falle => $anderes) {
+                self::zaehlerLeeren();
+                $this->leereTyp('deckanfrage');
+                $seite = $besucher->get("/horse?id={$horseId}");
+                $antworten = [
+                    'deckanfrage' => $this->aufgabeLoesen($seite->body, 'deckanfrage'),
+                    'verkaufsboerse' => $this->aufgabeLoesen($seite->body, 'verkaufsboerse'),
+                ];
+                $csrf = $seite->formField('csrf_token') ?? '';
+                sleep(\App\Security\Captcha::MIN_SOLVE_SECONDS);
+
+                $honeypot = $besucher->post(self::ZIEL[$falle], [
+                    'csrf_token' => $csrf,
+                    'horse_id' => (string) $horseId,
+                    'requester_name' => 'Bot',
+                    'requester_email' => 'bot@example.test',
+                    'message' => 'Spam',
+                    'website' => 'https://spam.example',
+                ]);
+                $this->assertSame("/horse?id={$horseId}&" . self::STATUS[$falle] . '=erfolg', $honeypot->location(), "Honeypot {$falle}");
+
+                foreach ([$anderes => 'fehler', $falle => 'captcha'] as $formular => $erwartet) {
+                    $antwort = $besucher->post(self::ZIEL[$formular], [
+                        'csrf_token' => $csrf,
+                        'captcha' => $antworten[$formular],
+                        'horse_id' => (string) $horseId,
+                        'requester_name' => 'Zwei-Formulare-Test',
+                        'requester_email' => "{$formular}-nach-honeypot-{$unique}@example.test",
+                        'message' => 'Nach dem Honeypot.',
+                    ]);
+                    $this->assertSame(
+                        "/horse?id={$horseId}&" . self::STATUS[$formular] . "={$erwartet}",
+                        $antwort->location(),
+                        $erwartet === 'captcha'
+                            ? "Nach dem Honeypot von {$falle} ist dessen Aufgabe verbraucht."
+                            : "Der Honeypot von {$falle} darf die Aufgabe von {$formular} nicht verwerfen."
+                    );
+                }
+            }
+        } finally {
+            self::zaehlerLeeren();
+            $this->leereTyp('deckanfrage');
+            self::inDenPapierkorb($horseId, $stationId);
+        }
+    }
+
+    /**
+     * Legt Pferd und Station nach dem Test in den Papierkorb. Andere Addons
+     * (zucht-suche, statistik-dashboard) prüfen Listen mit fester
+     * Seitengröße über denselben Datenbestand; ein zusätzlicher Kontakt oder
+     * eine zusätzliche Deckstation verschöbe dort die Treffer.
+     */
+    private static function inDenPapierkorb(int $horseId, int $kontaktId): void {
+        $db = \App\Database::getInstance();
+        $db->prepare('UPDATE horses SET deleted_at = NOW() WHERE id = ?')->execute([$horseId]);
+        $db->prepare('UPDATE contacts SET deleted_at = NOW() WHERE id = ?')->execute([$kontaktId]);
+    }
+
+    /**
+     * Holt die Pferdeseite, liest CSRF-Token und die Sicherheitsfrage DIESES
+     * Formulars (`captcha-verkaufsboerse`) und wartet die Mindest-
+     * Ausfüllzeit ab. Die Aufgabe ist einmal verwendbar; jeder POST, der bis
+     * zur Prüfung kommen soll, braucht deshalb einen frischen Aufruf.
+     *
+     * @return array{csrf_token: string, captcha: string}
+     */
+    private function formularVorbereiten(\Tests\Support\HttpClient $client, int $horseId): array {
+        $seite = $client->get("/horse?id={$horseId}");
+        $this->assertStringContainsString('/plugin/verkaufsboerse/kontakt', $seite->body, 'Kein Kontaktformular auf der Pferdeseite');
+        $token = $seite->formField('csrf_token') ?? '';
+        $this->assertNotSame('', $token);
+        $antwort = $this->aufgabeLoesen($seite->body, 'verkaufsboerse');
+
+        sleep(\App\Security\Captcha::MIN_SOLVE_SECONDS);
+
+        return ['csrf_token' => $token, 'captcha' => $antwort];
+    }
+
+    /** Zahlwörter der deutschen Sprachdatei des Kerns (`captcha.number_*`), wie in DeckanfragePluginTest. */
+    private const ZAHLWOERTER = [
+        'eins' => 1, 'zwei' => 2, 'drei' => 3, 'vier' => 4, "f\u{00fc}nf" => 5,
+        'sechs' => 6, 'sieben' => 7, 'acht' => 8, 'neun' => 9,
+    ];
+
+    /**
+     * Löst die ausgeschriebene Rechenaufgabe des Formulars `$kontext` über
+     * die Bedeutung der Zahlwörter - gezielt über die Feld-ID
+     * `captcha-<kontext>`, weil auf einer Hengstseite zwei Aufgaben stehen
+     * können.
+     */
+    private function aufgabeLoesen(string $html, string $kontext): string {
+        preg_match(
+            '/<label for="captcha-' . preg_quote($kontext, '/') . '">.*?<strong>([^<]+)<\/strong>/su',
+            $html,
+            $treffer
+        );
+        $this->assertNotEmpty($treffer, "Keine Sicherheitsfrage für '{$kontext}' im Formular.");
+
+        $teile = preg_split('/\s+/u', trim($treffer[1]));
+        $this->assertIsArray($teile);
+        $this->assertCount(3, $teile, "Unerwarteter Aufgabentext: {$treffer[1]}");
+        $links = self::ZAHLWOERTER[$teile[0]] ?? null;
+        $rechts = self::ZAHLWOERTER[$teile[2]] ?? null;
+        $this->assertNotNull($links, "Unbekanntes Zahlwort: {$teile[0]}");
+        $this->assertNotNull($rechts, "Unbekanntes Zahlwort: {$teile[2]}");
+        $this->assertContains($teile[1], ['plus', 'minus'], "Unbekannter Operator: {$teile[1]}");
+
+        return (string) ($teile[1] === 'minus' ? $links - $rechts : $links + $rechts);
+    }
+
+    private function einstellung(string $schluessel): ?string {
+        $stmt = \App\Database::getInstance()->prepare('SELECT setting_value FROM settings WHERE setting_key = ?');
+        $stmt->execute([$schluessel]);
+        $wert = $stmt->fetchColumn();
+        return $wert === false ? null : (string) $wert;
     }
 
     /**
@@ -566,13 +814,6 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
         $this->assertSame(1, $this->countListings($horseId));
 
         return $horseId;
-    }
-
-    /** CSRF-Token von der Pferdeseite mit dem Kontaktformular. */
-    private function token(\Tests\Support\HttpClient $client, int $horseId): string {
-        $seite = $client->get("/horse?id={$horseId}");
-        $this->assertStringContainsString('/plugin/verkaufsboerse/kontakt', $seite->body, 'Kein Kontaktformular auf der Pferdeseite');
-        return $seite->formField('csrf_token') ?? '';
     }
 
     /** Leert beide Zähler des Formulars (IP und je Inserat). */

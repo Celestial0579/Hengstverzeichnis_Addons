@@ -102,8 +102,9 @@ class KontaktanfragePluginTest extends FunctionalTestCase {
         $mitFormular = $visitor->get("/kontakt?id={$kontaktId}");
         $this->assertStringContainsString('Kontakt aufnehmen', $mitFormular->body);
         $this->assertStringContainsString('name="webseite"', $mitFormular->body, 'Honeypot-Feld fehlt.');
-        $this->assertStringContainsString(
-            '<label for="captcha">',
+        // Mit Formular-Kontext heisst das Feld `captcha-<kontext>` (Audit N3).
+        $this->assertMatchesRegularExpression(
+            '/<label for="captcha(?:-[a-z0-9_-]+)?">/',
             $mitFormular->body,
             'Das öffentliche Formular muss den Spam-Schutz des Kerns einbinden (#351).'
         );
@@ -507,11 +508,16 @@ class KontaktanfragePluginTest extends FunctionalTestCase {
         $this->leereRateLimitZaehler('kontaktanfrage-ip');
         $this->leereRateLimitZaehler('kontaktanfrage-ziel');
 
+        // Das Formular noch MIT Recht laden: Die Sitzung hält danach eine
+        // Aufgabe dieses Formulars (für die Gegenprobe unten).
+        $besucher = $this->newClient();
+        $mitRecht = $besucher->get("/kontakt?id={$kontaktId}");
+        $geloest = (string) $this->loeseAufgabe($mitRecht);
+
         try {
             $db->prepare("DELETE FROM `group_permissions` WHERE group_id = ? AND module = 'contacts' AND action = 'view'")
                 ->execute([$gast]);
 
-            $besucher = $this->newClient();
             $this->assertSame(404, $besucher->get("/kontakt?id={$kontaktId}")->statusCode);
 
             $dsgvo = $besucher->get('/dsgvo');
@@ -543,6 +549,29 @@ class KontaktanfragePluginTest extends FunctionalTestCase {
         $wieder = $this->newClient()->get("/kontakt?id={$kontaktId}");
         $this->assertSame(200, $wieder->statusCode);
         $this->assertStringContainsString('action="/plugin/kontaktanfrage/senden"', $wieder->body);
+
+        // Der verworfene POST hat die Aufgabe DIESES Formulars verbraucht
+        // (Captcha::clear() mit Kontext, Audit N3): Die vorher korrekt
+        // gelöste Antwort taugt danach nicht mehr.
+        sleep(Captcha::MIN_SOLVE_SECONDS);
+        try {
+            $danach = $besucher->post('/plugin/kontaktanfrage/senden', [
+                'csrf_token' => $mitRecht->formField('csrf_token') ?? '',
+                'kontakt_id' => (string) $kontaktId,
+                'captcha' => $geloest,
+                'grund' => 'kaufinteresse',
+                'name' => "NachVerwerfen-{$unique}",
+                'email' => "nach-verwerfen-{$unique}@example.test",
+            ]);
+            $this->assertSame(
+                "/kontakt?id={$kontaktId}&kontaktanfrage=captcha",
+                $danach->location(),
+                'Nach dem verworfenen POST darf die Aufgabe dieses Formulars nicht mehr gelten.'
+            );
+        } finally {
+            $this->leereRateLimitZaehler('kontaktanfrage-ip');
+            $this->leereRateLimitZaehler('kontaktanfrage-ziel');
+        }
     }
 
     /**
@@ -979,7 +1008,7 @@ class KontaktanfragePluginTest extends FunctionalTestCase {
 
     /** Loest die ausgeschriebene Rechenaufgabe ueber die Bedeutung der Zahlwoerter. */
     private function loeseAufgabe(HttpResponse $seite): int {
-        preg_match('/<label for="captcha">.*?<strong>([^<]+)<\/strong>/su', $seite->body, $treffer);
+        preg_match('/<label for="captcha(?:-[a-z0-9_-]+)?">.*?<strong>([^<]+)<\/strong>/su', $seite->body, $treffer);
         $this->assertNotEmpty(
             $treffer,
             "Konnte die Spam-Aufgabe nicht aus dem Formular lesen, Body: {$seite->body}"

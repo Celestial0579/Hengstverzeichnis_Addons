@@ -26,6 +26,7 @@ use App\Plugin\HookManager;
 use App\Plugin\PluginPage;
 use App\Router;
 use App\Security\Captcha;
+use App\Security\CaptchaContext;
 use App\Security\ClientIp;
 use App\Security\RateLimiter;
 use App\Service\Mailer;
@@ -35,6 +36,14 @@ class Plugin {
 
     /** Der eigene Slug. */
     public const SLUG = 'verkaufsboerse';
+
+    /**
+     * Der Formular-Kontext des Kontaktformulars im Captcha-Katalog
+     * (Framework#351). Mit ihm liegt die Sicherheitsfrage in einem eigenen
+     * Platz der Sitzung (Audit N3) und stört die der Deckanfrage auf
+     * derselben Hengstseite nicht.
+     */
+    public const CAPTCHA_KONTEXT = self::SLUG;
 
     /**
      * `type` der Zeilen des IP-Zählers in der Kern-Tabelle `login_attempts`.
@@ -107,6 +116,58 @@ class Plugin {
         $hooks->addAction('horse.trashed', [$this, 'onHorseTrashed']);
         $hooks->addAction('horse.restored', [$this, 'onHorseRestored']);
         $hooks->addAction('horse.before_delete', [$this, 'onHorseBeforeDelete']);
+    }
+
+    /**
+     * Meldet das Kontaktformular im Captcha-Katalog an (Framework#351), wie
+     * deckanfrage und kontaktanfrage ihre Formulare. Ohne den Eintrag fände
+     * der Betreiber unter /admin/system-settings keine Einstellung für dieses
+     * Formular, und `Captcha::verify()` fiele mit einem Protokolleintrag
+     * "unbekannter Formular-Kontext" auf den eingebauten Schutz zurück.
+     *
+     * @return array<string, string>
+     */
+    public function captchaContexts(): array {
+        if (!self::captchaJeKontext()) {
+            return [];
+        }
+        return [self::CAPTCHA_KONTEXT => 'Kontaktanfrage zu einem Verkaufsinserat'];
+    }
+
+    /**
+     * Legt der Kern die eingebaute Aufgabe je Formular-Kontext ab (Audit N3,
+     * Framework nach v0.9.0)?
+     *
+     * Nur dann bekommt dieses Formular eine Sicherheitsfrage. Ein älterer Kern
+     * hält die Aufgabe in EINEM Platz der Sitzung; auf einer Hengstseite mit
+     * Deckanfrage überschriebe die Aufgabe dieses Formulars die der
+     * Deckanfrage, und eines der beiden wäre nicht mehr absendbar. Dort
+     * bleibt es beim bisherigen Schutz durch Honeypot, IP- und
+     * Inseratszähler. Geprüft wird die Konstante, die mit den Kontext-Plätzen
+     * kam - die Untergrenze in plugin.json bleibt damit in der Linie 0.9.
+     */
+    public static function captchaJeKontext(): bool {
+        return defined(Captcha::class . '::MAX_CONTEXTS');
+    }
+
+    /**
+     * Die Kern-Einstellungen als Schlüssel/Wert-Feld für
+     * `Captcha::renderField()` - im Hook gibt es kein `$this->settings` wie im
+     * Controller (Muster wie deckanfrage). Ein Fehlschlag darf die
+     * Pferdeseite nicht mitreißen: Ohne Einstellungen greift der eingebaute
+     * Anbieter, also der strengere Fall.
+     *
+     * @return array<string, string>
+     */
+    private static function kernEinstellungen(): array {
+        try {
+            $rows = Database::getInstance()
+                ->query('SELECT setting_key, setting_value FROM settings')
+                ->fetchAll(PDO::FETCH_KEY_PAIR);
+            return is_array($rows) ? $rows : [];
+        } catch (\Throwable $e) {
+            return [];
+        }
     }
 
     public function onHorseTrashed(int $horseId, array $horse): void {
@@ -190,7 +251,9 @@ class Plugin {
      * Zeilen ab, die das Kontaktformular in der Kern-Tabelle `login_attempts`
      * hinterlassen hat - den IP-Zähler (enthält IP-Adressen, ein
      * personenbezogenes Datum) und den Zähler je Inserat. Ohne das Formular
-     * haben sie keinen Zweck mehr.
+     * haben sie keinen Zweck mehr. Dazu die Anbieterwahl der
+     * Sicherheitsfrage für dieses Formular: Ihr Schlüssel gehört dem Kern
+     * (`captcha_provider_<kontext>`) und beginnt nicht mit `plugin_`.
      *
      * Die Inseratstabelle bleibt bewusst unberührt: Die plugin.json
      * deklariert kein `owns`, das Deinstallieren nimmt die Inserate also
@@ -198,8 +261,13 @@ class Plugin {
      * Register um die Tabelle ergänzt wird.
      */
     public function uninstall(): void {
-        $stmt = Database::getInstance()->prepare('DELETE FROM `login_attempts` WHERE `type` IN (?, ?)');
+        $db = Database::getInstance();
+
+        $stmt = $db->prepare('DELETE FROM `login_attempts` WHERE `type` IN (?, ?)');
         $stmt->execute([self::RATE_LIMIT_TYPE, self::INSERAT_LIMIT_TYPE]);
+
+        $stmt = $db->prepare('DELETE FROM `settings` WHERE `setting_key` = ?');
+        $stmt->execute([CaptchaContext::settingKey(self::CAPTCHA_KONTEXT)]);
     }
 
     /**
@@ -235,6 +303,11 @@ class Plugin {
 
         if (($_GET['verkaufsanfrage'] ?? '') === 'erfolg') {
             $html .= '<p style="color:var(--success-fg);background:var(--success-soft-bg);padding:0.6rem;border-radius:var(--border-radius, 4px);">Ihre Anfrage wurde erfolgreich versendet.</p>';
+        } elseif (($_GET['verkaufsanfrage'] ?? '') === 'captcha') {
+            // Eigener Status, nicht "fehler" (wie deckanfrage): Die
+            // Sicherheitsfrage ist das Einzige, was der Besucher selbst
+            // beheben kann.
+            $html .= '<p style="color:var(--danger-fg);background:var(--danger-soft-bg);padding:0.6rem;border-radius:var(--border-radius, 4px);">Die Sicherheitsfrage wurde nicht korrekt beantwortet. Bitte lösen Sie die neue Aufgabe und senden Sie die Anfrage erneut.</p>';
         } elseif (($_GET['verkaufsanfrage'] ?? '') === 'fehler') {
             $html .= '<p style="color:var(--danger-fg);background:var(--danger-soft-bg);padding:0.6rem;border-radius:var(--border-radius, 4px);">Ihre Anfrage konnte nicht versendet werden. Bitte versuchen Sie es später erneut.</p>';
         }
@@ -256,13 +329,13 @@ class Plugin {
             . '<input type="email" name="requester_email" required maxlength="' . self::EMAIL_MAX . '" style="width:100%;padding:0.4rem;margin-top:0.2rem;"></label>';
         $html .= '<label style="display:block;margin-top:0.5rem;font-size:0.9em;">Nachricht<br>'
             . '<textarea name="message" required rows="3" maxlength="' . self::NACHRICHT_MAX . '" style="width:100%;padding:0.4rem;margin-top:0.2rem;"></textarea></label>';
-        // Die Sicherheitsfrage des Kerns fehlt hier noch - sie folgt mit der
-        // Kern-Captcha-Aufgabe je Kontext. Der gepinnte Kern hält die
-        // eingebaute Aufgabe (und captcha-altcha die seine) in EINEM
-        // Session-Slot mit fester DOM-ID "captcha". Auf einer Hengstseite mit
-        // Deckanfrage-Formular überschriebe eine zweite Aufgabe die erste, und
-        // eines der beiden Formulare wäre nicht mehr absendbar. Bis dahin
-        // begrenzen IP- und Inseratszähler den Versand.
+        // Spam-Schutz des Kerns (Framework#351) im eigenen Kontext: Die
+        // Aufgabe liegt in einem eigenen Platz der Sitzung, das Feld trägt die
+        // ID `captcha-verkaufsboerse` (Audit N3). Die Deckanfrage auf
+        // derselben Hengstseite bleibt damit unabhängig lösbar.
+        if (self::captchaJeKontext()) {
+            $html .= Captcha::renderField(self::kernEinstellungen(), self::CAPTCHA_KONTEXT);
+        }
         $html .= '<button type="submit" style="margin-top:0.5rem;padding:0.6rem 1.2rem;">Kontakt aufnehmen</button>';
         $html .= '</form></div>';
 
@@ -697,8 +770,7 @@ class VerwaltungController extends BaseController {
  *  2. Honeypot (still "erfolg", bucht nichts)
  *  3. Zähler je IP - prüfen und buchen
  *  4. Leserecht horses.view (still "erfolg")
- *  5. Sicherheitsfrage - folgt mit der Kern-Captcha-Aufgabe je Kontext,
- *     siehe Plugin::addDetailSection()
+ *  5. Sicherheitsfrage im eigenen Kontext ("captcha")
  *  6. Eingabeprüfung mit Längengrenzen und UTF-8-Prüfung ("fehler")
  *  7. Inserat auflösen (kein aktives Inserat: still "erfolg")
  *  8. Zähler je Inserat - erst jetzt prüfen und buchen ("fehler")
@@ -721,6 +793,7 @@ class KontaktController extends BaseController {
         // "webseite" - ein Formular aus einem Browser-Tab von vor dem Update
         // trägt noch ihn.
         if (Captcha::honeypotTripped($_POST) || !empty($_POST['webseite'])) {
+            $this->aufgabeVerwerfen();
             $this->redirectBack($horseId, 'erfolg');
         }
 
@@ -738,9 +811,23 @@ class KontaktController extends BaseController {
         // contact_email des Inserats, kein Kontakt-Datensatz. Die Antwort ist
         // dieselbe wie beim Honeypot; das Recht hängt an der Gruppe, nicht am
         // Pferd. Die Prüfung steht hinter dem IP-Zähler, damit auch solche
-        // POSTs begrenzt bleiben.
+        // POSTs begrenzt bleiben, und vor der Sicherheitsfrage (wie Audit N24
+        // in deckanfrage).
         if (!$this->hasPermission('horses', 'view')) {
+            $this->aufgabeVerwerfen();
             $this->redirectBack($horseId, 'erfolg');
+        }
+
+        // Sicherheitsfrage VOR Eingabeprüfung, Inseratsabfrage und Zähler je
+        // Inserat: Sie darf nichts darüber verraten, ob zu einem Pferd ein
+        // Inserat läuft, und ungelöste Versuche buchen den Zähler des
+        // Inserats nicht. Auf einem Kern ohne Kontext-Plätze rendert das
+        // Formular keine Aufgabe (siehe Plugin::captchaJeKontext()) und prüft
+        // deshalb auch keine.
+        if (Plugin::captchaJeKontext()
+            && Captcha::verify($this->settings, Plugin::CAPTCHA_KONTEXT, $_POST) !== Captcha::OK
+        ) {
+            $this->redirectBack($horseId, 'captcha');
         }
 
         $eingabe = $this->eingabeGueltig($_POST);
@@ -857,6 +944,19 @@ class KontaktController extends BaseController {
         }
 
         return [$name, $email, $nachricht];
+    }
+
+    /**
+     * Verwirft nach Honeypot oder fehlendem Recht die ausgegebene Aufgabe -
+     * nur die dieses Formulars; die der Deckanfrage auf derselben Seite
+     * bleibt gültig (Audit N3). Auf einem Kern ohne Kontext-Plätze gibt es
+     * keine eigene Aufgabe, und `clear()` leerte dort den gemeinsamen Platz,
+     * also gerade die Aufgabe der Deckanfrage.
+     */
+    private function aufgabeVerwerfen(): void {
+        if (Plugin::captchaJeKontext()) {
+            Captcha::clear(Plugin::CAPTCHA_KONTEXT);
+        }
     }
 
     private function redirectBack(?int $horseId, string $status): never {

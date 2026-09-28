@@ -76,14 +76,22 @@ Kontakt-E-Mail des Inserats. Die Hürden greifen in dieser Reihenfolge
    das Recht zeigen Börse und Pferdeseite 404, ein Direkt-POST versendet dann
    nichts und meldet trotzdem „erfolg“. `contacts.view` spielt keine Rolle:
    Der Empfänger ist die Kontakt-E-Mail des Inserats, kein Kontakt-Datensatz.
-5. **Sicherheitsfrage: folgt mit Kern-Captcha je Kontext.** Der gepinnte
-   Kern hält die eingebaute Rechenaufgabe in einem einzigen Session-Slot mit
-   fester DOM-ID `captcha`, `captcha-altcha` die seine ebenso. Auf einer
-   Hengstseite mit Deckanfrage-Formular (`deckanfrage`) überschriebe eine
-   zweite Aufgabe die erste, und eines der beiden Formulare wäre nicht mehr
-   absendbar. Das Formular meldet deshalb noch keinen Captcha-Kontext an;
-   das folgt, sobald der Kern Aufgaben je Kontext ablegt und
-   `captcha-altcha` nachgezogen ist.
+5. **Sicherheitsfrage** (seit 1.4.0, Audit N3). Das Formular meldet sich
+   als Kontext `verkaufsboerse` im Captcha-Katalog des Kerns an
+   („Kontaktanfrage zu einem Verkaufsinserat“). Es gilt der Anbieter aus
+   `captcha_provider_verkaufsboerse`, ohne eigenen Eintrag die globale Wahl
+   (`captcha_provider`), ohne globale die eingebaute Rechenaufgabe. Die
+   Aufgabe liegt in einem eigenen Platz der Sitzung, das Eingabefeld hat die
+   ID `captcha-verkaufsboerse`. Das setzt einen Kern nach v0.9.0 voraus
+   (Framework-Stand 25940ae, erkannt an `Captcha::MAX_CONTEXTS`). Auf einem
+   älteren Kern mit nur einem Platz bleibt das Formular ohne
+   Sicherheitsfrage, weil es sonst die Aufgabe der Deckanfrage auf derselben
+   Seite überschriebe. Deckanfrage und Verkaufsbörse auf derselben
+   Hengstseite bleiben so unabhängig voneinander lösbar; mit `captcha-altcha`
+   ab 1.0.2 gilt das auch für dessen Nachweis. Eine falsch gelöste Aufgabe
+   führt zu `?verkaufsanfrage=captcha` mit eigenem Hinweis. Ungelöste
+   Versuche buchen den Zähler je Inserat nicht. Honeypot und fehlendes
+   Leserecht verwerfen nur die Aufgabe dieses Formulars.
 6. **Eingabeprüfung** (seit 1.3.0): Name und E-Mail-Adresse höchstens 150
    Zeichen, Nachricht höchstens 5000 Zeichen, gültiges UTF-8, kein
    Zeilenumbruch in Name und Adresse (bei der Adresse vor dem Trimmen
@@ -109,8 +117,9 @@ Inserate liegen in `plugin_verkaufsboerse_listings`.
 
 `uninstall()` entfernt seit 1.3.0 die Zähler des Kontaktformulars aus der
 Kern-Tabelle `login_attempts` (Typen `verkaufsboerse` und
-`verkaufsinserat`; der IP-Zähler enthält IP-Adressen). Die Inserate bleiben
-stehen: Die `plugin.json` deklariert kein `owns`.
+`verkaufsinserat`; der IP-Zähler enthält IP-Adressen), seit 1.4.0 auch die
+Anbieterwahl der Sicherheitsfrage (`captcha_provider_verkaufsboerse`). Die
+Inserate bleiben stehen: Die `plugin.json` deklariert kein `owns`.
 
 Schema-Anlage: über den `install()`-Hook des PluginManagers (einmal bei
 Aktivierung bzw. nach einem Addon-Update); auf älteren Kernen ohne diesen

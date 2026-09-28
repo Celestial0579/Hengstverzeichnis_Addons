@@ -65,6 +65,25 @@ beim eingebauten Schutz des Kerns. Das erledigt drei Dinge auf einmal:
 Der Preis: Das Formular muss in derselben Sitzung abgeschickt werden, in der es
 geladen wurde - was es ohnehin tut.
 
+### Eine Aufgabe je Formular (seit 1.0.2, Audit N3)
+
+Die Aufgabe liegt **je Formular-Kontext** in der Sitzung
+(`plugin_captcha_altcha_challenges[<kontext>]`), ebenso die Rückfall-Aufgabe
+des Kerns (`Captcha::issue($kontext)`). Bis 1.0.1 gab es genau einen Platz:
+Standen zwei geschützte Formulare auf einer Seite - etwa Deckanfrage und
+Verkaufsbörse auf einer Hengstseite -, überschrieb das zweite beim Rendern die
+Aufgabe des ersten, und das erste scheiterte beim Absenden immer.
+
+Je Sitzung bleiben höchstens zehn Aufgaben offen (wie `Captcha::MAX_CONTEXTS`
+im Kern); darüber fällt die am längsten nicht mehr gestellte weg, abgelaufene
+räumt das nächste Stellen ab. Eine Aufgabe aus dem früheren gemeinsamen Platz
+wird beim Prüfen noch einmal angenommen, damit ein vor dem Update geladenes
+Formular absendbar bleibt.
+
+Auf einem Kern ohne Kontext-Plätze (bis v0.9.0) läuft das Addon unverändert
+weiter; die Rückfall-Aufgabe des Kerns teilt sich dort weiter einen Platz mit
+den übrigen Formularen.
+
 ## Datenschutz
 
 - **Keine Übermittlung an Dritte.** Weder IP-Adresse noch Browser-Angaben
