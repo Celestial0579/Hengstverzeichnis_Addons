@@ -287,6 +287,10 @@ return [
     'admin.dashboard.tile_backups' => 'Back-ups',
     'admin.dashboard.tile_digest' => 'E-maildigest',
     'admin.dashboard.tile_updates' => 'Updates',
+    'admin.dashboard.storage_warning_title' => 'Paardenfoto\'s zonder eigen volume:',
+    'admin.dashboard.storage_warning_no_mount' => 'storage/horses staat in deze container niet op een eigen volume. Nieuw geüploade foto\'s komen in het bestandssysteem van de container terecht en gaan verloren wanneer de container de volgende keer opnieuw wordt aangemaakt (update, Watchtower). Foto\'s van vóór v0.8.0 blijven tot dan in public/uploads/horses en worden van daaruit geleverd; de migratie verplaatst ze pas zodra het volume is gekoppeld.',
+    'admin.dashboard.storage_warning_anonymous' => 'storage/horses staat alleen op het anonieme volume dat het image als terugvaloptie aanmaakt. Nieuw geüploade foto\'s worden daar opgeslagen, maar raken verweesd wanneer de container de volgende keer opnieuw wordt aangemaakt (update, Watchtower): de nieuwe container krijgt een leeg anoniem volume, en docker volume prune verwijdert het oude. Foto\'s van vóór v0.8.0 blijven tot dan in public/uploads/horses.',
+    'admin.dashboard.storage_warning_action' => 'Maak vóór de volgende update een back-up, voeg in het Compose-bestand het benoemde volume horses_data voor /var/www/html/storage/horses toe (zie docker-compose.yml in de repository), herstart en zet de back-up terug:',
 
     // Selfservice-registratie (#83)
     'register.title' => 'Registreren',

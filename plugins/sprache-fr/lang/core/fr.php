@@ -287,6 +287,10 @@ return [
     'admin.dashboard.tile_backups' => 'Sauvegardes',
     'admin.dashboard.tile_digest' => 'Résumé par e-mail',
     'admin.dashboard.tile_updates' => 'Mises à jour',
+    'admin.dashboard.storage_warning_title' => 'Photos de chevaux sans volume dédié :',
+    'admin.dashboard.storage_warning_no_mount' => 'Dans ce conteneur, storage/horses ne se trouve sur aucun volume dédié. Les photos nouvellement téléversées sont enregistrées dans le système de fichiers du conteneur et seront perdues lors de la prochaine recréation du conteneur (mise à jour, Watchtower). Les photos antérieures à v0.8.0 restent d\'ici là dans public/uploads/horses et sont servies depuis cet emplacement ; la migration ne les déplace qu\'une fois le volume monté.',
+    'admin.dashboard.storage_warning_anonymous' => 'storage/horses se trouve uniquement sur le volume anonyme que l\'image crée par défaut. Les photos nouvellement téléversées y sont stockées, mais deviennent orphelines lors de la prochaine recréation du conteneur (mise à jour, Watchtower) : le nouveau conteneur reçoit un volume anonyme vide, et docker volume prune supprime l\'ancien. Les photos antérieures à v0.8.0 restent d\'ici là dans public/uploads/horses.',
+    'admin.dashboard.storage_warning_action' => 'Avant la prochaine mise à jour, faites une sauvegarde, ajoutez dans le fichier Compose le volume nommé horses_data pour /var/www/html/storage/horses (voir docker-compose.yml dans le dépôt), redémarrez et restaurez la sauvegarde :',
 
     // Inscription en libre-service (#83)
     'register.title' => 'Inscription',

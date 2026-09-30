@@ -11,10 +11,12 @@ use Tests\Support\HttpResponse;
  * Admin-Weg des Kerns (Framework#338): Rückfrageseite, POST mit abgetipptem
  * Slug, danach erneute Aktivierung. Audit M27/M30/N26.
  *
- * Die Deinstallation lässt ein Addon entdeckt, aber deaktiviert. Wer sie
- * aufruft, aktiviert das Addon danach wieder (aktivieren()), damit die
- * übrigen Tests der Suite es aktiv vorfinden - install() legt die Tabellen
- * dabei leer neu an.
+ * Seit dem Kern-Fix zu Audit N62 (Framework f9921d4) entfernt die Deinstallation auch den
+ * Addon-Code (plugins/<slug>) und den Verwaltungseintrag. Der Helfer prüft
+ * das und legt den Code danach wieder ab, wie ein Betreiber, der das Addon
+ * neu hochlädt. Wer ihn aufruft, aktiviert das Addon danach wieder
+ * (aktivieren()), damit die übrigen Tests der Suite es aktiv vorfinden -
+ * install() legt die Tabellen dabei leer neu an.
  */
 trait DeinstallationHelper {
 
@@ -32,11 +34,19 @@ trait DeinstallationHelper {
             'daten' => 'loeschen',
             'bestaetigung' => $slug,
         ]);
+
+        // Addon-Code sofort wieder ablegen, auch wenn eine Zusicherung unten
+        // scheitert: Sonst fehlte das Addon allen folgenden Tests der Suite.
+        $code = \FRAMEWORK_VENDOR_DIR . '/plugins/' . $slug;
+        $codeEntfernt = !is_dir($code);
+        \copyDirectoryRecursive(\ADDON_PLUGINS_DIR . '/' . $slug, $code);
+
         $this->assertSame(
             '/admin/plugins?uninstalled=' . urlencode($slug),
             $antwort->location(),
             "Deinstallation von '{$slug}' nicht durchgelaufen. Body: {$antwort->body}"
         );
+        $this->assertTrue($codeEntfernt, "Die Deinstallation muss den Addon-Code plugins/{$slug} entfernen (Kern-Audit N62).");
 
         return $rueckfrage;
     }

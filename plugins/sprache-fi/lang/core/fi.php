@@ -287,6 +287,10 @@ return [
     'admin.dashboard.tile_backups' => 'Varmuuskopiot',
     'admin.dashboard.tile_digest' => 'Sähköpostikooste',
     'admin.dashboard.tile_updates' => 'Päivitykset',
+    'admin.dashboard.storage_warning_title' => 'Hevoskuvat ilman omaa taltiota:',
+    'admin.dashboard.storage_warning_no_mount' => 'storage/horses ei ole tässä kontissa omalla taltiollaan. Uudet ladatut kuvat tallentuvat kontin tiedostojärjestelmään ja katoavat, kun kontti luodaan seuraavan kerran uudelleen (päivitys, Watchtower). Ennen versiota v0.8.0 ladatut kuvat pysyvät siihen asti hakemistossa public/uploads/horses ja ne toimitetaan sieltä; migraatio siirtää ne vasta, kun taltio on liitetty.',
+    'admin.dashboard.storage_warning_anonymous' => 'storage/horses on vain nimettömällä taltiolla, jonka image luo varalle. Uudet ladatut kuvat tallentuvat sinne, mutta jäävät orvoiksi, kun kontti luodaan seuraavan kerran uudelleen (päivitys, Watchtower): uusi kontti saa tyhjän nimettömän taltion, ja docker volume prune poistaa vanhan. Ennen versiota v0.8.0 ladatut kuvat pysyvät siihen asti hakemistossa public/uploads/horses.',
+    'admin.dashboard.storage_warning_action' => 'Ota varmuuskopio ennen seuraavaa päivitystä, lisää Compose-tiedostoon nimetty taltio horses_data polulle /var/www/html/storage/horses (katso docker-compose.yml repositoriossa), käynnistä uudelleen ja palauta varmuuskopio:',
 
     // Itsepalvelurekisteröityminen (#83)
     'register.title' => 'Rekisteröidy',

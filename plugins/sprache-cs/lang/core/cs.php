@@ -287,6 +287,10 @@ return [
     'admin.dashboard.tile_backups' => 'Zálohy',
     'admin.dashboard.tile_digest' => 'E-mailový souhrn',
     'admin.dashboard.tile_updates' => 'Aktualizace',
+    'admin.dashboard.storage_warning_title' => 'Fotografie koní bez vlastního svazku:',
+    'admin.dashboard.storage_warning_no_mount' => 'storage/horses v tomto kontejneru neleží na vlastním svazku. Nově nahrané fotografie se ukládají do souborového systému kontejneru a při příštím znovuvytvoření kontejneru (aktualizace, Watchtower) budou ztraceny. Fotografie z doby před v0.8.0 zůstávají do té doby v public/uploads/horses a jsou odtud poskytovány; migrace je přesune teprve po připojení svazku.',
+    'admin.dashboard.storage_warning_anonymous' => 'storage/horses leží jen na anonymním svazku, který image vytváří jako náhradní řešení. Nově nahrané fotografie se ukládají tam, ale při příštím znovuvytvoření kontejneru (aktualizace, Watchtower) osiří: nový kontejner dostane prázdný anonymní svazek a docker volume prune ten starý smaže. Fotografie z doby před v0.8.0 zůstávají do té doby v public/uploads/horses.',
+    'admin.dashboard.storage_warning_action' => 'Před příští aktualizací proveďte zálohu, doplňte v souboru Compose pojmenovaný svazek horses_data pro /var/www/html/storage/horses (viz docker-compose.yml v repozitáři), restartujte a zálohu obnovte:',
 
     // Samoobslužná registrace (#83)
     'register.title' => 'Registrace',

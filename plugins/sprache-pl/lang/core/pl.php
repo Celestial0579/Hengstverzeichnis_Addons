@@ -287,6 +287,10 @@ return [
     'admin.dashboard.tile_backups' => 'Kopie zapasowe',
     'admin.dashboard.tile_digest' => 'Podsumowanie e-mail',
     'admin.dashboard.tile_updates' => 'Aktualizacje',
+    'admin.dashboard.storage_warning_title' => 'Zdjęcia koni bez własnego wolumenu:',
+    'admin.dashboard.storage_warning_no_mount' => 'W tym kontenerze storage/horses nie znajduje się na własnym wolumenie. Nowo przesłane zdjęcia trafiają do systemu plików kontenera i zostaną utracone przy następnym odtworzeniu kontenera (aktualizacja, Watchtower). Zdjęcia sprzed v0.8.0 pozostają do tego czasu w public/uploads/horses i są stamtąd udostępniane; migracja przenosi je dopiero po zamontowaniu wolumenu.',
+    'admin.dashboard.storage_warning_anonymous' => 'storage/horses znajduje się tylko na anonimowym wolumenie, który obraz tworzy awaryjnie. Nowo przesłane zdjęcia są tam zapisywane, ale przy następnym odtworzeniu kontenera (aktualizacja, Watchtower) zostają osierocone: nowy kontener otrzymuje pusty anonimowy wolumen, a docker volume prune usuwa stary. Zdjęcia sprzed v0.8.0 pozostają do tego czasu w public/uploads/horses.',
+    'admin.dashboard.storage_warning_action' => 'Przed następną aktualizacją wykonaj kopię zapasową, dodaj w pliku Compose nazwany wolumen horses_data dla /var/www/html/storage/horses (zob. docker-compose.yml w repozytorium), uruchom ponownie i przywróć kopię zapasową:',
 
     // Rejestracja samoobsługowa (#83)
     'register.title' => 'Rejestracja',

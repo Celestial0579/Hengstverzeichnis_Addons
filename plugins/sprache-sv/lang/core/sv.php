@@ -287,6 +287,10 @@ return [
     'admin.dashboard.tile_backups' => 'Säkerhetskopior',
     'admin.dashboard.tile_digest' => 'E-postsammandrag',
     'admin.dashboard.tile_updates' => 'Uppdateringar',
+    'admin.dashboard.storage_warning_title' => 'Hästfoton utan egen volym:',
+    'admin.dashboard.storage_warning_no_mount' => 'storage/horses ligger inte på en egen volym i den här containern. Nyuppladdade foton hamnar i containerns filsystem och går förlorade nästa gång containern återskapas (uppdatering, Watchtower). Foton från före v0.8.0 ligger kvar i public/uploads/horses till dess och levereras därifrån; migreringen flyttar dem först när volymen är monterad.',
+    'admin.dashboard.storage_warning_anonymous' => 'storage/horses ligger bara på den anonyma volym som imagen skapar som reserv. Nyuppladdade foton sparas där men blir föräldralösa nästa gång containern återskapas (uppdatering, Watchtower): Den nya containern får en tom anonym volym, och docker volume prune tar bort den gamla. Foton från före v0.8.0 ligger kvar i public/uploads/horses till dess.',
+    'admin.dashboard.storage_warning_action' => 'Gör en säkerhetskopia före nästa uppdatering, lägg till den namngivna volymen horses_data för /var/www/html/storage/horses i Compose-filen (se docker-compose.yml i repositoriet), starta om och återställ säkerhetskopian:',
 
     // Självbetjäningsregistrering (#83)
     'register.title' => 'Registrera',
