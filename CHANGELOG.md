@@ -241,18 +241,23 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   (oder `APP_URL` bzw. `TRUSTED_HOSTS` setzen), damit die Team-Mail wieder
   einen Link enthält.
 
-- **`gesundheitstests` (1.3.0): Dokumentablage bis zum Kern-Release
-  separat sichern** (Audit N27). Die Kern-Option „Hochgeladene Dateien
-  mitsichern“ erfasst `storage/plugin_gesundheitstests` noch nicht; der
-  SQL-Dump enthält die Einträge, die Dokumente fehlen. Ein Kern-Release, das
-  die Verzeichnisse aus dem Datenregister (`owns.directories`) mitsichert,
-  folgt.
+- **`gesundheitstests` (1.3.0): Dokumentablage ab Kern mit
+  Datenregister-Sicherung automatisch gesichert** (Audit N27). Ab Framework
+  f9921d4 bzw. dem nächsten Kern-Release nimmt die Kern-Option „Hochgeladene
+  Dateien mitsichern“ die Verzeichnisse aus dem Datenregister
+  (`owns.directories`) ins Uploads-Archiv auf, also auch
+  `storage/plugin_gesundheitstests`. Vor einer Deinstallation mit „Daten
+  löschen“ sichert der Kern die Ablage immer mit, bei ausgeschalteter Option
+  als eigenes Archiv `addondaten-…`. Auf Kernen bis v0.9.0 enthält die
+  Sicherung nur die Einträge im SQL-Dump, die Dokumente fehlen.
 
-  **Für Betreiber:** Das Verzeichnis `storage/plugin_gesundheitstests` bis
-  dahin selbst sichern (rsync, Hoster-Backup), insbesondere **vor einer
-  Deinstallation mit „Daten löschen“**, die es jetzt tatsächlich entfernt, und
-  vor einem Umzug. Datenbank und Ablage immer gemeinsam zurückspielen (siehe
-  „Verwaiste Dokumente“ unter „Behoben“).
+  **Für Betreiber:** Mit dem neuen Kern eine externe Sicherung einrichten und
+  „Hochgeladene Dateien mitsichern“ einschalten. Auf Kernen bis v0.9.0 das
+  Verzeichnis `storage/plugin_gesundheitstests` weiterhin selbst sichern
+  (rsync, Hoster-Backup), insbesondere **vor einer Deinstallation mit „Daten
+  löschen“**, die es jetzt tatsächlich entfernt, und vor einem Umzug.
+  Datenbank und Ablage immer gemeinsam zurückspielen (siehe „Verwaiste
+  Dokumente“ unter „Behoben“).
 
 ### Behoben
 

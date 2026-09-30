@@ -49,12 +49,19 @@ löschen“ entfernt damit beides**; die Rückfrageseite nennt vorher die Zahl d
 Einträge und Dokumente. Bis 1.2.0 blieb beides trotz „Daten löschen“ stehen,
 und nach erneuter Aktivierung waren die Einträge samt Dokumenten wieder da.
 
-**Sicherung (Audit N27):** Die Kern-Option „Hochgeladene Dateien mitsichern“
-erfasst `storage/plugin_gesundheitstests` bis zu einem Kern-Release, das die
-Verzeichnisse aus dem Datenregister mitsichert, **nicht**. Der SQL-Dump enthält
-die Einträge, die Dokumente fehlen. Das Verzeichnis bitte separat sichern
-(etwa per rsync oder Hoster-Backup) - insbesondere **vor einer Deinstallation
-mit „Daten löschen“** und vor einem Umzug.
+**Sicherung (Audit N27):** Ab dem Kern mit Datenregister-Sicherung
+(Framework f9921d4 bzw. das nächste Kern-Release nach v0.9.0) wird
+`storage/plugin_gesundheitstests` **automatisch mitgesichert**, sobald eine
+externe Sicherung eingerichtet ist:
+- Mit der Kern-Option „Hochgeladene Dateien mitsichern“ steht die Ablage im
+  Uploads-Archiv (unter `storage/…`, relativ zur Installationswurzel).
+- Vor einer **Deinstallation mit „Daten löschen“** sichert der Kern die
+  Ablage immer mit; ist die Option aus, als eigenes Archiv `addondaten-…`.
+
+Auf älteren Kernen (bis v0.9.0) enthält die Sicherung nur die Einträge im
+SQL-Dump, die Dokumente fehlen. Dort das Verzeichnis weiterhin separat sichern
+(etwa per rsync oder Hoster-Backup) - insbesondere vor einer Deinstallation
+mit „Daten löschen“ und vor einem Umzug.
 
 **Endgültiges Löschen eines Pferdes (Audit N26):** Wird ein Pferd endgültig
 gelöscht - einzeln, über „Papierkorb leeren“ oder durch die 30-Tage-Bereinigung
