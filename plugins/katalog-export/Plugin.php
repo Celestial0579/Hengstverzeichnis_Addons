@@ -282,8 +282,14 @@ class ExportController extends BaseController {
             $params[] = $birthYearTo;
         }
         if ($qColor !== '') {
-            $where[] = "h.color LIKE ?";
-            $params[] = '%' . $qColor . '%';
+            // Exakt statt Teilstring, wie im Kern-Katalog (Framework, Audit
+            // N70): Das Formular bietet die Farbe als Auswahlliste exakter
+            // DISTINCT-Werte an. Mit LIKE '%braun%' exportierte "Braun" auch
+            // "Dunkelbraun" und "Braunschimmel", und % bzw. _ wirkten als
+            // Jokerzeichen. Die Kollation utf8mb4_unicode_ci hält den
+            // Vergleich groß-/kleinschreibungsunabhängig.
+            $where[] = "h.color = ?";
+            $params[] = $qColor;
         }
         if ($qSex !== '') {
             $where[] = "h.sex = ?";

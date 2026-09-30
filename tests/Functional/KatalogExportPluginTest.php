@@ -70,6 +70,37 @@ class KatalogExportPluginTest extends FunctionalTestCase {
         $this->assertSame(200, $filteredResponse->statusCode);
         $this->assertStringNotContainsString($horseName, $filteredResponse->body);
 
+        // 5a. Farbfilter exakt statt Teilstring (Framework-Audit N70): Das
+        // Formular bietet die Farbe als Auswahlliste exakter Werte an.
+        // "Braun" darf "Dunkelbraun" und "Braunschimmel" nicht mitliefern,
+        // % darf kein Jokerzeichen sein. q_name grenzt auf diesen Lauf ein.
+        foreach (['Braun', 'Dunkelbraun', 'Braunschimmel'] as $farbe) {
+            $farbAntwort = $admin->post('/admin/horses/store', [
+                'csrf_token' => $createForm->formField('csrf_token') ?? '',
+                'name' => "CsvFarbe{$farbe}-{$unique}",
+                'status' => 'active',
+                'color' => $farbe,
+            ]);
+            $this->assertSame('/admin/horses?success=created', $farbAntwort->location());
+        }
+        $zeilenMit = static function (string $csv, string $kennung): array {
+            return array_values(array_filter(
+                preg_split('/\r\n|\n/', $csv) ?: [],
+                static fn(string $zeile): bool => str_contains($zeile, $kennung)
+            ));
+        };
+        foreach (['Braun', 'braun'] as $wert) {
+            $csvFarbe = $admin->get('/plugin/katalog-export/csv?q_name=' . urlencode("-{$unique}") . '&q_color=' . urlencode($wert));
+            $this->assertSame(200, $csvFarbe->statusCode);
+            $zeilen = $zeilenMit($csvFarbe->body, $unique);
+            $this->assertCount(1, $zeilen, "q_color={$wert} muss genau eine Datenzeile liefern, Body: {$csvFarbe->body}");
+            $this->assertStringContainsString("CsvFarbeBraun-{$unique}", $zeilen[0]);
+        }
+        $csvSchimmel = $admin->get('/plugin/katalog-export/csv?q_name=' . urlencode("-{$unique}") . '&q_color=Braunschimmel');
+        $this->assertCount(1, $zeilenMit($csvSchimmel->body, $unique), 'Gegenprobe: die längere Farbe trifft sich selbst');
+        $csvJoker = $admin->get('/plugin/katalog-export/csv?q_name=' . urlencode("-{$unique}") . '&q_color=' . urlencode('%'));
+        $this->assertCount(0, $zeilenMit($csvJoker->body, $unique), '% darf kein Jokerzeichen sein');
+
         // 5b. Status-Split (Framework #188): verstorbenes, zuchtinaktives Pferd
         // anlegen - die CSV bekommt Verstorben/Todesjahr-Spalten, q_deceased
         // filtert den Lebensstatus, q_status den Zuchtstatus.

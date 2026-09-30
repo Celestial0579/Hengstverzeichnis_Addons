@@ -256,6 +256,14 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ### Behoben
 
+- **`katalog-export` 1.3.1: Farbfilter lieferte zusätzliche Farben**
+  (Framework-Audit N70). Wie im Kern-Katalog vergleicht der Farbfilter des
+  CSV-Exports jetzt exakt, ohne Rücksicht auf Groß-/Kleinschreibung: „Braun“
+  exportiert keine dunkelbraunen Pferde und keine Braunschimmel mehr, `%` und
+  `_` wirken nicht mehr als Jokerzeichen. Unabhängig vom Framework-Pin, weil
+  das Addon eigenes SQL hat. `core_compatibility` und `core_supported_max`
+  bleiben unverändert (Linie 0.9).
+
 - **`kontaktanfrage` 1.2.0, `mitgliedsstatus` 1.2.0: Zusammenführen,
   Anonymisieren und endgültiges Löschen ziehen die Addon-Daten nach**
   (Audit M33, N45). Der Kern meldet diese drei Vorgänge seit Framework#474
@@ -606,6 +614,19 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   unverändert, nur ohne Datenlöschung). `horse.before_delete` und
   `horse.deleted` gibt es seit Framework#164, den `uninstall()`-Hook seit
   Framework#338.
+- **`embed-widget` 1.1.1: Farbe als genauer Wert** (Framework-Audit N70).
+  Der Kern-Katalog filtert die Farbe mit dem nächsten Framework-Stand exakt.
+  Der Generator beschriftet das Feld deshalb „Farbe (genauer Wert)“ und
+  schlägt die Farbwerte veröffentlichter Pferde vor. `core_compatibility` und
+  `core_supported_max` bleiben unverändert (Linie 0.9).
+
+  **Für Betreiber:** Bereits verteilte Schnipsel mit Teilfarben (etwa
+  `q_color=braun` für alle Brauntöne oder `q_color=brau`) liefern nach dem
+  Kern-Update nur noch exakte bzw. keine Treffer. Bitte prüfen und mit dem
+  genauen Farbwert neu erzeugen. Außerdem öffnen Pferdeprofile aus dem
+  eingebetteten Katalog künftig auf der obersten Ebene (Framework-Audit N88);
+  in der Vorschau des Generators navigiert ein Klick auf ein Profil deshalb
+  die ganze Admin-Seite.
 
 - **`beispiel-erweiterungspunkte` 1.1.0**: belegt die drei neuen Kern-Hooks
   `contact.merged`, `contact.anonymized` und `contact.erased` mit einem
