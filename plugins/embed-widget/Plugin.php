@@ -199,6 +199,7 @@ class GeneratorController extends BaseController {
         $erlaubte = FrameGuard::allowedAncestors();
 
         PluginPage::render('Embed-Widget', $this->html(
+            $this->farbwerte(),
             $gewaehlt,
             $sex,
             $breite,
@@ -209,6 +210,25 @@ class GeneratorController extends BaseController {
             $erlaubte,
             $basis
         ));
+    }
+
+
+    /**
+     * Die vorhandenen Farbwerte als Vorschlagsliste für q_color. Der
+     * Kern-Katalog filtert die Farbe seit Framework-Audit N70 exakt, ein
+     * Teilwert wie "brau" trifft dort nichts mehr. Angeboten werden die Werte,
+     * die auch die Farbauswahl des öffentlichen Katalogs zeigt (veröffentlichte,
+     * nicht gelöschte Pferde) - ein Wert nur unveröffentlichter Pferde ergäbe
+     * im eingebetteten Katalog immer "Keine Treffer".
+     *
+     * @return array<int, string>
+     */
+    private function farbwerte(): array {
+        $werte = Database::getInstance()->query(
+            "SELECT DISTINCT color FROM horses WHERE color IS NOT NULL AND color != '' AND deleted_at IS NULL AND is_published = 1 ORDER BY color ASC"
+        )->fetchAll(PDO::FETCH_COLUMN);
+
+        return array_map('strval', $werte ?: []);
     }
 
 
@@ -232,10 +252,12 @@ class GeneratorController extends BaseController {
 
 
     /**
+     * @param array<int, string> $farben Vorschläge für q_color (datalist)
      * @param array<string, string> $gewaehlt
      * @param array<int, string> $erlaubte
      */
     private function html(
+        array $farben,
         array $gewaehlt,
         string $sex,
         int $breite,
@@ -301,9 +323,21 @@ class GeneratorController extends BaseController {
              . 'der Besucher kann im Rahmen weiter filtern.</p>';
         $out .= '<div class="ew-grid">';
         foreach (EmbedCode::FILTERS as $key => $label) {
-            $out .= '<div class="form-group"><label for="' . $h($key) . '">' . $h($label) . '</label>'
+            // Die Farbe filtert im Kern exakt (Framework-Audit N70): Label und
+            // Vorschlagsliste sagen das, statt einen Teilwert stumm ins Leere
+            // laufen zu lassen. EmbedCode::FILTERS bleibt unverändert.
+            $istFarbe = $key === 'q_color';
+            $out .= '<div class="form-group"><label for="' . $h($key) . '">' . $h($istFarbe ? 'Farbe (genauer Wert)' : $label) . '</label>'
                  . '<input type="text" class="form-control" id="' . $h($key) . '" name="' . $h($key) . '" value="'
-                 . $h($gewaehlt[$key] ?? '') . '"></div>';
+                 . $h($gewaehlt[$key] ?? '') . '"' . ($istFarbe ? ' list="ew-farben" autocomplete="off"' : '') . '>';
+            if ($istFarbe) {
+                $out .= '<datalist id="ew-farben">';
+                foreach ($farben as $farbe) {
+                    $out .= '<option value="' . $h($farbe) . '"></option>';
+                }
+                $out .= '</datalist>';
+            }
+            $out .= '</div>';
         }
         $out .= '<div class="form-group"><label for="q_sex">Geschlecht</label><select class="form-control" id="q_sex" name="q_sex">';
         foreach (['' => 'alle'] + EmbedCode::SEXES as $wert => $label) {

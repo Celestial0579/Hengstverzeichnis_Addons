@@ -76,6 +76,30 @@ class EmbedWidgetPluginTest extends FunctionalTestCase {
             'Ohne freigegebene Domain darf keine Live-Vorschau gerendert werden'
         );
 
+        // 4b. Die Farbe filtert im Kern exakt (Framework-Audit N70). Der
+        //     Generator sagt das im Label und schlägt die Farbwerte vor, die
+        //     auch die Farbauswahl des öffentlichen Katalogs zeigt - nur von
+        //     veröffentlichten Pferden.
+        $db = \App\Database::getInstance();
+        $einfuegen = $db->prepare("INSERT INTO horses (name, status, color, is_published) VALUES (?, 'active', ?, ?)");
+        $einfuegen->execute(["EmbedFarbe {$unique}", "Farbe-oeffentlich-{$unique}", 1]);
+        $oeffentlichId = (int)$db->lastInsertId();
+        $einfuegen->execute(["EmbedFarbe intern {$unique}", "Farbe-intern-{$unique}", 0]);
+        $internId = (int)$db->lastInsertId();
+        try {
+            $mitFarben = $admin->get('/plugin/embed-widget/generator');
+            $this->assertSame(200, $mitFarben->statusCode);
+            $this->assertStringContainsString('Farbe (genauer Wert)', $mitFarben->body);
+            $this->assertStringContainsString('list="ew-farben"', $mitFarben->body);
+            $this->assertSame(1, preg_match('#<datalist id="ew-farben">(.*?)</datalist>#s', $mitFarben->body, $liste),
+                'Die Vorschlagsliste für die Farbe fehlt');
+            $this->assertStringContainsString('value="Farbe-oeffentlich-' . $unique . '"', $liste[1]);
+            $this->assertStringNotContainsString('Farbe-intern-' . $unique, $mitFarben->body,
+                'Eine Farbe nur unveröffentlichter Pferde träfe im eingebetteten Katalog nichts');
+        } finally {
+            $db->prepare('DELETE FROM horses WHERE id IN (?, ?)')->execute([$oeffentlichId, $internId]);
+        }
+
         // 5. Deaktivieren lässt sich das Addon wieder.
         $aus = $admin->post('/admin/plugins/toggle', [
             'csrf_token' => $this->currentCsrfToken($admin),

@@ -55,6 +55,10 @@ Züchter bzw. Besitzer (etwa eine Besitzerhistorie über mehrere Jahre) stehen
 kommasepariert in ihrer jeweiligen Spalte, wie auf der Katalogkarte des
 Kerns (#70).
 
+Die Farbe (`q_color`) filtert wie im Kern-Katalog nach dem exakten Wert
+(ohne Rücksicht auf Groß-/Kleinschreibung): „Braun“ exportiert keine
+dunkelbraunen Pferde.
+
 Die Export-Route `/plugin/katalog-export/csv` akzeptiert dieselben
 Query-Parameter wie die öffentliche Katalogseite (`search`, `q_name`,
 `q_ueln`, `birth_year_from`, `birth_year_to`, `q_sex`, `q_breed`, `q_color`, `q_status`
