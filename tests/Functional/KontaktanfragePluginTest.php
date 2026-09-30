@@ -491,6 +491,69 @@ class KontaktanfragePluginTest extends FunctionalTestCase {
     }
 
     /**
+     * Audit M6, D14: Die Team-Mail verlinkt die Verwaltung nur mit einer
+     * festen Stamm-URL. Ohne sie geht die Anfrage trotzdem ein (gespeichert,
+     * Versand versucht), die Mail bekommt keinen absoluten Link, und das
+     * Protokoll nennt die Konfigurationslücke - je Anfrage genau einmal.
+     * Mit Stamm-URL entsteht dieser Eintrag nicht.
+     *
+     * Den Mailinhalt selbst prüft tests/Unit/KontaktanfrageVerwaltungslinkTest
+     * (hier gibt es kein SMTP, siehe Klassenkommentar).
+     */
+    public function testTeamMailVerlinktNurMitFesterStammUrl(): void {
+        $admin = $this->authenticatedClient();
+        $unique = uniqid();
+        $kontaktId = $this->bereiteZielVor($admin, "KAStammUrl-{$unique}", $unique);
+        $besucher = $this->newClient();
+        $db = Database::getInstance();
+
+        $ohneLink = static function (int $anfrageId) use ($db, $kontaktId): int {
+            $stmt = $db->prepare(
+                "SELECT COUNT(*) FROM audit_logs
+                 WHERE action = 'Team-Mail ohne Verwaltungslink' AND category = ? AND details LIKE ?"
+            );
+            $stmt->execute([self::SLUG, "Kontakt #{$kontaktId} - Anfrage #{$anfrageId}:%"]);
+            return (int) $stmt->fetchColumn();
+        };
+        $letzteAnfrage = static fn(): int => (int) $db->query(
+            'SELECT COALESCE(MAX(id), 0) FROM `plugin_kontaktanfrage_requests`'
+        )->fetchColumn();
+
+        $vorher = self::stammUrlSetzen(null);
+        $this->leereRateLimitZaehler('kontaktanfrage-ip');
+        $this->leereRateLimitZaehler('kontaktanfrage-ziel');
+        try {
+            // (a) Ohne feste Stamm-URL - der Host-Header des Besuchers ist
+            //     keine.
+            $antwort = $this->sendeAnfrageMitAufgabe($besucher, $kontaktId, [
+                'grund' => 'kaufinteresse',
+                'name' => "OhneStamm-{$unique}",
+                'email' => "ohne-stamm-{$unique}@example.test",
+            ]);
+            $this->assertSame("/kontakt?id={$kontaktId}&kontaktanfrage=fehler", $antwort->location());
+            $ohne = $letzteAnfrage();
+            $this->assertSame(1, $ohneLink($ohne), 'Ohne Stamm-URL muss das Protokoll den fehlenden Link nennen');
+
+            // (b) Mit fester Stamm-URL: kein solcher Eintrag.
+            self::stammUrlSetzen(self::TEST_STAMM_URL);
+            $this->leereRateLimitZaehler('kontaktanfrage-ip');
+            $antwort = $this->sendeAnfrageMitAufgabe($besucher, $kontaktId, [
+                'grund' => 'kaufinteresse',
+                'name' => "MitStamm-{$unique}",
+                'email' => "mit-stamm-{$unique}@example.test",
+            ]);
+            $this->assertSame("/kontakt?id={$kontaktId}&kontaktanfrage=fehler", $antwort->location());
+            $mit = $letzteAnfrage();
+            $this->assertGreaterThan($ohne, $mit, 'Die zweite Anfrage muss gespeichert werden');
+            $this->assertSame(0, $ohneLink($mit), 'Mit Stamm-URL wird der Link gesetzt, nichts zu protokollieren');
+        } finally {
+            self::stammUrlSetzen($vorher);
+            $this->leereRateLimitZaehler('kontaktanfrage-ip');
+            $this->leereRateLimitZaehler('kontaktanfrage-ziel');
+        }
+    }
+
+    /**
      * Audit N2: Ohne contacts.view der Gast-Gruppe zeigt die Kontaktseite 404,
      * das Formular erscheint also nicht. Ein direkter POST darf dann auch
      * nichts speichern - und meldet trotzdem "erfolg" (nicht "captcha"),

@@ -226,6 +226,17 @@ Betreiber tun.
 - **Ein nachträgliches Opt-out gilt rückwirkend:** Eine bereits gespeicherte
   Anfrage lässt sich danach nicht mehr weiterleiten. Eine gespeicherte
   Anfrage ist kein Freibrief, eine später erklärte Ablehnung zu übergehen.
+- **Verwaltungslink nur mit fester Stamm-URL (1.1.4, Audit M6).** Die
+  Team-Mail entsteht aus einem anonymen Formular. Ihr Link auf
+  `/plugin/kontaktanfrage/verwaltung` kam bisher aus
+  `Mailer::getBaseUrl()`, das ohne `base_url`/`APP_URL` den Host-Header der
+  Anfrage nimmt - und den bestimmt der Absender. Ab Kern-#473 nimmt das Addon
+  `App\Security\BaseUrl::forLinks()`: `settings.base_url`, sonst `APP_URL`,
+  sonst ein Host aus `TRUSTED_HOSTS`. Fehlt alles, geht die Mail wie die
+  DSGVO-Mail des Kerns trotzdem hinaus, nur ohne absoluten Link (Hinweis auf
+  die Dashboard-Kachel), und das Audit-Log vermerkt „Team-Mail ohne
+  Verwaltungslink“. Auf Kernen ohne `BaseUrl` (bis v0.9.0) bleibt es beim
+  bisherigen Verhalten (Weiche per `class_exists()`).
 - **Keine Weiterleitung an einen jüngeren Kontakt (1.1.1).** Ist der Kontakt
   unter der gespeicherten Kennung jünger als die Anfrage (`contacts.created_at`
   nach `created_at` der Anfrage), war er nicht ihr Ziel: Die Kennung wurde neu

@@ -1064,10 +1064,19 @@ final class Nachricht {
     }
 
     /**
+     * $basisUrl null heißt: keine vertrauenswürdige Stamm-URL (siehe
+     * Verwaltungslink::basis()). Die Mail geht dann OHNE absoluten Link
+     * hinaus und nennt stattdessen die Dashboard-Kachel - wie die
+     * DSGVO-Mail des Kerns an den Verband (Audit M6).
+     *
      * @param array{id:int, name:string, email:?string} $ziel
      */
-    public static function anTeam(array $ziel, string $grundLabel, string $name, string $email, string $seitenname, string $basisUrl): string {
+    public static function anTeam(array $ziel, string $grundLabel, string $name, string $email, string $seitenname, ?string $basisUrl): string {
         $e = static fn(string $wert): string => htmlspecialchars($wert, ENT_QUOTES, 'UTF-8');
+
+        $wo = $basisUrl !== null
+            ? $e(rtrim($basisUrl, '/') . '/' . Verwaltungslink::PFAD)
+            : 'im Verwaltungsbereich über die Kachel „Kontaktanfragen“ im Dashboard';
 
         return '<p>Über ' . $e($seitenname) . ' ist eine Kontaktanfrage eingegangen.</p>'
             . '<p><strong>Ziel:</strong> ' . $e($ziel['name']) . '<br>'
@@ -1075,7 +1084,7 @@ final class Nachricht {
             . '<strong>Name des Anfragenden:</strong> ' . $e($name) . '<br>'
             . '<strong>E-Mail des Anfragenden:</strong> ' . $e($email) . '</p>'
             . '<p>Bitte prüfen und - wenn Kontakt gewünscht ist - weiterleiten: '
-            . $e(rtrim($basisUrl, '/') . '/plugin/kontaktanfrage/verwaltung') . '</p>';
+            . $wo . '</p>';
     }
 
     /**
@@ -1093,6 +1102,52 @@ final class Nachricht {
             . '<p>Sie können direkt an die genannte Adresse antworten. Ihre eigene Adresse wurde dem Anfragenden '
             . 'nicht angezeigt. Wenn Sie künftig keine Kontaktanfragen mehr erhalten möchten, sagen Sie dem Team '
             . 'Bescheid - die Anfragen lassen sich für Ihren Datensatz abschalten.</p>';
+    }
+}
+
+/**
+ * Die Basis für den Verwaltungslink in der Team-Mail (Audit M6, D14).
+ *
+ * WORUM ES GEHT. Die Team-Mail entsteht aus einem ANONYMEN Formular. Bisher
+ * stammte ihr Link aus Mailer::getBaseUrl(), und das fällt ohne base_url und
+ * APP_URL auf den Host-Header der Anfrage zurück - dessen Wert bestimmt der
+ * Absender. Ein `Host: evil.example` erzeugte so eine echte Verbandsmail an
+ * das Team, deren Verwaltungslink auf eine fremde Domain zeigt (Phishing der
+ * Zugangsdaten derer, die Anfragen bearbeiten dürfen).
+ *
+ * DIE REGEL DES KERNS. Seit Framework#473 gibt es App\Security\BaseUrl:
+ * forLinks() liefert nur eine fest konfigurierte Stamm-URL (settings.base_url,
+ * sonst die Umgebungsvariable APP_URL) oder einen Host aus der Allowlist
+ * TRUSTED_HOSTS, sonst null. Der Kern verschickt seine DSGVO-Mail an den
+ * Verband in diesem Fall trotzdem, nur ohne absoluten Link - dasselbe tut
+ * dieses Addon: Die Anfrage soll das Team erreichen, der Link ist entbehrlich.
+ *
+ * ÄLTERE KERNE (bis v0.9.0) kennen BaseUrl nicht. Dort bleibt es beim
+ * bisherigen Mailer::getBaseUrl() - nicht besser, aber auch nicht schlechter
+ * als bisher. Die Weiche per class_exists() statt einer höheren
+ * core_compatibility, damit das Addon auf diesen Kernen weiter läuft.
+ */
+final class Verwaltungslink {
+
+    /** Pfad der Verwaltung relativ zur Stamm-URL. */
+    public const PFAD = 'plugin/kontaktanfrage/verwaltung';
+
+    private function __construct() {}
+
+    /**
+     * @param string|null     $settingBaseUrl  settings.base_url
+     * @param bool            $kernKenntBaseUrl class_exists(BaseUrl::class) -
+     *                                          als Argument, damit sich der
+     *                                          Zweig alter Kerne testen lässt
+     * @param callable():string $alterRueckfall Mailer::getBaseUrl() - nur für
+     *                                          Kerne ohne BaseUrl
+     * @return string|null Basis mit abschließendem Slash, oder null (kein Link)
+     */
+    public static function basis(?string $settingBaseUrl, bool $kernKenntBaseUrl, callable $alterRueckfall): ?string {
+        if (!$kernKenntBaseUrl) {
+            return $alterRueckfall();
+        }
+        return \App\Security\BaseUrl::forLinks($settingBaseUrl);
     }
 }
 
@@ -1286,10 +1341,28 @@ class AnfrageController extends BaseController {
 
         $seitenname = (string) ($this->settings['site_name'] ?? 'Hengstverzeichnis');
         $mailer = new Mailer();
+        // Link nur mit vertrauenswürdiger Stamm-URL (Audit M6, siehe
+        // Verwaltungslink). Ohne sie geht die Mail ohne Link hinaus, und das
+        // Protokoll sagt dem Betreiber, was fehlt - sonst fiele ihm der
+        // fehlende Link nie als Konfigurationslücke auf.
+        $basisUrl = Verwaltungslink::basis(
+            isset($this->settings['base_url']) ? (string) $this->settings['base_url'] : null,
+            class_exists(\App\Security\BaseUrl::class),
+            static fn(): string => $mailer->getBaseUrl()
+        );
+        if ($basisUrl === null) {
+            PluginAudit::log(
+                Plugin::SLUG,
+                'Team-Mail ohne Verwaltungslink',
+                "Kontakt #{$id}",
+                "Anfrage #{$anfrageId}: keine feste Stamm-URL - unter Admin > Systemeinstellungen "
+                    . 'festlegen oder APP_URL bzw. TRUSTED_HOSTS setzen'
+            );
+        }
         $versendet = $mailer->send(
             $teamAdresse,
             Nachricht::betreff("Kontaktanfrage ({$grundLabel}) - {$ziel['name']}"),
-            Nachricht::anTeam($ziel, $grundLabel, $name, $email, $seitenname, $mailer->getBaseUrl())
+            Nachricht::anTeam($ziel, $grundLabel, $name, $email, $seitenname, $basisUrl)
         );
 
         if ($versendet) {

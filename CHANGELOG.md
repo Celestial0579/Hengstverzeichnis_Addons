@@ -225,6 +225,22 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   Inserat oder an unveröffentlichte Pferde melden „erfolg“ statt „fehler“ –
   ohne Versand. Der Status verriet bisher, zu welchem Pferd ein Inserat läuft.
 
+- **`kontaktanfrage` (1.1.4): Die Team-Mail verlinkt die Verwaltung nur mit
+  fester Stamm-URL** (Audit M6, D14). Der Link kam aus
+  `Mailer::getBaseUrl()` und damit ohne `base_url`/`APP_URL` aus dem
+  Host-Header der Anfrage. Wer das anonyme Formular mit
+  `Host: evil.example` abschickte, erzeugte eine echte Verbandsmail an das
+  Team mit einem Link auf eine fremde Domain. Mit dem Kern ab Framework#473
+  (`App\Security\BaseUrl`) gilt dieselbe Regel wie für die DSGVO-Mail des
+  Kerns: Link nur aus `settings.base_url`, `APP_URL` oder einem Host aus
+  `TRUSTED_HOSTS`; sonst geht die Mail ohne absoluten Link hinaus und das
+  Audit-Log vermerkt „Team-Mail ohne Verwaltungslink“. Auf älteren Kernen
+  bleibt es beim bisherigen Verhalten.
+
+  **Für Betreiber:** Stamm-URL unter Admin › Systemeinstellungen festlegen
+  (oder `APP_URL` bzw. `TRUSTED_HOSTS` setzen), damit die Team-Mail wieder
+  einen Link enthält.
+
 ### Behoben
 
 - **`deckanfrage` (1.2.1): Überlange Eingaben führen nicht mehr zu einer
