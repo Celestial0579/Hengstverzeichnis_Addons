@@ -82,6 +82,7 @@ return [
     'catalog.search_placeholder' => 'Fulltextové vyhledávání (kůň, UELN, chovatel, majitel, připouštěcí stanice, otec, matka)...',
     'catalog.search_button' => 'Hledat',
     'catalog.reset_filters' => 'Resetovat filtry',
+    'catalog.contact_filter_unavailable' => 'Vyhledávání podle chovatele, majitele, držitele nebo připouštěcí stanice zde není k dispozici.',
     'catalog.advanced_filters' => '⚙️ Rozšířené filtry atributů (kůň, chovatel, připouštěcí stanice, původ)',
     'catalog.horse_name' => 'Jméno koně',
     'catalog.horse_name_placeholder' => 'např. Storm',
@@ -304,6 +305,7 @@ return [
     'register.email_invalid' => 'Zadejte prosím platnou e-mailovou adresu.',
     'register.password_invalid' => 'Hesla se neshodují nebo jsou příliš krátká (alespoň 8 znaků).',
     'register.already_taken' => 'Uživatelské jméno nebo e-mailová adresa je již obsazena.',
+    'register.unavailable' => 'Registrace momentálně není možná (nastavení není dokončeno). Obraťte se prosím na svaz.',
     'register.verification_invalid' => 'Potvrzovací odkaz je neplatný nebo jeho platnost vypršela. Zaregistrujte se prosím znovu, nebo se obraťte na provozovatele.',
 
     'auth.2fa_heading' => '🔐 Ověření 2FA',

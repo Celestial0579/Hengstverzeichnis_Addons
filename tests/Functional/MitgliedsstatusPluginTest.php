@@ -246,7 +246,11 @@ class MitgliedsstatusPluginTest extends FunctionalTestCase {
         // draussen - auch nicht, wenn der Kontakt öffentlich freigegeben ist.
         $this->statusSpeichern($admin, $klar, 'mitglied', true);
         $oeffentlich = $this->newClient()->get('/kontakt?id=' . $klar);
-        $this->assertStringNotContainsString('4711', $oeffentlich->body);
+        // CSRF-Tokens anderer Addons auf derselben Seite (etwa das Formular
+        // von kontaktanfrage) sind zufälliges Hex und enthalten ab und zu
+        // "4711" - sie sind keine Ausgabe der Kennung.
+        $sichtbar = (string) preg_replace('/name="csrf_token" value="[0-9a-f]*"/', '', $oeffentlich->body);
+        $this->assertStringNotContainsString('4711', $sichtbar);
         $this->assertStringNotContainsString('crm.example.test', $oeffentlich->body);
 
         // 11. Protokoll (Framework#352). Gegengeprüft ist der Test, indem der
@@ -658,6 +662,109 @@ class MitgliedsstatusPluginTest extends FunctionalTestCase {
             $this->altbestandEntfernen();
             $this->marker395Setzen($marker395);
         }
+    }
+
+    /**
+     * Kern-Hooks contact.merged, contact.anonymized, contact.erased
+     * (Framework#474 Audit M33, Framework#476 Audit N45).
+     *
+     * Der Fremdschlüssel mit CASCADE greift nur beim endgültigen Löschen.
+     * Beim Anonymisieren blieb die CiviCRM-Zuordnung am Datensatz - über das
+     * Fremdsystem war der „anonymisierte“ Mensch wieder zu finden. Beim
+     * Zusammenführen blieben Status und Zuordnung an der Quelle im Papierkorb
+     * und gingen beim Leeren verloren.
+     *
+     *  1. Ziel ohne Angaben: Status und Zuordnung kommen von der Quelle, die
+     *     öffentliche Freigabe NICHT.
+     *  2. Ziel mit eigenen Angaben: Das Ziel gewinnt, nichts wird
+     *     überschrieben, das Protokoll nennt den Konflikt.
+     *  3. Anonymisieren: Status und Zuordnung sind weg.
+     *  4. Endgültig löschen (DSGVO): nichts bleibt liegen.
+     */
+    public function testKontaktereignisseDesKernsZiehenStatusUndCiviCrmNach(): void {
+        $admin = $this->authenticatedClient();
+        $unique = uniqid();
+        $this->aktivieren($admin, true);
+        $db = $this->db();
+
+        $civi = static function (int $kontaktId) use ($db): ?int {
+            $stmt = $db->prepare('SELECT civicrm_contact_id FROM `plugin_mitgliedsstatus_civicrm` WHERE contact_id = ?');
+            $stmt->execute([$kontaktId]);
+            $wert = $stmt->fetchColumn();
+            return $wert === false ? null : (int) $wert;
+        };
+        $civiSetzen = static function (int $kontaktId, int $kennung) use ($db): void {
+            $db->prepare("INSERT INTO `plugin_mitgliedsstatus_civicrm` (contact_id, civicrm_contact_id, geaendert_von) VALUES (?, ?, 'Test')")
+                ->execute([$kontaktId, $kennung]);
+        };
+        $zusammenfuehren = function (int $quelle, int $ziel) use ($admin): void {
+            $antwort = $admin->post('/admin/contacts/merge', [
+                'csrf_token' => $this->currentCsrfToken($admin),
+                'source_id' => (string) $quelle,
+                'target_id' => (string) $ziel,
+            ]);
+            $this->assertStringStartsWith('/admin/contacts?success=merged', (string) $antwort->location(), $antwort->body);
+        };
+        $protokoll = $db->prepare(
+            "SELECT action, details FROM audit_logs WHERE category = 'mitgliedsstatus' AND details LIKE ? ORDER BY id"
+        );
+
+        // 1. Ziel ohne Angaben.
+        $quelle = $this->createContact($admin, "MSQuelle-{$unique}");
+        $ziel = $this->createContact($admin, "MSZiel-{$unique}");
+        $this->statusSpeichern($admin, $quelle, 'mitglied', true);
+        $civiSetzen($quelle, 4711);
+
+        $zusammenfuehren($quelle, $ziel);
+        $this->assertZeile($ziel, 'mitglied', false, '', false);
+        $this->assertSame(4711, $civi($ziel), 'Die CiviCRM-Zuordnung wandert zum behaltenen Kontakt.');
+        $this->assertNull($civi($quelle), 'Eine CiviCRM-Kennung gehört zu genau einem Kontakt.');
+        $protokoll->execute(["Kontakt #{$quelle} -> #{$ziel} - %"]);
+        $zeilen = $protokoll->fetchAll(PDO::FETCH_ASSOC);
+        $this->assertCount(1, $zeilen);
+        $this->assertStringContainsString('Mitgliedsstatus: uebernommen; CiviCRM-Zuordnung: uebernommen', $zeilen[0]['details']);
+        $this->assertStringNotContainsString('4711', $zeilen[0]['details'], 'Die CiviCRM-Kennung gehört nie ins Protokoll.');
+
+        // 2. Ziel mit eigenen Angaben: Das Ziel gewinnt.
+        $quelle2 = $this->createContact($admin, "MSQuelle2-{$unique}");
+        $ziel2 = $this->createContact($admin, "MSZiel2-{$unique}");
+        $this->statusSpeichern($admin, $quelle2, 'mitglied', false);
+        $this->statusSpeichern($admin, $ziel2, 'nichtmitglied', true);
+        $civiSetzen($quelle2, 43);
+        $civiSetzen($ziel2, 42);
+
+        $zusammenfuehren($quelle2, $ziel2);
+        $this->assertZeile($ziel2, 'nichtmitglied', true, '', false);
+        $this->assertSame(42, $civi($ziel2));
+        $protokoll->execute(["Kontakt #{$quelle2} -> #{$ziel2} - %"]);
+        $zeilen = $protokoll->fetchAll(PDO::FETCH_ASSOC);
+        $this->assertCount(1, $zeilen);
+        $this->assertStringContainsString('Mitgliedsstatus: konflikt; CiviCRM-Zuordnung: konflikt', $zeilen[0]['details']);
+
+        // 3. Anonymisieren: kein CASCADE, das Addon räumt selbst.
+        $anon = $admin->post('/admin/gdpr/anonymize-person', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'person_id' => (string) $ziel,
+            'request_id' => '0',
+        ]);
+        $this->assertSame("/admin/gdpr?success=anonymized&person_id={$ziel}", $anon->location(), $anon->body);
+        $this->assertNull($this->zeile($ziel), 'Nach der Anonymisierung darf kein Mitgliedsstatus am Kontakt hängen.');
+        $this->assertNull($civi($ziel), 'Nach der Anonymisierung darf keine CiviCRM-Zuordnung am Kontakt hängen.');
+        $protokoll->execute(["Kontakt #{$ziel} - Anlass: anonymisiert;%"]);
+        $this->assertSame(
+            ['Kontakt anonymisiert: Mitgliedsstatus und CiviCRM-Zuordnung entfernt'],
+            array_column($protokoll->fetchAll(PDO::FETCH_ASSOC), 'action')
+        );
+
+        // 4. Endgültig löschen (DSGVO).
+        $loeschen = $admin->post('/admin/gdpr/delete-person', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'person_id' => (string) $ziel2,
+            'request_id' => '0',
+        ]);
+        $this->assertSame("/admin/gdpr?success=deleted&person_id={$ziel2}", $loeschen->location(), $loeschen->body);
+        $this->assertNull($this->zeile($ziel2));
+        $this->assertNull($civi($ziel2));
     }
 
     // ------------------------------------------------------------------

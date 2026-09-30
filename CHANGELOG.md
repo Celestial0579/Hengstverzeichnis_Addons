@@ -225,7 +225,55 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   Inserat oder an unveröffentlichte Pferde melden „erfolg“ statt „fehler“ –
   ohne Versand. Der Status verriet bisher, zu welchem Pferd ein Inserat läuft.
 
+- **`kontaktanfrage` (1.1.4): Die Team-Mail verlinkt die Verwaltung nur mit
+  fester Stamm-URL** (Audit M6, D14). Der Link kam aus
+  `Mailer::getBaseUrl()` und damit ohne `base_url`/`APP_URL` aus dem
+  Host-Header der Anfrage. Wer das anonyme Formular mit
+  `Host: evil.example` abschickte, erzeugte eine echte Verbandsmail an das
+  Team mit einem Link auf eine fremde Domain. Mit dem Kern ab Framework#473
+  (`App\Security\BaseUrl`) gilt dieselbe Regel wie für die DSGVO-Mail des
+  Kerns: Link nur aus `settings.base_url`, `APP_URL` oder einem Host aus
+  `TRUSTED_HOSTS`; sonst geht die Mail ohne absoluten Link hinaus und das
+  Audit-Log vermerkt „Team-Mail ohne Verwaltungslink“. Auf älteren Kernen
+  bleibt es beim bisherigen Verhalten.
+
+  **Für Betreiber:** Stamm-URL unter Admin › Systemeinstellungen festlegen
+  (oder `APP_URL` bzw. `TRUSTED_HOSTS` setzen), damit die Team-Mail wieder
+  einen Link enthält.
+
 ### Behoben
+
+- **`kontaktanfrage` 1.2.0, `mitgliedsstatus` 1.2.0: Zusammenführen,
+  Anonymisieren und endgültiges Löschen ziehen die Addon-Daten nach**
+  (Audit M33, N45). Der Kern meldet diese drei Vorgänge seit Framework#474
+  und #476 über die Hooks `contact.merged`, `contact.anonymized` und
+  `contact.erased`; beide Addons hören jetzt darauf.
+  - `kontaktanfrage`: Beim Zusammenführen gilt ein Opt-out der Quelle auch am
+    behaltenen Kontakt. Bisher blieb es am Datensatz im Papierkorb, der
+    behaltene Kontakt zeigte wieder das Formular, und das Team leitete an die
+    dabei übernommene Adresse weiter – an den Menschen, der widersprochen
+    hatte. Gespeicherte Anfragen hängen zum behaltenen Kontakt um. Beim
+    Anonymisieren und endgültigen Löschen verlieren die Anfragen ihren Bezug
+    zum Kontakt („Datensatz entfernt“); beim Löschen verschwindet auch das
+    Opt-out.
+  - `mitgliedsstatus`: Beim Anonymisieren werden Mitgliedsstatus und
+    CiviCRM-Zuordnung gelöscht. Über die Kennung im Fremdsystem war der
+    anonymisierte Mensch bisher wieder zu finden. Beim Zusammenführen
+    übernimmt der behaltene Kontakt, was ihm fehlt – ohne die öffentliche
+    Freigabe. Hat er eigene Angaben, gewinnt er, und das Protokoll nennt den
+    Konflikt.
+
+  Jede Nachführung steht im Protokoll der Addons, nur mit Kennungen.
+  `core_compatibility` und `core_supported_max` bleiben unverändert
+  (Linie 0.9).
+
+  **Für Betreiber:** Frühere Zusammenführungen und Anonymisierungen holt das
+  Update nicht nach. Wer vor dem Update Kontakte zusammengeführt hat, prüft
+  im Bearbeitungsformular des behaltenen Kontakts Opt-out und
+  Mitgliedsstatus, solange die Quelle noch im Papierkorb liegt. Für
+  bereits anonymisierte Kontakte lassen sich CiviCRM-Zuordnung und Status im
+  Bearbeitungsformular entfernen. Auf Kernen bis v0.9.0 feuern die Hooks
+  nicht; dort bleibt es beim bisherigen Verhalten.
 
 - **`deckanfrage` (1.2.1): Überlange Eingaben führen nicht mehr zu einer
   Fehlerseite** (Audit N24). Namen oder E-Mail-Adressen über 150 Zeichen,
@@ -482,6 +530,11 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ### Geändert
 
+- **`beispiel-erweiterungspunkte` 1.1.0**: belegt die drei neuen Kern-Hooks
+  `contact.merged`, `contact.anonymized` und `contact.erased` mit einem
+  Beispiel (eigene Notiz umhängen bzw. löschen). `BEWUSST_NICHT_ABGEDECKT` ist
+  wieder leer.
+
 - **`datenmigration` 1.2.0, `kontaktanfrage` 1.1.1.** `core_compatibility`
   und `core_supported_max` bleiben unverändert (Linie 0.9).
 
@@ -524,6 +577,16 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   `SprachAddonVollstaendigkeitTest` als angekündigter Vorab-Schlüssel und
   gehört nach dem Pin dort wieder gestrichen. `core_compatibility` und
   `core_supported_max` bleiben unverändert (Linie 0.9).
+
+- **Zehn Sprach-Addons 1.0.2**: Übersetzungen für `register.unavailable`, die
+  Meldung, mit der der Kern die Selbstregistrierung ohne feste Stamm-URL
+  ablehnt (Framework#473, Audit M6), und für
+  `catalog.contact_filter_unavailable`, den Hinweis im Katalog, wenn die
+  Gast-Gruppe `contacts.view` nicht hat und die Suche nach Züchter, Besitzer,
+  Halter oder Deckstation deshalb entfällt (Framework#475, Audit M18). Ohne
+  sie erschienen beide Meldungen auf Deutsch. `core_compatibility` und
+  `core_supported_max` bleiben unverändert (Linie 0.9; gepinnt: Framework
+  5dc8c77).
 
 - **Einheitliche Prüfreihenfolge der drei öffentlichen Anfrageformulare**
   (`kontaktanfrage` 1.1.2, `verkaufsboerse` 1.3.0, `deckanfrage` 1.2.1):

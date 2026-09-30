@@ -122,6 +122,24 @@ class Plugin {
         // sagt "deleted", gemeint ist der Papierkorb - die Lage ist die von
         // horse.trashed, nicht die von horse.deleted.
         'contact.deleted' => 'onContactDeleted',
+        // Nach dem Zusammenfuehren zweier Kontakte (Kern-#474). WOFUER: eigene
+        // Daten vom aufgegebenen Datensatz ($sourceId) auf den behaltenen
+        // ($targetId) uebertragen. FALLE: danach feuert contact.deleted fuer
+        // die Quelle - wer dort stilllegt, muss vorher umgehaengt haben, sonst
+        // raeumt der CASCADE beim Leeren des Papierkorbs die Daten weg.
+        // Schutzangaben (Opt-out) restriktiv zusammenfuehren, Freigaben NICHT
+        // uebertragen.
+        'contact.merged' => 'onContactMerged',
+        // Nach einer DSGVO-Anonymisierung (Kern-#476). WOFUER: eigene
+        // personenbezogene Daten zum Kontakt loeschen. FALLE: der Kontakt
+        // bleibt bestehen, KEIN Fremdschluessel-CASCADE greift - was das Addon
+        // hier nicht selbst entfernt, bleibt stehen.
+        'contact.anonymized' => 'onContactAnonymized',
+        // Nach JEDEM endgueltigen Loeschen eines Kontakts (Kern-#476), Anlass
+        // 'dsgvo' oder 'papierkorb'. WOFUER: eigene Daten OHNE Fremdschluessel
+        // aufraeumen, die sonst als Waisen liegen blieben. FALLE: die
+        // CASCADE-Zeilen sind hier schon weg - lesen kann man sie nicht mehr.
+        'contact.erased' => 'onContactErased',
     ];
 
     /**
@@ -213,11 +231,12 @@ class Plugin {
      * feuerte; sie waren ausgenommen, weil ein Addon, das sie neben ihren
      * contact.*-Gegenstuecken registriert, jedes Ereignis doppelt bekaeme.
      * Mit Kern-#347 sind sie entfallen, damit auch der Grund fuer die Ausnahme.
+     * Voruebergehend standen hier contact.merged, contact.anonymized und
+     * contact.erased (Kern-#474, #476) - bis zu ihrem Beleg oben.
      *
      * @var array<string, string>
      */
-    public const BEWUSST_NICHT_ABGEDECKT = [
-    ];
+    public const BEWUSST_NICHT_ABGEDECKT = [];
 
     /**
      * Einstiegspunkt. Wird vom Kern nur aufgerufen, wenn ein Administrator
@@ -437,6 +456,70 @@ class Plugin {
             'contact.deleted',
             'Kontakt #' . $contactId,
             'in den Papierkorb verschoben - ' . $betroffen . ' eigene Notiz(en) stillgelegt'
+        );
+    }
+
+    /**
+     * Zwei Kontakte zusammengefuehrt (Kern-#474), nach dem Commit. $source ist
+     * der aufgegebene Datensatz im Stand VOR dem Zusammenfuehren, $target der
+     * behaltene im Stand DANACH.
+     *
+     * Vorgefuehrt an der eigenen Notiz: Hat das Ziel keine, wandert die der
+     * Quelle mit. Hat es eine, gewinnt das Ziel - es ist der Datensatz, den
+     * die Redaktion behalten wollte. Die Notiz der Quelle bleibt dann bei ihr
+     * im Papierkorb (contact.deleted legt sie gleich danach still).
+     *
+     * @param array<string, mixed> $source
+     * @param array<string, mixed> $target
+     */
+    public function onContactMerged(int $sourceId, int $targetId, array $source, array $target): void {
+        $notiz = Ereignisbuch::notiz(Ereignisbuch::TYP_KONTAKT, $sourceId, true);
+        $ergebnis = 'keine eigene Notiz an der Quelle';
+        if ($notiz !== null) {
+            if (Ereignisbuch::notiz(Ereignisbuch::TYP_KONTAKT, $targetId, true) === null) {
+                Ereignisbuch::notizSetzen(Ereignisbuch::TYP_KONTAKT, $targetId, $notiz);
+                Ereignisbuch::notizLoeschen(Ereignisbuch::TYP_KONTAKT, $sourceId);
+                $ergebnis = 'Notiz der Quelle an das Ziel gehaengt';
+            } else {
+                $ergebnis = 'Ziel hat eine eigene Notiz - sie gewinnt';
+            }
+        }
+
+        Ereignisbuch::notieren('contact.merged', 'Kontakt #' . $sourceId . ' -> #' . $targetId, $ergebnis);
+    }
+
+    /**
+     * DSGVO-Anonymisierung (Kern-#476). Die Notiz ist Freitext ueber einen
+     * Menschen - sie muss weg, und zwar hier: Der Kontakt bleibt bestehen,
+     * kein CASCADE nimmt sie mit. $vorher ist nur zum Abgleich da; wer
+     * daraus etwas speichert, hat die Anonymisierung gerade rueckgaengig
+     * gemacht.
+     *
+     * @param array<string, mixed> $vorher
+     */
+    public function onContactAnonymized(int $contactId, array $vorher): void {
+        $geloescht = Ereignisbuch::notizLoeschen(Ereignisbuch::TYP_KONTAKT, $contactId);
+        Ereignisbuch::notieren(
+            'contact.anonymized',
+            'Kontakt #' . $contactId,
+            $geloescht . ' eigene Notiz(en) geloescht'
+        );
+    }
+
+    /**
+     * Endgueltig geloescht (Kern-#476) - aus dem Papierkorb oder per
+     * DSGVO-Loeschverlangen. Die Notizen-Tabelle hat bewusst keinen
+     * Fremdschluessel (siehe Ereignisbuch::schemaAnlegen()); ohne diesen
+     * Rueckruf blieben sie als Waisen liegen.
+     *
+     * @param array<string, mixed> $contact
+     */
+    public function onContactErased(int $contactId, array $contact, string $anlass): void {
+        $geloescht = Ereignisbuch::notizLoeschen(Ereignisbuch::TYP_KONTAKT, $contactId);
+        Ereignisbuch::notieren(
+            'contact.erased',
+            'Kontakt #' . $contactId,
+            'Anlass ' . ($anlass === 'dsgvo' ? 'dsgvo' : 'papierkorb') . ' - ' . $geloescht . ' eigene Notiz(en) geloescht'
         );
     }
 

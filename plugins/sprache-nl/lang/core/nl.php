@@ -82,6 +82,7 @@ return [
     'catalog.search_placeholder' => 'Zoeken in volledige tekst (paard, UELN, fokker, eigenaar, dekstation, vader, moeder)...',
     'catalog.search_button' => 'Zoeken',
     'catalog.reset_filters' => 'Filters resetten',
+    'catalog.contact_filter_unavailable' => 'Zoeken op fokker, eigenaar, houder of dekstation is hier niet beschikbaar.',
     'catalog.advanced_filters' => '⚙️ Geavanceerde attribuutfilters (paard, fokker, dekstation, afstamming)',
     'catalog.horse_name' => 'Paardennaam',
     'catalog.horse_name_placeholder' => 'bijv. Storm',
@@ -304,6 +305,7 @@ return [
     'register.email_invalid' => 'Geef een geldig e-mailadres op.',
     'register.password_invalid' => 'De wachtwoorden komen niet overeen of zijn te kort (minimaal 8 tekens).',
     'register.already_taken' => 'Gebruikersnaam of e-mailadres is al in gebruik.',
+    'register.unavailable' => 'Registreren is momenteel niet mogelijk (installatie onvolledig). Neem contact op met de vereniging.',
     'register.verification_invalid' => 'De bevestigingslink is ongeldig of verlopen. Registreer u opnieuw of neem contact op met de beheerder.',
 
     'auth.2fa_heading' => '🔐 2FA-verificatie',

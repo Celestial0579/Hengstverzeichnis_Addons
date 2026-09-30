@@ -491,6 +491,69 @@ class KontaktanfragePluginTest extends FunctionalTestCase {
     }
 
     /**
+     * Audit M6, D14: Die Team-Mail verlinkt die Verwaltung nur mit einer
+     * festen Stamm-URL. Ohne sie geht die Anfrage trotzdem ein (gespeichert,
+     * Versand versucht), die Mail bekommt keinen absoluten Link, und das
+     * Protokoll nennt die Konfigurationslücke - je Anfrage genau einmal.
+     * Mit Stamm-URL entsteht dieser Eintrag nicht.
+     *
+     * Den Mailinhalt selbst prüft tests/Unit/KontaktanfrageVerwaltungslinkTest
+     * (hier gibt es kein SMTP, siehe Klassenkommentar).
+     */
+    public function testTeamMailVerlinktNurMitFesterStammUrl(): void {
+        $admin = $this->authenticatedClient();
+        $unique = uniqid();
+        $kontaktId = $this->bereiteZielVor($admin, "KAStammUrl-{$unique}", $unique);
+        $besucher = $this->newClient();
+        $db = Database::getInstance();
+
+        $ohneLink = static function (int $anfrageId) use ($db, $kontaktId): int {
+            $stmt = $db->prepare(
+                "SELECT COUNT(*) FROM audit_logs
+                 WHERE action = 'Team-Mail ohne Verwaltungslink' AND category = ? AND details LIKE ?"
+            );
+            $stmt->execute([self::SLUG, "Kontakt #{$kontaktId} - Anfrage #{$anfrageId}:%"]);
+            return (int) $stmt->fetchColumn();
+        };
+        $letzteAnfrage = static fn(): int => (int) $db->query(
+            'SELECT COALESCE(MAX(id), 0) FROM `plugin_kontaktanfrage_requests`'
+        )->fetchColumn();
+
+        $vorher = self::stammUrlSetzen(null);
+        $this->leereRateLimitZaehler('kontaktanfrage-ip');
+        $this->leereRateLimitZaehler('kontaktanfrage-ziel');
+        try {
+            // (a) Ohne feste Stamm-URL - der Host-Header des Besuchers ist
+            //     keine.
+            $antwort = $this->sendeAnfrageMitAufgabe($besucher, $kontaktId, [
+                'grund' => 'kaufinteresse',
+                'name' => "OhneStamm-{$unique}",
+                'email' => "ohne-stamm-{$unique}@example.test",
+            ]);
+            $this->assertSame("/kontakt?id={$kontaktId}&kontaktanfrage=fehler", $antwort->location());
+            $ohne = $letzteAnfrage();
+            $this->assertSame(1, $ohneLink($ohne), 'Ohne Stamm-URL muss das Protokoll den fehlenden Link nennen');
+
+            // (b) Mit fester Stamm-URL: kein solcher Eintrag.
+            self::stammUrlSetzen(self::TEST_STAMM_URL);
+            $this->leereRateLimitZaehler('kontaktanfrage-ip');
+            $antwort = $this->sendeAnfrageMitAufgabe($besucher, $kontaktId, [
+                'grund' => 'kaufinteresse',
+                'name' => "MitStamm-{$unique}",
+                'email' => "mit-stamm-{$unique}@example.test",
+            ]);
+            $this->assertSame("/kontakt?id={$kontaktId}&kontaktanfrage=fehler", $antwort->location());
+            $mit = $letzteAnfrage();
+            $this->assertGreaterThan($ohne, $mit, 'Die zweite Anfrage muss gespeichert werden');
+            $this->assertSame(0, $ohneLink($mit), 'Mit Stamm-URL wird der Link gesetzt, nichts zu protokollieren');
+        } finally {
+            self::stammUrlSetzen($vorher);
+            $this->leereRateLimitZaehler('kontaktanfrage-ip');
+            $this->leereRateLimitZaehler('kontaktanfrage-ziel');
+        }
+    }
+
+    /**
      * Audit N2: Ohne contacts.view der Gast-Gruppe zeigt die Kontaktseite 404,
      * das Formular erscheint also nicht. Ein direkter POST darf dann auch
      * nichts speichern - und meldet trotzdem "erfolg" (nicht "captcha"),
@@ -1003,6 +1066,123 @@ class KontaktanfragePluginTest extends FunctionalTestCase {
             $this->assertSame(self::VERWALTUNG . '?ka=versand-fehler', $unbekannt->location());
         } finally {
             $db->prepare('DELETE FROM `plugin_kontaktanfrage_requests` WHERE id = ?')->execute([$anfrageId]);
+        }
+    }
+
+    /**
+     * Kern-Hooks contact.merged, contact.anonymized, contact.erased
+     * (Framework#474 Audit M33, Framework#476 Audit N45). Beide Tabellen
+     * tragen keinen Fremdschlüssel - ohne die Handler blieb das Opt-out am
+     * aufgegebenen Datensatz, und Anfragen blieben mit einem anonymisierten
+     * oder gelöschten Menschen verknüpft.
+     *
+     *  1. Zusammenführen: Das Opt-out der Quelle gilt am Ziel (restriktiv),
+     *     die Anfragen hängen um, die Quelle behält ihr Opt-out.
+     *  2. Anonymisieren: Anfragen verlieren den Bezug (contact_id 0), das
+     *     Opt-out bleibt.
+     *  3. Endgültig löschen (DSGVO): Anfragen verlieren den Bezug, das
+     *     Opt-out ist weg.
+     */
+    public function testKontaktereignisseDesKernsZiehenOptOutUndAnfragenNach(): void {
+        $admin = $this->authenticatedClient();
+        $unique = uniqid();
+        $db = Database::getInstance();
+        // bereiteZielVor() schaltet das Addon ein und hinterlegt die
+        // Team-Adresse - erst dann erscheint das Formular überhaupt, und die
+        // Gegenprobe am Ende von Schritt 1 sagt etwas aus.
+        $ziel = $this->bereiteZielVor($admin, "KAZiel-{$unique}", $unique);
+        $quelle = $this->createContact($admin, "KAQuelle-{$unique}", ['email' => "ka-quelle-{$unique}@example.test"]);
+        $this->assertStringContainsString(
+            '/plugin/kontaktanfrage/senden',
+            $this->newClient()->get('/kontakt?id=' . $ziel)->body,
+            'Vor dem Zusammenführen zeigt das Ziel das Formular.'
+        );
+
+        $optoutVon = static function (int $id) use ($db): bool {
+            $stmt = $db->prepare('SELECT 1 FROM `plugin_kontaktanfrage_optout` WHERE contact_id = ?');
+            $stmt->execute([$id]);
+            return $stmt->fetchColumn() !== false;
+        };
+        $anfrage = static function (int $kontaktId, string $email) use ($db): int {
+            $db->prepare("INSERT INTO `plugin_kontaktanfrage_requests`
+                    (contact_id, reason_key, reason_label, requester_name, requester_email)
+                    VALUES (?, 'sonstiges', 'Sonstiges', 'Anfragender', ?)")
+                ->execute([$kontaktId, $email]);
+            return (int) $db->lastInsertId();
+        };
+        $zielDer = static function (int $anfrageId) use ($db): int {
+            $stmt = $db->prepare('SELECT contact_id FROM `plugin_kontaktanfrage_requests` WHERE id = ?');
+            $stmt->execute([$anfrageId]);
+            return (int) $stmt->fetchColumn();
+        };
+
+        $anfragen = [];
+        try {
+            // 1. Zusammenführen.
+            $db->prepare("INSERT INTO `plugin_kontaktanfrage_optout` (contact_id, disabled_by) VALUES (?, 'test')")
+                ->execute([$quelle]);
+            $anfragen[] = $anQuelle = $anfrage($quelle, "an-quelle-{$unique}@example.test");
+            $this->assertFalse($optoutVon($ziel));
+
+            $merge = $admin->post('/admin/contacts/merge', [
+                'csrf_token' => $this->currentCsrfToken($admin),
+                'source_id' => (string) $quelle,
+                'target_id' => (string) $ziel,
+            ]);
+            $this->assertStringStartsWith('/admin/contacts?success=merged', (string) $merge->location(), $merge->body);
+
+            $this->assertTrue($optoutVon($ziel), 'Das Opt-out der Quelle muss nach dem Zusammenführen am Ziel gelten.');
+            $this->assertTrue($optoutVon($quelle), 'Die Quelle im Papierkorb behält ihr Opt-out für eine Wiederherstellung.');
+            $this->assertSame($ziel, $zielDer($anQuelle), 'Die Anfrage an die Quelle gehört jetzt zum Ziel.');
+            $kontaktSeite = $this->newClient()->get('/kontakt?id=' . $ziel);
+            $this->assertStringNotContainsString(
+                '/plugin/kontaktanfrage/senden',
+                $kontaktSeite->body,
+                'Am Ziel darf nach dem Zusammenführen kein Formular erscheinen - der Mensch hat widersprochen.'
+            );
+
+            // 2. Anonymisieren.
+            $anfragen[] = $anZiel = $anfrage($ziel, "an-ziel-{$unique}@example.test");
+            $anon = $admin->post('/admin/gdpr/anonymize-person', [
+                'csrf_token' => $this->currentCsrfToken($admin),
+                'person_id' => (string) $ziel,
+                'request_id' => '0',
+            ]);
+            $this->assertSame("/admin/gdpr?success=anonymized&person_id={$ziel}", $anon->location(), $anon->body);
+            $this->assertSame(0, $zielDer($anQuelle), 'Nach der Anonymisierung ist die Anfrage vom Menschen gelöst.');
+            $this->assertSame(0, $zielDer($anZiel));
+            $this->assertTrue($optoutVon($ziel), 'Das Opt-out ist eine Schutzangabe und bleibt am anonymisierten Datensatz.');
+
+            // 3. Endgültig löschen (DSGVO).
+            $anfragen[] = $nachAnon = $anfrage($ziel, "nach-anon-{$unique}@example.test");
+            $loeschen = $admin->post('/admin/gdpr/delete-person', [
+                'csrf_token' => $this->currentCsrfToken($admin),
+                'person_id' => (string) $ziel,
+                'request_id' => '0',
+            ]);
+            $this->assertSame("/admin/gdpr?success=deleted&person_id={$ziel}", $loeschen->location(), $loeschen->body);
+            $this->assertFalse($optoutVon($ziel), 'Nach dem endgültigen Löschen darf kein Opt-out unter der Kennung liegen bleiben.');
+            $this->assertSame(0, $zielDer($nachAnon));
+
+            $protokoll = $db->prepare(
+                "SELECT action FROM audit_logs WHERE category = 'kontaktanfrage' AND details LIKE ? ORDER BY id"
+            );
+            $protokoll->execute(["Kontakt #{$quelle} -> #{$ziel}%"]);
+            $this->assertSame(
+                ['Kontakt zusammengeführt: Opt-out und Anfragen übernommen'],
+                $protokoll->fetchAll(\PDO::FETCH_COLUMN)
+            );
+            $protokoll->execute(["Kontakt #{$ziel} - %"]);
+            $this->assertSame(
+                ['Kontakt anonymisiert: Anfragen gelöst', 'Kontakt endgültig gelöscht: Anfragen gelöst, Opt-out entfernt'],
+                $protokoll->fetchAll(\PDO::FETCH_COLUMN),
+                'Jede Nachführung gehört ins Protokoll - nur mit Kennungen.'
+            );
+        } finally {
+            foreach ($anfragen as $id) {
+                $db->prepare('DELETE FROM `plugin_kontaktanfrage_requests` WHERE id = ?')->execute([$id]);
+            }
+            $db->prepare('DELETE FROM `plugin_kontaktanfrage_optout` WHERE contact_id IN (?, ?)')->execute([$quelle, $ziel]);
         }
     }
 

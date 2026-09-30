@@ -157,6 +157,27 @@ Cron-Aufgabe. Die Protokolleinträge bleiben **bewusst** stehen: Sie sind der
 Nachweis darüber, was mit personenbezogenen Anfragen geschehen ist, und ein
 Nachweis, den das Deinstallieren mitnimmt, ist keiner.
 
+**Zusammenführen, Anonymisieren, endgültiges Löschen (1.2.0).** Opt-out und
+Anfragen hängen ohne Fremdschlüssel am Kontakt; der Kern kann sie deshalb
+nicht mitnehmen. Das Addon hört auf die Kern-Hooks `contact.merged`,
+`contact.anonymized` und `contact.erased` (ab Framework#474/#476):
+
+- **Zusammenführen:** Hatte die Quelle Kontaktanfragen abbestellt, gilt das
+  Opt-out jetzt auch am behaltenen Kontakt - restriktiv, ein bestehendes
+  Opt-out des Ziels bleibt, aufgehoben wird nie etwas. Die Quelle im
+  Papierkorb behält ihr Opt-out für eine Wiederherstellung. Gespeicherte
+  Anfragen hängen zum Ziel um. Ist das Ziel jünger als eine Anfrage, bleibt
+  deren Weiterleitung gesperrt (siehe „Keine Weiterleitung an einen jüngeren
+  Kontakt“).
+- **Anonymisieren:** Die Anfragen verlieren ihren Bezug zum Menschen
+  (Verwaltung: „Datensatz entfernt“) und laufen mit der Aufbewahrungsfrist
+  aus. Das Opt-out bleibt als Schutzangabe ohne Inhalt stehen.
+- **Endgültig löschen** (DSGVO oder Papierkorb): Anfragen verlieren den Bezug,
+  das Opt-out wird gelöscht.
+
+Jede Nachführung steht im Protokoll, nur mit Kennungen und Zählern. Auf Kernen
+bis v0.9.0 feuern die Hooks nicht; dort bleibt es beim bisherigen Verhalten.
+
 Die Aufbewahrungsfrist und der Zweck gehören in die Datenschutzerklärung der
 Installation (Kern-Seite `/datenschutz`) - das kann ein Addon nicht für den
 Betreiber tun.
@@ -164,7 +185,9 @@ Betreiber tun.
 ## Technik
 
 - **Hooks:** `contact.detail_sections` (Formular), `contact.edit_sections`
-  (Opt-out je Kontakt), `admin.dashboard_tiles` (Kachel). Ausdrücklich **nur**
+  (Opt-out je Kontakt), `admin.dashboard_tiles` (Kachel), `contact.merged`,
+  `contact.anonymized`, `contact.erased` (Daten nachführen, siehe
+  „Datenschutz“). Ausdrücklich **nur**
   die `contact.*`-Namen: Der Kern löst `person.*` und `station.*` bis v0.9.0
   zusätzlich als kaskadierenden Alias aus, und seit beide Datensatzarten eine
   Tabelle sind, erschiene das Formular sonst zweimal auf derselben Seite.
@@ -226,6 +249,17 @@ Betreiber tun.
 - **Ein nachträgliches Opt-out gilt rückwirkend:** Eine bereits gespeicherte
   Anfrage lässt sich danach nicht mehr weiterleiten. Eine gespeicherte
   Anfrage ist kein Freibrief, eine später erklärte Ablehnung zu übergehen.
+- **Verwaltungslink nur mit fester Stamm-URL (1.1.4, Audit M6).** Die
+  Team-Mail entsteht aus einem anonymen Formular. Ihr Link auf
+  `/plugin/kontaktanfrage/verwaltung` kam bisher aus
+  `Mailer::getBaseUrl()`, das ohne `base_url`/`APP_URL` den Host-Header der
+  Anfrage nimmt - und den bestimmt der Absender. Ab Kern-#473 nimmt das Addon
+  `App\Security\BaseUrl::forLinks()`: `settings.base_url`, sonst `APP_URL`,
+  sonst ein Host aus `TRUSTED_HOSTS`. Fehlt alles, geht die Mail wie die
+  DSGVO-Mail des Kerns trotzdem hinaus, nur ohne absoluten Link (Hinweis auf
+  die Dashboard-Kachel), und das Audit-Log vermerkt „Team-Mail ohne
+  Verwaltungslink“. Auf Kernen ohne `BaseUrl` (bis v0.9.0) bleibt es beim
+  bisherigen Verhalten (Weiche per `class_exists()`).
 - **Keine Weiterleitung an einen jüngeren Kontakt (1.1.1).** Ist der Kontakt
   unter der gespeicherten Kennung jünger als die Anfrage (`contacts.created_at`
   nach `created_at` der Anfrage), war er nicht ihr Ziel: Die Kennung wurde neu

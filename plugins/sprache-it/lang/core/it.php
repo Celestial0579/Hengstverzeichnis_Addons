@@ -82,6 +82,7 @@ return [
     'catalog.search_placeholder' => 'Ricerca a testo libero (cavallo, UELN, allevatore, proprietario, stazione di monta, padre, madre)...',
     'catalog.search_button' => 'Cerca',
     'catalog.reset_filters' => 'Reimposta filtri',
+    'catalog.contact_filter_unavailable' => 'La ricerca per allevatore, proprietario, detentore o stazione di monta non è disponibile qui.',
     'catalog.advanced_filters' => '⚙️ Filtri avanzati per attributi (cavallo, allevatore, stazione di monta, pedigree)',
     'catalog.horse_name' => 'Nome del cavallo',
     'catalog.horse_name_placeholder' => 'es. Storm',
@@ -304,6 +305,7 @@ return [
     'register.email_invalid' => 'Inserisci un indirizzo e-mail valido.',
     'register.password_invalid' => 'Le password non coincidono o sono troppo corte (almeno 8 caratteri).',
     'register.already_taken' => 'Nome utente o indirizzo e-mail già in uso.',
+    'register.unavailable' => 'La registrazione non è al momento possibile (configurazione incompleta). Contatta l\'associazione.',
     'register.verification_invalid' => 'Il link di conferma non è valido o è scaduto. Registrati di nuovo oppure contatta il gestore.',
 
     'auth.2fa_heading' => '🔐 Verifica 2FA',

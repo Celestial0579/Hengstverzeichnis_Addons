@@ -87,6 +87,7 @@ return [
     'catalog.search_placeholder' => 'Volltextsich (Päerd, UELN, Ziichter, Besëtzer, Deckstatioun, Papp, Mamm)...',
     'catalog.search_button' => 'Sichen',
     'catalog.reset_filters' => 'Filter zrécksetzen',
+    'catalog.contact_filter_unavailable' => 'D\'Sich no Ziichter, Besëtzer, Halter oder Deckstatioun ass hei net verfügbar.',
     'catalog.advanced_filters' => '⚙️ Erweidert Attributfilter (Päerd, Ziichter, Deckstatioun, Ofstamung)',
     'catalog.horse_name' => 'Päerdsnumm',
     'catalog.horse_name_placeholder' => 'z. B. Storm',
@@ -311,6 +312,7 @@ return [
     'register.email_invalid' => 'Gitt w.e.g. eng gëlteg E-Mail-Adress un.',
     'register.password_invalid' => 'D\'Passwierder stëmmen net iwwereneen oder si ze kuerz (op d\'mannst 8 Zeechen).',
     'register.already_taken' => 'Benotzernumm oder E-Mail-Adress ass scho verginn.',
+    'register.unavailable' => 'D\'Registréierung ass de Moment net méiglech (Ariichtung net komplett). Wend Iech w.e.g. un de Verband.',
     'register.verification_invalid' => 'De Bestätegungslink ass ongëlteg oder ofgelaf. Registréiert Iech w.e.g. nach eng Kéier oder wendt Iech un de Bedreiwer.',
 
     'auth.2fa_heading' => '🔐 2FA Bestätegung',
