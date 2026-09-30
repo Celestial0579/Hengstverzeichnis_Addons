@@ -266,6 +266,21 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   (`?q_color[]=x`) nicht mehr zu HTTP 500, sondern zählen wie ein leeres
   Feld (Gegenstück zu Framework-Audit N87).
 
+- **`anpaarungs-empfehlung` 1.2.2: Stammbaum-Auflösung an den Kern
+  angeglichen** (Framework-Audit N73). Unverknüpfte Vorfahren mit
+  mehrdeutigem Namen oder widersprechender UELN werden wie im Kern-Stammbaum
+  als Platzhalter geführt, statt einem beliebigen Namensvetter zugeordnet zu
+  werden. Die Inzuchtwerte stimmen damit wieder mit dem Addon
+  `inzuchtkoeffizient` überein. Der Gleichlauftest
+  (`AnpaarungsEmpfehlungCoiTest`) prüft beide Fälle gegen den echten
+  `PedigreeBuilder` und ist deshalb erst mit einem Framework-Pin grün, der
+  den Kern-Fix enthält. `core_compatibility` und `core_supported_max`
+  bleiben unverändert (Linie 0.9; gepinnt: Framework f9921d4).
+
+  **Für Betreiber:** Empfehlungs-Ranking und Warnmarkierungen können sich
+  in Beständen mit unverknüpften, gleichnamigen Vorfahren verschieben. Solche
+  Vorfahren lassen sich im Pferdeformular eindeutig verknüpfen.
+
 - **`kontaktanfrage` 1.2.0, `mitgliedsstatus` 1.2.0: Zusammenführen,
   Anonymisieren und endgültiges Löschen ziehen die Addon-Daten nach**
   (Audit M33, N45). Der Kern meldet diese drei Vorgänge seit Framework#474
