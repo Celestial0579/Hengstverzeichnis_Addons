@@ -374,8 +374,10 @@ class DeckanfragePluginTest extends FunctionalTestCase {
      *              wer den falschen Steckplatz abfragt, landet bei ihm.
      *
      * Nachgewiesen wird über das Protokoll des Mailers: Er schreibt bei jedem
-     * Fehlschlag eine Zeile der Kategorie `email` mit der Empfängeradresse
-     * (App\Service\Mailer::sendViaSmtp()). In der Testumgebung ist kein SMTP
+     * Fehlschlag eine Zeile der Kategorie `email` mit dem Empfänger
+     * (App\Service\Mailer::sendViaSmtp()) - bis Kern-Audit N17 als Adresse,
+     * danach als Referenz `extern:<12 hex>` (siehe empfaengerReferenz()).
+     * In der Testumgebung ist kein SMTP
      * konfiguriert, der Versand scheitert also kontrolliert - genau diese
      * Zeile ist der Beleg, an wen er gegangen WÄRE.
      *
@@ -430,18 +432,18 @@ class DeckanfragePluginTest extends FunctionalTestCase {
         $empfaenger = $this->mailEmpfaengerSeitKurzem();
 
         $this->assertContains(
-            $betaMail,
+            $this->empfaengerReferenz($betaMail),
             $empfaenger,
             'Die Anfrage muss an die Deckstation DIESES Pferdes gehen.'
         );
         $this->assertNotContains(
-            $gammaMail,
+            $this->empfaengerReferenz($gammaMail),
             $empfaenger,
             'Der Züchter des Pferdes steht seit #336 in derselben Tabelle wie die Station - '
             . 'er darf trotzdem keine Deckanfrage bekommen (falscher Steckplatz: contact_id statt station_contact_id).'
         );
         $this->assertNotContains(
-            $alphaMail,
+            $this->empfaengerReferenz($alphaMail),
             $empfaenger,
             'Die Station eines ANDEREN Pferdes darf keine Anfrage bekommen.'
         );
@@ -528,7 +530,7 @@ class DeckanfragePluginTest extends FunctionalTestCase {
         );
 
         $this->assertNotContains(
-            $gesperrtMail,
+            $this->empfaengerReferenz($gesperrtMail),
             $this->mailEmpfaengerSeitKurzem(),
             'An eine nicht freigegebene Adresse darf auch per Direkt-POST nichts hinausgehen.'
         );
@@ -606,7 +608,7 @@ class DeckanfragePluginTest extends FunctionalTestCase {
             'Ohne gelöste Sicherheitsfrage darf nichts gespeichert werden.'
         );
         $this->assertNotContains(
-            $stationMail,
+            $this->empfaengerReferenz($stationMail),
             $this->mailEmpfaengerSeitKurzem(),
             'Ohne gelöste Sicherheitsfrage darf nichts hinausgehen.'
         );
@@ -750,7 +752,7 @@ class DeckanfragePluginTest extends FunctionalTestCase {
                 'Ohne horses.view: still "erfolg" vor der Sicherheitsfrage, nicht "captcha"'
             );
             $this->assertSame(0, $this->anfragenZuPferd($horseId));
-            $this->assertNotContains($stationMail, $this->mailEmpfaengerSeitKurzem());
+            $this->assertNotContains($this->empfaengerReferenz($stationMail), $this->mailEmpfaengerSeitKurzem());
         } finally {
             $db->prepare("INSERT IGNORE INTO `group_permissions` (group_id, module, action) VALUES (?, 'horses', 'view')")
                 ->execute([$gast]);
@@ -764,7 +766,8 @@ class DeckanfragePluginTest extends FunctionalTestCase {
      * Die Empfängeradressen aller Versandversuche der letzten zehn Minuten.
      *
      * App\Service\Mailer protokolliert jeden Versuch unter der Kategorie
-     * `email` mit "Empfänger: <adresse>" in den Details - in der
+     * `email` mit "Empfänger: <adresse>" in den Details (ab Kern-Audit N17
+     * "Empfänger: extern:<12 hex>" bzw. "Benutzer #ID") - in der
      * Testumgebung ohne SMTP-Konfiguration ist das der Fehlschlag-Eintrag.
      * Damit lässt sich prüfen, an wen eine Anfrage gegangen wäre, ohne einen
      * echten Mailserver zu betreiben.
@@ -784,6 +787,20 @@ class DeckanfragePluginTest extends FunctionalTestCase {
         }
 
         return $adressen;
+    }
+
+    /**
+     * Die Form, in der der Kern eine externe Empfängeradresse protokolliert.
+     *
+     * Ab Kern-Audit N17 schreibt der Mailer statt der Adresse eine
+     * HMAC-Referenz (Mailer::externeEmpfaengerReferenz()); ältere Kerne
+     * schreiben die Adresse selbst. Der Schlüssel wird explizit aus der
+     * Umgebung übergeben - dieselbe, die der Testserver bekommt.
+     */
+    private function empfaengerReferenz(string $email): string {
+        return method_exists(\App\Service\Mailer::class, 'externeEmpfaengerReferenz')
+            ? \App\Service\Mailer::externeEmpfaengerReferenz($email, (string) getenv('APP_KEY'))
+            : $email;
     }
 
     /** Anzahl gespeicherter Anfragen zu einem Pferd. */
