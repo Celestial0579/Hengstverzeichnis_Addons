@@ -683,10 +683,12 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   ablehnt (Framework#473, Audit M6), und für
   `catalog.contact_filter_unavailable`, den Hinweis im Katalog, wenn die
   Gast-Gruppe `contacts.view` nicht hat und die Suche nach Züchter, Besitzer,
-  Halter oder Deckstation deshalb entfällt (Framework#475, Audit M18). Ohne
-  sie erschienen beide Meldungen auf Deutsch. `core_compatibility` und
-  `core_supported_max` bleiben unverändert (Linie 0.9; gepinnt: Framework
-  5dc8c77).
+  Halter oder Deckstation deshalb entfällt (Framework#475, Audit M18). Dazu
+  die vier Texte `admin.dashboard.storage_warning_*` der Dashboard-Warnung
+  für Container, in denen `storage/horses` in keinem eigenen bzw. nur im
+  anonymen Volume liegt (Framework#477, Audit M31). Ohne sie erschienen diese
+  Meldungen auf Deutsch. `core_compatibility` und `core_supported_max`
+  bleiben unverändert (Linie 0.9; gepinnt: Framework f9921d4).
 
 - **Einheitliche Prüfreihenfolge der drei öffentlichen Anfrageformulare**
   (`kontaktanfrage` 1.1.2, `verkaufsboerse` 1.3.0, `deckanfrage` 1.2.1):
@@ -715,6 +717,23 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   `Captcha::MAX_CONTEXTS` und lässt die Sicherheitsfrage dort weg; sonst
   überschriebe sie die Aufgabe der Deckanfrage auf derselben Seite. Getrennte
   Plätze gibt es erst mit dem Kern nach v0.9.0 (gepinnt: Framework 25940ae).
+
+- **`composer.lock` auf Framework f9921d4 gehoben** (von 5dc8c77; Docker,
+  Scheduler, Medienauslieferung, Sicherung, Addon-Lebenszyklus, Audit-Mail,
+  Papierkorb, Addon-Verwaltung, Kern-Update, Katalog, Datenregister,
+  Medien-Lebenszyklus). Neue Kern-Hooks gibt es darin nicht; die vier neuen
+  Kern-Texte übersetzen die Sprach-Addons (siehe 1.0.2 oben). Der Kern
+  entfernt beim Deinstallieren jetzt auch den Addon-Code und den
+  Verwaltungseintrag (Kern-Audit N62); der Test-Helfer für „Daten löschen“
+  prüft das und legt den Code danach für die übrigen Tests wieder ab. Der
+  Mailer protokolliert externe Empfänger jetzt als `extern:<hex>`
+  (Kern-Audit N17); `VerkaufsboersePluginTest` sucht die Versandversuche
+  deshalb wie `DeckanfragePluginTest` unter dieser Referenz.
+
+  **Für Betreiber:** Wer ein Addon deinstalliert und später wieder nutzen
+  will, installiert es mit diesem Kern neu (Addon-Store unter
+  `/admin/plugins/store` oder Kopie nach `plugins/`); ein
+  bloßes erneutes Aktivieren genügt nicht mehr.
 
 ## [0.9.0] – 2026-08-27
 

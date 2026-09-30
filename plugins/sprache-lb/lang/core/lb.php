@@ -294,6 +294,10 @@ return [
     'admin.dashboard.tile_backups' => 'Backups',
     'admin.dashboard.tile_digest' => 'E-Mail-Digest',
     'admin.dashboard.tile_updates' => 'Updates',
+    'admin.dashboard.storage_warning_title' => 'Päerdsfotoen ouni eegene Volume:',
+    'admin.dashboard.storage_warning_no_mount' => 'storage/horses läit an dësem Container op kengem eegene Volume. Nei eropgeluede Fotoen landen am Dateisystem vum Container a gi beim nächste Neierstelle vum Container (Update, Watchtower) verluer. Fotoe vu virun v0.8.0 bleiwe bis dohin a public/uploads/horses a ginn dovun aus ausgeliwwert; d\'Migratioun verréckelt se eréischt, wann de Volume agebonnen ass.',
+    'admin.dashboard.storage_warning_anonymous' => 'storage/horses läit nëmmen um anonyme Volume, deen d\'Image als Réckfall uleet. Nei eropgeluede Fotoe leien do, gi beim nächste Neierstelle vum Container (Update, Watchtower) awer verwaist: Den neie Container kritt en eidelen anonyme Volume, an docker volume prune läscht deen alen. Fotoe vu virun v0.8.0 bleiwe bis dohin a public/uploads/horses.',
+    'admin.dashboard.storage_warning_action' => 'Virum nächsten Update sécheren, an der Compose-Datei de benannte Volume horses_data fir /var/www/html/storage/horses ergänzen (kuckt docker-compose.yml am Repository), nei starten an d\'Sécherung zréckspillen:',
 
     // Selfservice-Registréierung (#83)
     'register.title' => 'Registréieren',

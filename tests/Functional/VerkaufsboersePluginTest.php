@@ -852,12 +852,18 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
      * Versandversuche an eine Adresse: App\Service\Mailer protokolliert jeden
      * Versuch unter der Kategorie `email` mit dem Empfänger in den Details -
      * ohne SMTP ist das der Fehlschlag-Eintrag (siehe DeckanfragePluginTest).
+     * Ab Kern-Audit N17 steht dort statt der Adresse die Referenz
+     * `extern:<12 hex>` (Mailer::externeEmpfaengerReferenz()), ältere Kerne
+     * schreiben die Adresse selbst.
      */
     private function versandversuche(string $adresse): int {
+        $empfaenger = method_exists(\App\Service\Mailer::class, 'externeEmpfaengerReferenz')
+            ? \App\Service\Mailer::externeEmpfaengerReferenz($adresse, (string) getenv('APP_KEY'))
+            : $adresse;
         $stmt = \App\Database::getInstance()->prepare(
             "SELECT COUNT(*) FROM audit_logs WHERE category = 'email' AND details LIKE ?"
         );
-        $stmt->execute(['%' . $adresse . '%']);
+        $stmt->execute(['%' . $empfaenger . '%']);
         return (int) $stmt->fetchColumn();
     }
 

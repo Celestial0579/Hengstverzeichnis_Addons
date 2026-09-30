@@ -287,6 +287,10 @@ return [
     'admin.dashboard.tile_backups' => 'Sikkerhetskopier',
     'admin.dashboard.tile_digest' => 'E-postsammendrag',
     'admin.dashboard.tile_updates' => 'Oppdateringer',
+    'admin.dashboard.storage_warning_title' => 'Hestebilder uten eget volum:',
+    'admin.dashboard.storage_warning_no_mount' => 'storage/horses ligger ikke på et eget volum i denne containeren. Nyopplastede bilder havner i containerens filsystem og går tapt neste gang containeren gjenopprettes (oppdatering, Watchtower). Bilder fra før v0.8.0 blir inntil da liggende i public/uploads/horses og leveres derfra; migreringen flytter dem først når volumet er montert.',
+    'admin.dashboard.storage_warning_anonymous' => 'storage/horses ligger bare på det anonyme volumet som imaget oppretter som reserve. Nyopplastede bilder lagres der, men blir foreldreløse neste gang containeren gjenopprettes (oppdatering, Watchtower): Den nye containeren får et tomt anonymt volum, og docker volume prune sletter det gamle. Bilder fra før v0.8.0 blir inntil da liggende i public/uploads/horses.',
+    'admin.dashboard.storage_warning_action' => 'Ta en sikkerhetskopi før neste oppdatering, legg til det navngitte volumet horses_data for /var/www/html/storage/horses i Compose-filen (se docker-compose.yml i repositoriet), start på nytt og gjenopprett sikkerhetskopien:',
 
     // Selvbetjent registrering (#83)
     'register.title' => 'Registrer deg',
