@@ -40,6 +40,46 @@ automatischer Veröffentlichung:
   begrenzt (max. 10 MB) und unter einem zufälligen Dateinamen gespeichert -
   gleiches Muster wie `HorseController::handleImageUpload()` im Kern.
 
+## Deinstallation und Sicherung
+
+Seit 1.3.0 steht im Datenregister (`owns`) der `plugin.json`, was dem Addon
+gehört: die Tabelle `plugin_gesundheitstests` und die Dokumentablage
+`storage/plugin_gesundheitstests` (Audit M27). **„Deinstallieren → Daten
+löschen“ entfernt damit beides**; die Rückfrageseite nennt vorher die Zahl der
+Einträge und Dokumente. Bis 1.2.0 blieb beides trotz „Daten löschen“ stehen,
+und nach erneuter Aktivierung waren die Einträge samt Dokumenten wieder da.
+
+**Sicherung (Audit N27):** Die Kern-Option „Hochgeladene Dateien mitsichern“
+erfasst `storage/plugin_gesundheitstests` bis zu einem Kern-Release, das die
+Verzeichnisse aus dem Datenregister mitsichert, **nicht**. Der SQL-Dump enthält
+die Einträge, die Dokumente fehlen. Das Verzeichnis bitte separat sichern
+(etwa per rsync oder Hoster-Backup) - insbesondere **vor einer Deinstallation
+mit „Daten löschen“** und vor einem Umzug.
+
+**Endgültiges Löschen eines Pferdes (Audit N26):** Wird ein Pferd endgültig
+gelöscht - einzeln, über „Papierkorb leeren“ oder durch die 30-Tage-Bereinigung
+-, entfernt das Addon auch dessen Dokumente aus der Ablage, und zwar erst,
+nachdem der Kern das Pferd tatsächlich gelöscht hat (Hooks
+`horse.before_delete` und `horse.deleted`). Das Verschieben in den Papierkorb
+lässt alles stehen; eine Wiederherstellung findet ihre Dokumente wieder.
+
+**Verwaiste Dokumente:** Bis 1.2.0 blieben Dokumente endgültig gelöschter
+Pferde und gescheiterter Uploads ohne Eintrag in der Ablage liegen. Jede
+Aktivierung und jedes Addon-Update (`install()`) entfernt solche Dateien - nur
+selbst vergebene Ablagenamen (`gtest_<zeit>_<zufall>.<endung>`), nur älter als
+24 Stunden und nur, wenn kein Eintrag auf sie verweist; scheitert die Abfrage,
+wird nichts gelöscht. Die Anzahl steht im Protokoll. **Achtung nach einer
+Rücksicherung:** Wird nur ein älterer Datenbankstand zurückgespielt, die
+Ablage aber nicht, gelten die Dokumente neuerer Einträge als verwaist und
+werden bei der nächsten Aktivierung bzw. dem nächsten Update entfernt. Ablage
+und Datenbank deshalb immer gemeinsam zurückspielen.
+
+**Eingabeprüfung:** Zu lange Angaben (Art über 100, Aussteller über 150
+Zeichen, Zusammenfassung über 64 KB) und ungültige Daten werden vor dem
+Hochladen mit einem Hinweis abgewiesen, statt mit einem Serverfehler zu enden
+und die Datei ohne Eintrag zurückzulassen. Überlange Originaldateinamen werden
+auf 255 Zeichen gekürzt.
+
 ## Protokollierung
 
 Anlegen und Löschen eines Eintrags stehen im Audit-Log des Kerns
@@ -95,4 +135,5 @@ war die bewusste Abwägung in #120.
   Hook greift ein marker-geführter Fallback (`.schema-1` im
   Plugin-Verzeichnis), damit nicht bei jedem Request ein DDL-Statement
   läuft.
-- Tabelle: `plugin_gesundheitstests` (`ON DELETE CASCADE` auf `horses`).
+- Tabelle: `plugin_gesundheitstests` (`ON DELETE CASCADE` auf `horses`);
+  Datenregister siehe „Deinstallation und Sicherung“.

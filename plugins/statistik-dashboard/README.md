@@ -66,13 +66,12 @@ Der Marker wird in derselben Transaktion geschrieben wie die
 Zählerübernahme: Bricht der Lauf ab, gilt nichts davon, und der nächste
 findet einen sauberen Ausgangszustand vor.
 
-### Die alte Tabelle bleibt liegen
+### Die alte Tabelle bleibt liegen - bis „Daten löschen“
 
-`plugin_besucherstatistik_views` wird **nicht** gelöscht. Sie gehört einem
-fremden Addon; sie zu löschen wäre nicht Sache dieses Addons und nähme die
-einzige Rückfallebene, falls an der Übernahme etwas nicht stimmt. Der
-geordnete Weg für Daten deinstallierter Addons entsteht in
-[Framework#338](https://github.com/Celestial0579/Hengstverzeichnis_Framework/issues/338).
+Bei der Übernahme wird `plugin_besucherstatistik_views` **nicht** gelöscht:
+Sie ist die einzige Rückfallebene, falls an der Übernahme etwas nicht stimmt.
+Entfernt wird sie erst mit „Deinstallieren → Daten löschen“ (siehe
+„Deinstallation“).
 
 ### Zu tun nach dem Update
 
@@ -81,6 +80,25 @@ Verzeichnis aus `plugins/` entfernen. Solange es aktiv bleibt, zählt es
 parallel in seine eigene Tabelle und hängt einen zweiten Zähler an die
 öffentliche Detailseite — die Statistik-Seite weist mit einem Hinweis darauf
 hin, solange das der Fall ist.
+
+## Deinstallation (Framework#338)
+
+Seit 1.3.0 stehen die eigenen Tabellen `plugin_statistik_dashboard_views` und
+`plugin_statistik_dashboard_meta` im Datenregister (`owns`) der `plugin.json`
+(Audit M30). „Deinstallieren → Daten löschen“ entfernt sie; bis 1.2.0 blieben
+sie trotz „Daten löschen“ stehen.
+
+Zusätzlich entfernt der `uninstall()`-Hook dabei die **Alttabelle
+`plugin_besucherstatistik_views`** des aufgegangenen Addons - aber nur, wenn
+`besucherstatistik` laut Plugin-Verwaltung nicht mehr aktiv ist. Ist es noch
+aktiv, bleibt sie stehen (es zählt weiter in sie), und das Protokoll vermerkt
+es. Die Rückfrageseite des Kerns nennt die Alttabelle nicht, weil sie nicht
+im Register steht.
+
+Warum sie mit muss: Bliebe sie stehen, liefe die Übernahme bei der nächsten
+Aktivierung erneut (der Marker ist mit der Meta-Tabelle gelöscht) und brächte
+alte Zähler zurück - und mit ihnen ein inzwischen entzogenes Recht
+`statistik-dashboard.view`.
 
 ## Zählweise
 

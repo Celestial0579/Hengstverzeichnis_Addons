@@ -255,10 +255,9 @@ class Plugin {
      * Sicherheitsfrage für dieses Formular: Ihr Schlüssel gehört dem Kern
      * (`captcha_provider_<kontext>`) und beginnt nicht mit `plugin_`.
      *
-     * Die Inseratstabelle bleibt bewusst unberührt: Die plugin.json
-     * deklariert kein `owns`, das Deinstallieren nimmt die Inserate also
-     * nicht mit. Das ist das bisherige Verhalten und bleibt so, bis das
-     * Register um die Tabelle ergänzt wird.
+     * Die Inseratstabelle räumt nicht dieser Hook ab, sondern der Kern über
+     * das Datenregister `owns` der plugin.json (seit 1.4.1, Audit M30) -
+     * nach diesem Hook und nur bei „Daten löschen“.
      */
     public function uninstall(): void {
         $db = Database::getInstance();

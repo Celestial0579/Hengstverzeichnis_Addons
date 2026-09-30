@@ -1,7 +1,7 @@
 {
     "slug": "statistik-dashboard",
     "name": "Statistik",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "core_compatibility": ">=0.8.0-beta.1",
     "core_supported_max": "0.9",
     "description": "Statistik-Seite für den Admin-Bereich mit zwei Abschnitten: Bestand (Pferde nach Status, Verteilung nach Deckstation, Wachstum über Zeit, meistgenutzte Blutlinien) und Aufrufe (Rangliste der meistgesehenen Pferde, gezählt auf der öffentlichen Detailseite). Löst das frühere Addon \"Besucherstatistik\" ab und übernimmt dessen Zähldaten.",
@@ -11,5 +11,13 @@
         "admin.dashboard_tiles",
         "horse.after_save"
     ],
+    "owns": {
+        "tables": [
+            "plugin_statistik_dashboard_views",
+            "plugin_statistik_dashboard_meta"
+        ],
+        "directories": [],
+        "settings": []
+    },
     "entry": "Plugin.php"
 }

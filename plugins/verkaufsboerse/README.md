@@ -118,8 +118,14 @@ Inserate liegen in `plugin_verkaufsboerse_listings`.
 `uninstall()` entfernt seit 1.3.0 die Zähler des Kontaktformulars aus der
 Kern-Tabelle `login_attempts` (Typen `verkaufsboerse` und
 `verkaufsinserat`; der IP-Zähler enthält IP-Adressen), seit 1.4.0 auch die
-Anbieterwahl der Sicherheitsfrage (`captcha_provider_verkaufsboerse`). Die
-Inserate bleiben stehen: Die `plugin.json` deklariert kein `owns`.
+Anbieterwahl der Sicherheitsfrage (`captcha_provider_verkaufsboerse`).
+
+Seit 1.4.1 steht die Inseratstabelle `plugin_verkaufsboerse_listings` im
+Datenregister (`owns`) der `plugin.json` (Audit M30). „Deinstallieren →
+Daten löschen“ entfernt damit alle Inserate samt der hinterlegten
+Kontakt-E-Mail-Adressen; die Rückfrageseite nennt die Anzahl vorher. Bis
+1.4.0 blieb die Tabelle trotz „Daten löschen“ stehen und war nach erneuter
+Aktivierung wieder da. Mit „Daten behalten“ bleibt sie wie bisher stehen.
 
 Schema-Anlage: über den `install()`-Hook des PluginManagers (einmal bei
 Aktivierung bzw. nach einem Addon-Update); auf älteren Kernen ohne diesen

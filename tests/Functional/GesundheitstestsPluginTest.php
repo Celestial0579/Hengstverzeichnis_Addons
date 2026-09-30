@@ -31,6 +31,7 @@ class GesundheitstestsPluginTest extends FunctionalTestCase {
 
     use HorseListHelper;
     use PferdesucheHelper;
+    use DeinstallationHelper;
 
     private const SLUG = 'gesundheitstests';
 
@@ -536,6 +537,314 @@ class GesundheitstestsPluginTest extends FunctionalTestCase {
             $details,
             'Der frei wählbare Originaldateiname kann personenbezogen sein und gehört nicht ins dauerhafte Protokoll.'
         );
+    }
+
+    /**
+     * Audit M27: „Deinstallieren → Daten löschen“ entfernt Tabelle UND
+     * Dokumentablage. Bis 1.2.0 fehlte das Datenregister: Die Rückfrage
+     * meldete „rückstandsfrei“, beides blieb stehen, und nach erneuter
+     * Aktivierung waren die Gesundheitsdaten samt Download-IDs wieder da.
+     */
+    public function testDeinstallationMitDatenLoeschenEntferntTabelleUndAblage(): void {
+        $admin = $this->authenticatedClient();
+        $this->enablePlugin($admin);
+
+        $unique = uniqid();
+        $horseId = $this->createHorse($admin, "GTestDeinstallation-{$unique}", ['status' => 'active']);
+        $this->dokumentHochladen($admin, $horseId, "Deinstallation-{$unique}");
+        $eintragId = $this->eintragId("Deinstallation-{$unique}");
+        $this->assertSame(200, $admin->get('/plugin/gesundheitstests/download?id=' . $eintragId)->statusCode);
+
+        try {
+            $rueckfrage = $this->deinstallierenMitDaten($admin, self::SLUG);
+            $this->assertGreaterThanOrEqual(
+                2,
+                substr_count($rueckfrage->body, '<code>plugin_gesundheitstests</code>'),
+                'Die Rückfrage muss Tabelle und Ablage (basename) nennen.'
+            );
+            $this->assertStringNotContainsString('rückstandsfrei', $rueckfrage->body);
+
+            $this->assertFalse($this->tabelleVorhanden('plugin_gesundheitstests'), 'Die Tabelle muss verschwinden.');
+            $this->assertDirectoryDoesNotExist(self::ablage(), 'Die Dokumentablage muss verschwinden.');
+            $protokoll = $this->deinstallationsProtokoll(self::SLUG);
+            $this->assertStringContainsString('Verzeichnis plugin_gesundheitstests entfernt.', $protokoll);
+            $this->assertStringNotContainsString('WARNUNG', $protokoll, $protokoll);
+        } finally {
+            $this->aktivieren($admin, self::SLUG);
+        }
+
+        $this->assertSame(
+            0,
+            (int) \App\Database::getInstance()->query('SELECT COUNT(*) FROM `plugin_gesundheitstests`')->fetchColumn(),
+            'Nach erneuter Aktivierung ist die Tabelle leer.'
+        );
+        $this->assertSame(404, $admin->get('/plugin/gesundheitstests/download?id=' . $eintragId)->statusCode);
+    }
+
+    /**
+     * Audit N26: Das endgültige Löschen eines Pferdes nimmt seine Dokumente
+     * mit. Der FK-Cascade entfernte bisher nur die Zeilen - die Dateien
+     * blieben ohne Zeile liegen, unsichtbar und nicht mehr löschbar.
+     *
+     * Der Papierkorb allein lässt sie stehen (Wiederherstellung). Das
+     * Protokoll nennt die Anzahl, aber keinen Originalnamen.
+     */
+    public function testEndgueltigesLoeschenEntferntDokumente(): void {
+        $admin = $this->authenticatedClient();
+        $this->enablePlugin($admin);
+
+        $unique = uniqid();
+        $horseId = $this->createHorse($admin, "GTestEndgueltig-{$unique}", ['status' => 'active']);
+        $datei = $this->dokumentHochladen($admin, $horseId, "Endgueltig-{$unique}", "endgueltig-{$unique}.pdf");
+
+        $this->inDenPapierkorb($admin, $horseId);
+        $this->assertFileExists(self::ablage() . '/' . $datei, 'Im Papierkorb bleibt das Dokument (Wiederherstellung).');
+
+        $antwort = $admin->post('/admin/trash/permanent-delete', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'type' => 'horse',
+            'id' => (string) $horseId,
+        ]);
+        $this->assertSame('/admin/trash?success=purged', $antwort->location(), $antwort->body);
+        $this->assertFileDoesNotExist(self::ablage() . '/' . $datei, 'Mit dem Pferd muss sein Dokument verschwinden.');
+
+        $eintraege = $this->protokollEintraege('Gesundheitstest-Dokumente mit Pferd endgültig gelöscht', "Pferd #{$horseId} (");
+        $this->assertCount(1, $eintraege);
+        $this->assertStringContainsString('1 Dokument(e) entfernt', (string) $eintraege[0]['details']);
+        $this->assertStringContainsString("GTestEndgueltig-{$unique}", (string) $eintraege[0]['details']);
+        $this->assertStringNotContainsString("endgueltig-{$unique}.pdf", (string) $eintraege[0]['details']);
+    }
+
+    /**
+     * Audit N26: „Papierkorb leeren“ löscht in Chargen und feuert die Hooks
+     * je Pferd - beide Dokumente verschwinden, das eines nicht gelöschten
+     * Pferdes bleibt.
+     */
+    public function testPapierkorbLeerenEntferntDokumenteAllerPferde(): void {
+        $admin = $this->authenticatedClient();
+        $this->enablePlugin($admin);
+
+        $unique = uniqid();
+        $ersterId = $this->createHorse($admin, "GTestLeeren1-{$unique}", ['status' => 'active']);
+        $zweiterId = $this->createHorse($admin, "GTestLeeren2-{$unique}", ['status' => 'active']);
+        $bleibtId = $this->createHorse($admin, "GTestLeerenBleibt-{$unique}", ['status' => 'active']);
+        $erste = $this->dokumentHochladen($admin, $ersterId, "Leeren1-{$unique}");
+        $zweite = $this->dokumentHochladen($admin, $zweiterId, "Leeren2-{$unique}");
+        $bleibt = $this->dokumentHochladen($admin, $bleibtId, "LeerenBleibt-{$unique}");
+
+        $this->inDenPapierkorb($admin, $ersterId);
+        $this->inDenPapierkorb($admin, $zweiterId);
+
+        $antwort = $admin->post('/admin/trash/empty', ['csrf_token' => $this->currentCsrfToken($admin)]);
+        $this->assertSame('/admin/trash?success=emptied', $antwort->location(), $antwort->body);
+
+        $this->assertFileDoesNotExist(self::ablage() . '/' . $erste);
+        $this->assertFileDoesNotExist(self::ablage() . '/' . $zweite);
+        $this->assertFileExists(self::ablage() . '/' . $bleibt, 'Das Dokument eines nicht gelöschten Pferdes bleibt.');
+        $this->assertSame(1, $this->countEntries("LeerenBleibt-{$unique}"));
+    }
+
+    /** Audit N26: Papierkorb und Wiederherstellung lassen das Dokument unberührt. */
+    public function testWiederherstellungBehaeltDokument(): void {
+        $admin = $this->authenticatedClient();
+        $this->enablePlugin($admin);
+
+        $unique = uniqid();
+        $horseId = $this->createHorse($admin, "GTestWiederher-{$unique}", ['status' => 'active']);
+        $datei = $this->dokumentHochladen($admin, $horseId, "Wiederher-{$unique}");
+
+        $this->inDenPapierkorb($admin, $horseId);
+        $antwort = $admin->post('/admin/trash/restore', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'type' => 'horse',
+            'id' => (string) $horseId,
+        ]);
+        $this->assertNotNull($antwort->location(), $antwort->body);
+
+        $this->assertFileExists(self::ablage() . '/' . $datei);
+        $download = $admin->get('/plugin/gesundheitstests/download?id=' . $this->eintragId("Wiederher-{$unique}"));
+        $this->assertSame(200, $download->statusCode);
+        $this->assertStringContainsString('%PDF', $download->body);
+    }
+
+    /**
+     * Audit N26: Eine zu lange Zusammenfassung lief bisher erst beim INSERT
+     * auf den Fehler (500) - die Datei lag da schon in der Ablage, ohne Zeile.
+     * Jetzt: Hinweis, keine Datei, keine Zeile.
+     */
+    public function testZuLangeZusammenfassungHinterlaesstKeineWaise(): void {
+        $this->pruefeAbgewieseneEingabe(['result_summary' => str_repeat('x', 70000)], 'Lang');
+    }
+
+    /** Audit N26: Ein ungültiges Datum wird ebenso vor dem Upload abgewiesen. */
+    public function testUngueltigesDatumWirdAbgelehnt(): void {
+        $this->pruefeAbgewieseneEingabe(['issued_at' => '2026-13-45'], 'Datum');
+    }
+
+    /**
+     * Audit N26: file_original_name ist VARCHAR(255). Ein längerer Name ließ
+     * den INSERT scheitern und die Datei verwaist zurück.
+     */
+    public function testUeberlangerOriginalnameWirdGekuerzt(): void {
+        $admin = $this->authenticatedClient();
+        $this->enablePlugin($admin);
+
+        $unique = uniqid();
+        $horseId = $this->createHorse($admin, "GTestLangerName-{$unique}", ['status' => 'active']);
+        $name = str_repeat('b', 296) . '.pdf';
+        $datei = $this->dokumentHochladen($admin, $horseId, "LangerName-{$unique}", $name);
+
+        $this->assertFileExists(self::ablage() . '/' . $datei);
+        $stmt = \App\Database::getInstance()->prepare(
+            'SELECT file_original_name FROM `plugin_gesundheitstests` WHERE test_type = ?'
+        );
+        $stmt->execute(["LangerName-{$unique}"]);
+        $this->assertSame(substr($name, 0, 255), $stmt->fetchColumn());
+    }
+
+    /**
+     * Audit N26, Altbestand: install() räumt Dokumente ohne Zeile ab - aber
+     * nur selbst vergebene Ablagenamen, die älter als 24 Stunden sind.
+     */
+    public function testInstallRaeumtAlteWaisenAuf(): void {
+        $admin = $this->authenticatedClient();
+        $this->enablePlugin($admin);
+
+        $unique = uniqid();
+        $horseId = $this->createHorse($admin, "GTestWaisen-{$unique}", ['status' => 'active']);
+        $ablage = self::ablage();
+        if (!is_dir($ablage)) {
+            mkdir($ablage, 0750, true);
+        }
+        $alt = time() - 3 * 86400;
+        $name = static fn(): string => 'gtest_' . (time() - 3 * 86400) . '_' . bin2hex(random_bytes(8)) . '.pdf';
+
+        $alteWaise = $name();
+        $alteReferenzierte = $name();
+        $frischeWaise = $name();
+        $fremd = "fremd_{$unique}.pdf";
+        foreach ([$alteWaise, $alteReferenzierte, $frischeWaise, $fremd] as $datei) {
+            file_put_contents($ablage . '/' . $datei, self::PDF_INHALT);
+        }
+        touch($ablage . '/' . $alteWaise, $alt);
+        touch($ablage . '/' . $alteReferenzierte, $alt);
+        touch($ablage . '/' . $fremd, $alt);
+        \App\Database::getInstance()->prepare(
+            'INSERT INTO `plugin_gesundheitstests` (horse_id, test_type, file_name, file_mime) VALUES (?, ?, ?, ?)'
+        )->execute([$horseId, "Waisen-{$unique}", $alteReferenzierte, 'application/pdf']);
+
+        try {
+            // install() läuft bei jeder Aktivierung.
+            $admin->post('/admin/plugins/toggle', [
+                'csrf_token' => $this->currentCsrfToken($admin),
+                'slug' => self::SLUG,
+                'enable' => '0',
+            ]);
+            $this->enablePlugin($admin);
+
+            $this->assertFileDoesNotExist($ablage . '/' . $alteWaise, 'Eine alte Datei ohne Zeile ist eine Waise.');
+            $this->assertFileExists($ablage . '/' . $alteReferenzierte, 'Eine referenzierte Datei bleibt, egal wie alt.');
+            $this->assertFileExists($ablage . '/' . $frischeWaise, 'Jünger als 24 Stunden: womöglich ein laufender Upload.');
+            $this->assertFileExists($ablage . '/' . $fremd, 'Fremd benannte Dateien fasst die Bereinigung nicht an.');
+            $this->assertNotEmpty($this->protokollEintraege('Verwaiste Gesundheitstest-Dokumente entfernt', 'Dokument(e)'));
+        } finally {
+            @unlink($ablage . '/' . $frischeWaise);
+            @unlink($ablage . '/' . $fremd);
+        }
+    }
+
+    /**
+     * Gemeinsamer Ablauf der abgewiesenen Eingaben: Upload MIT Dokument,
+     * Rückweg mit Hinweis, keine neue Datei, keine Zeile, kein 500.
+     *
+     * @param array<string, string> $felder
+     */
+    private function pruefeAbgewieseneEingabe(array $felder, string $art): void {
+        $admin = $this->authenticatedClient();
+        $this->enablePlugin($admin);
+
+        $unique = uniqid();
+        $horseId = $this->createHorse($admin, "GTestAbgewiesen{$art}-{$unique}", ['status' => 'active']);
+        $form = $admin->get('/admin/horses/edit?id=' . $horseId);
+        $testArt = "Abgewiesen{$art}-{$unique}";
+        $vorher = $this->dateienInAblage();
+
+        $antwort = $admin->postFile(
+            self::ALTE_SEITE . '/store',
+            ['csrf_token' => $form->formField('csrf_token') ?? '', 'horse_id' => (string) $horseId, 'test_type' => $testArt] + $felder,
+            'document',
+            "abgewiesen-{$unique}.pdf",
+            self::PDF_INHALT,
+            'application/pdf'
+        );
+
+        $this->assertSame('/admin/horses/edit?id=' . $horseId . '&gtest_fehler=eingabe', $antwort->location(), $antwort->body);
+        $this->assertSame(0, $this->countEntries($testArt), 'Keine Zeile.');
+        $this->assertSame($vorher, $this->dateienInAblage(), 'Keine neue Datei in der Ablage.');
+
+        $hinweis = $admin->get('/admin/horses/edit?id=' . $horseId . '&gtest_fehler=eingabe');
+        $this->assertStringContainsString('Der Test wurde nicht gespeichert', $hinweis->body);
+        // Ein fremder Wert zeigt nichts und wird nie ausgegeben.
+        $fremd = $admin->get('/admin/horses/edit?id=' . $horseId . '&gtest_fehler=fremd' . $unique);
+        $this->assertStringNotContainsString('Der Test wurde nicht gespeichert', $fremd->body);
+        $this->assertStringNotContainsString('fremd' . $unique, $fremd->body);
+    }
+
+    /**
+     * Lädt über den Pferdeabschnitt ein PDF hoch und liefert den selbst
+     * vergebenen Ablagenamen aus der Datenbank.
+     */
+    private function dokumentHochladen(\Tests\Support\HttpClient $admin, int $horseId, string $testArt, ?string $originalName = null): string {
+        $form = $admin->get('/admin/horses/edit?id=' . $horseId);
+        $antwort = $admin->postFile(
+            self::ALTE_SEITE . '/store',
+            ['csrf_token' => $form->formField('csrf_token') ?? '', 'horse_id' => (string) $horseId, 'test_type' => $testArt],
+            'document',
+            $originalName ?? 'befund.pdf',
+            self::PDF_INHALT,
+            'application/pdf'
+        );
+        $this->assertSame('/admin/horses/edit?id=' . $horseId, $antwort->location(), $antwort->body);
+
+        $stmt = \App\Database::getInstance()->prepare(
+            'SELECT file_name FROM `plugin_gesundheitstests` WHERE test_type = ? AND horse_id = ?'
+        );
+        $stmt->execute([$testArt, $horseId]);
+        $datei = (string) $stmt->fetchColumn();
+        $this->assertMatchesRegularExpression('/^gtest_\d+_[0-9a-f]{16}\.pdf$/', $datei);
+        $this->assertFileExists(self::ablage() . '/' . $datei);
+        return $datei;
+    }
+
+    private function eintragId(string $testArt): int {
+        $stmt = \App\Database::getInstance()->prepare('SELECT id FROM `plugin_gesundheitstests` WHERE test_type = ?');
+        $stmt->execute([$testArt]);
+        $id = (int) $stmt->fetchColumn();
+        $this->assertGreaterThan(0, $id, "Kein Eintrag '{$testArt}'.");
+        return $id;
+    }
+
+    /** Verschiebt ein Pferd über den Kern-Weg in den Papierkorb. */
+    private function inDenPapierkorb(\Tests\Support\HttpClient $admin, int $horseId): void {
+        $antwort = $admin->post('/admin/horses/delete', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'id' => (string) $horseId,
+        ]);
+        $this->assertNotNull($antwort->location(), $antwort->body);
+        $stmt = \App\Database::getInstance()->prepare('SELECT deleted_at FROM horses WHERE id = ?');
+        $stmt->execute([$horseId]);
+        $this->assertNotEmpty($stmt->fetchColumn(), 'Das Pferd muss im Papierkorb liegen.');
+    }
+
+    /** @return string[] */
+    private function dateienInAblage(): array {
+        $dateien = is_dir(self::ablage()) ? array_values(array_diff(scandir(self::ablage()) ?: [], ['.', '..'])) : [];
+        sort($dateien);
+        return $dateien;
+    }
+
+    private static function ablage(): string {
+        return \FRAMEWORK_VENDOR_DIR . '/storage/plugin_gesundheitstests';
     }
 
     /**

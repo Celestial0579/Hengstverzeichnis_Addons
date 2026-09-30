@@ -50,6 +50,124 @@ class Plugin {
         // bleibt: Sie ist der einzige Weg zu den Dokumenten außerhalb des
         // Webroots.
         $hooks->addFilter('horse.edit_sections', [$this, 'addEditSection']);
+
+        // Audit N26: Beim ENDGÜLTIGEN Löschen eines Pferdes entfernt der
+        // FK-Cascade die Zeilen dieser Tabelle - die Dokumente in der Ablage
+        // blieben bisher liegen, ohne Zeile, ohne Download-Weg, für niemanden
+        // mehr sichtbar oder löschbar. Zwei Hooks, weil die Dateinamen nur
+        // VOR dem Löschen lesbar sind, entfernt werden dürfen sie aber erst
+        // DANACH (siehe onHorseDeleted()).
+        $hooks->addAction('horse.before_delete', [$this, 'onHorseBeforeDelete']);
+        $hooks->addAction('horse.deleted', [$this, 'onHorseDeleted']);
+    }
+
+    /**
+     * Ablagenamen je Pferd, einmal je Request geladen (siehe
+     * onHorseBeforeDelete()). null = noch nicht geladen.
+     *
+     * @var array<int, string[]>|null
+     */
+    private ?array $dateienJePferd = null;
+
+    /**
+     * Zum Entfernen vorgemerkte Dokumente: Pferd => [Name, Ablagenamen].
+     *
+     * @var array<int, array{name:string, dateien:string[]}>
+     */
+    private array $ausstehend = [];
+
+    /**
+     * Kern-Hook (#164) VOR dem Löschen eines Pferdes: merkt die Dokumente
+     * vor, gelöscht wird hier NICHTS.
+     *
+     * - `$permanent === false` ist das Verschieben in den Papierkorb. Dort
+     *   bleibt alles stehen, damit eine Wiederherstellung ihre Dokumente
+     *   wiederfindet.
+     * - Die Zeilen sind in horse.deleted bereits per FK-Cascade weg; die
+     *   Dateinamen lassen sich nur jetzt noch lesen.
+     * - „Papierkorb leeren“ feuert diesen Hook je Pferd. Die Ablagenamen
+     *   werden deshalb beim ersten Aufruf für ALLE Pferde in einer Abfrage
+     *   geladen statt einmal je Pferd.
+     */
+    public function onHorseBeforeDelete(int $horseId, array $horse, bool $permanent = false): void {
+        if (!$permanent) {
+            return;
+        }
+
+        if ($this->dateienJePferd === null) {
+            $geladen = [];
+            $zeilen = Database::getInstance()->query(
+                'SELECT horse_id, file_name FROM `plugin_gesundheitstests` WHERE file_name IS NOT NULL'
+            )->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($zeilen as $zeile) {
+                $geladen[(int) $zeile['horse_id']][] = (string) $zeile['file_name'];
+            }
+            $this->dateienJePferd = $geladen;
+        }
+
+        $dateien = $this->dateienJePferd[$horseId] ?? [];
+        if ($dateien === []) {
+            return;
+        }
+
+        $this->ausstehend[$horseId] = [
+            'name' => (string) ($horse['name'] ?? 'unbekannt'),
+            'dateien' => $dateien,
+        ];
+    }
+
+    /**
+     * Kern-Hook (#164) NACH dem Löschen eines Pferdes: entfernt die
+     * vorgemerkten Dokumente aus der Ablage.
+     *
+     * Warum erst hier und nicht schon in before_delete: Der Kern feuert
+     * horse.deleted nur nach dem erfolgreichen DELETE, bei „Papierkorb
+     * leeren“ nach dem Commit der Charge. Scheitert das Löschen oder wird
+     * zurückgerollt, kommt dieser Hook nie an - und die Dokumente bleiben zu
+     * den weiter bestehenden Zeilen erhalten. Ein Entfernen in before_delete
+     * hinterließe in diesem Fall Zeilen ohne Datei.
+     *
+     * Ein Fehler beim Aufräumen darf den Löschvorgang des Kerns nicht
+     * abbrechen; er wird protokolliert.
+     */
+    public function onHorseDeleted(int $horseId, array $horse): void {
+        $vorgemerkt = $this->ausstehend[$horseId] ?? null;
+        unset($this->ausstehend[$horseId], $this->dateienJePferd[$horseId]);
+        if ($vorgemerkt === null) {
+            return;
+        }
+
+        $entfernt = 0;
+        $verblieben = [];
+        try {
+            foreach ($vorgemerkt['dateien'] as $dateiName) {
+                // Selbst vergebener Ablagename (handleDocumentUpload), trotzdem
+                // basename(): Aus der Datenbank gelesen heißt nicht vertrauenswürdig.
+                $dateiName = basename($dateiName);
+                $pfad = self::storageDir() . '/' . $dateiName;
+                if (is_file($pfad)) {
+                    @unlink($pfad);
+                }
+                // Nach dem unlink geprüft, wie in VerwaltungController::delete():
+                // Protokolliert wird, was tatsächlich weg ist.
+                if (is_file($pfad)) {
+                    $verblieben[] = $dateiName;
+                } else {
+                    $entfernt++;
+                }
+            }
+        } catch (\Throwable $e) {
+            $verblieben[] = 'Fehler: ' . $e->getMessage();
+        }
+
+        // Ohne Originalnamen und ohne Zusammenfassung (#134): Der Nachweis der
+        // Löschung darf die gelöschten Inhalte nicht konservieren.
+        AuditLogger::log(
+            'Gesundheitstest-Dokumente mit Pferd endgültig gelöscht',
+            'gesundheitstests',
+            "Pferd #{$horseId} ({$vorgemerkt['name']}): {$entfernt} Dokument(e) entfernt"
+                . ($verblieben !== [] ? ', ' . count($verblieben) . ' NICHT entfernt: ' . implode(', ', $verblieben) : '')
+        );
     }
 
     /**
@@ -74,7 +192,70 @@ class Plugin {
                 FOREIGN KEY (`horse_id`) REFERENCES `horses`(`id`) ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
         );
+
+        $this->verwaisteDokumenteEntfernen();
     }
+
+    /** Muster der selbst vergebenen Ablagenamen, siehe handleDocumentUpload(). */
+    public const ABLAGENAME_MUSTER = '/^gtest_\d+_[0-9a-f]{16}\.(pdf|jpg|png|webp)$/';
+
+    /** Erst ab diesem Alter gilt eine Datei ohne Zeile als verwaist. */
+    public const WAISEN_MINDESTALTER_SEKUNDEN = 86400;
+
+    /**
+     * Audit N26: räumt Dokumente ab, zu denen es keine Zeile mehr gibt - aus
+     * Pferdelöschungen und gescheiterten Uploads vor Version 1.3.0. Niemand
+     * konnte sie mehr sehen oder löschen; ohne diese Bereinigung bliebe die
+     * Lücke auf Bestandsinstallationen dauerhaft offen.
+     *
+     * Die einzige Löschung ohne Benutzeraktion, deshalb eng begrenzt:
+     * - nur selbst vergebene Ablagenamen (ABLAGENAME_MUSTER),
+     * - nur älter als 24 Stunden - ein Upload, der gerade zwischen Ablage
+     *   und INSERT steht, bleibt unberührt,
+     * - nur, was in `file_name` nicht vorkommt,
+     * - scheitert die Abfrage der Referenzen, wird gar nichts gelöscht.
+     *
+     * Eine Aktivierung darf nie am Aufräumen scheitern, deshalb fängt die
+     * Methode alles ab.
+     */
+    private function verwaisteDokumenteEntfernen(): void {
+        try {
+            $ablage = self::storageDir();
+            if (!is_dir($ablage)) {
+                return;
+            }
+
+            $referenziert = array_flip(array_map('strval', Database::getInstance()->query(
+                'SELECT file_name FROM `plugin_gesundheitstests` WHERE file_name IS NOT NULL'
+            )->fetchAll(PDO::FETCH_COLUMN)));
+
+            $grenze = time() - self::WAISEN_MINDESTALTER_SEKUNDEN;
+            $entfernt = 0;
+            foreach (scandir($ablage) ?: [] as $eintrag) {
+                if (!preg_match(self::ABLAGENAME_MUSTER, $eintrag) || isset($referenziert[$eintrag])) {
+                    continue;
+                }
+                $pfad = $ablage . '/' . $eintrag;
+                if (!is_file($pfad) || is_link($pfad) || (int) filemtime($pfad) > $grenze) {
+                    continue;
+                }
+                if (@unlink($pfad)) {
+                    $entfernt++;
+                }
+            }
+
+            if ($entfernt > 0) {
+                AuditLogger::log(
+                    'Verwaiste Gesundheitstest-Dokumente entfernt',
+                    'gesundheitstests',
+                    "{$entfernt} Dokument(e) ohne zugehörigen Eintrag aus der Ablage entfernt (älter als 24 Stunden)"
+                );
+            }
+        } catch (\Throwable $e) {
+            // Keine Referenzliste, kein Löschen - und keine gescheiterte Aktivierung.
+        }
+    }
+
     /**
      * Ablageverzeichnis für hochgeladene Dokumente: bewusst AUSSERHALB des
      * Webroots (public/), damit Dateien nie direkt per URL abrufbar sind,
@@ -187,6 +368,20 @@ class Plugin {
 
         $html = '<h3 style="margin-top:0;">🩺 Gesundheitstests</h3>';
 
+        // Rückmeldung einer abgewiesenen Eingabe (Audit N26, siehe
+        // VerwaltungController::store()). Feste Textzuordnung: Der Wert des
+        // Parameters wird nie ausgegeben, ein unbekannter Wert zeigt nichts.
+        $fehlerTexte = [
+            'eingabe' => 'Der Test wurde nicht gespeichert: Art höchstens 100 Zeichen, „Ausgestellt von“ höchstens '
+                . '150 Zeichen, Zusammenfassung höchstens 64 KB, Datum im Format JJJJ-MM-TT. '
+                . 'Ein ausgewähltes Dokument wurde nicht übernommen.',
+        ];
+        $fehler = $fehlerTexte[(string) ($_GET['gtest_fehler'] ?? '')] ?? null;
+        if ($fehler !== null) {
+            $html .= '<p role="alert" style="border-left:4px solid var(--danger-fg);background:var(--danger-soft-bg);'
+                . 'padding:0.75rem 1rem;">' . $esc($fehler) . '</p>';
+        }
+
         if ($rows) {
             $html .= '<div class="tabelle-scroll"><table style="width:100%;border-collapse:collapse;margin-bottom:1rem;">';
             $html .= '<thead><tr style="text-align:left;border-bottom:2px solid var(--border-color);">'
@@ -253,7 +448,7 @@ class Plugin {
             . '<input type="text" name="issued_by" id="gt_issued_by" class="form-control" maxlength="150"'
             . ' placeholder="z. B. Labor, Tierklinik"></div>';
         $html .= '<div class="form-group"><label for="gt_result_summary">Ergebnis-Zusammenfassung</label>'
-            . '<textarea name="result_summary" id="gt_result_summary" class="form-control" rows="3"></textarea></div>';
+            . '<textarea name="result_summary" id="gt_result_summary" class="form-control" rows="3" maxlength="65535"></textarea></div>';
         $html .= '<div class="form-group"><label for="gt_document">Dokument (PDF oder Bild, max. 10 MB)</label>'
             . '<input type="file" name="document" id="gt_document" class="form-control" accept="application/pdf,image/jpeg,image/png,image/webp"></div>';
         $html .= '<p style="color:var(--text-muted);font-size:0.85rem;margin-top:0;">'
@@ -353,28 +548,53 @@ class VerwaltungController extends BaseController {
             $horseId = null;
         }
 
-        $testType = trim($_POST['test_type'] ?? '');
+        $testType = trim((string) ($_POST['test_type'] ?? ''));
 
         if ($horseId && $testType !== '') {
+            $zusammenfassung = trim((string) ($_POST['result_summary'] ?? ''));
+            $ausgestelltVon = trim((string) ($_POST['issued_by'] ?? ''));
+            $ausgestelltAm = trim((string) ($_POST['issued_at'] ?? ''));
+
+            // Audit N26: Eingaben VOR dem Upload prüfen. Bisher lief eine zu
+            // lange Angabe oder ein ungültiges Datum erst beim INSERT auf den
+            // Fehler (Strict-Mode, 500) - die Datei lag da schon in der
+            // Ablage, ohne Zeile und damit für immer unsichtbar.
+            if (!self::eingabenGueltig($testType, $zusammenfassung, $ausgestelltVon, $ausgestelltAm)) {
+                header('Location: /admin/horses/edit?id=' . $horseId . '&gtest_fehler=eingabe');
+                exit;
+            }
+
             $upload = $this->handleDocumentUpload($_FILES['document'] ?? null);
 
-            $stmt = $db->prepare(
-                'INSERT INTO `plugin_gesundheitstests`
-                    (horse_id, test_type, result_summary, file_name, file_original_name, file_mime, is_public, issued_by, issued_at)
-                 VALUES (:horse_id, :test_type, :result_summary, :file_name, :file_original_name, :file_mime, :is_public, :issued_by, :issued_at)'
-            );
             $istOeffentlich = !empty($_POST['is_public']);
-            $stmt->execute([
-                'horse_id' => $horseId,
-                'test_type' => $testType,
-                'result_summary' => trim($_POST['result_summary'] ?? '') ?: null,
-                'file_name' => $upload['name'] ?? null,
-                'file_original_name' => $upload['original'] ?? null,
-                'file_mime' => $upload['mime'] ?? null,
-                'is_public' => $istOeffentlich ? 1 : 0,
-                'issued_by' => trim($_POST['issued_by'] ?? '') ?: null,
-                'issued_at' => !empty($_POST['issued_at']) ? $_POST['issued_at'] : null,
-            ]);
+            try {
+                $stmt = $db->prepare(
+                    'INSERT INTO `plugin_gesundheitstests`
+                        (horse_id, test_type, result_summary, file_name, file_original_name, file_mime, is_public, issued_by, issued_at)
+                     VALUES (:horse_id, :test_type, :result_summary, :file_name, :file_original_name, :file_mime, :is_public, :issued_by, :issued_at)'
+                );
+                $stmt->execute([
+                    'horse_id' => $horseId,
+                    'test_type' => $testType,
+                    'result_summary' => $zusammenfassung !== '' ? $zusammenfassung : null,
+                    'file_name' => $upload['name'] ?? null,
+                    'file_original_name' => $upload['original'] ?? null,
+                    'file_mime' => $upload['mime'] ?? null,
+                    'is_public' => $istOeffentlich ? 1 : 0,
+                    'issued_by' => $ausgestelltVon !== '' ? $ausgestelltVon : null,
+                    'issued_at' => $ausgestelltAm !== '' ? $ausgestelltAm : null,
+                ]);
+            } catch (\Throwable $e) {
+                // Scheitert das Speichern trotz Prüfung (Datenbankfehler,
+                // gelöschtes Pferd zwischen Prüfung und INSERT), darf die
+                // gerade abgelegte Datei nicht als Waise zurückbleiben. Der
+                // Fehler selbst wird nicht verschluckt: Der Kern antwortet wie
+                // bisher mit seiner Fehlerseite und protokolliert ihn.
+                if ($upload !== null) {
+                    @unlink(Plugin::storageDir() . '/' . basename($upload['name']));
+                }
+                throw $e;
+            }
 
             // Protokoll (#134): Kategorie = Addon-Slug. Vermerkt wird der
             // Bezug (welcher Eintrag, welches Pferd), die Art der
@@ -476,6 +696,24 @@ class VerwaltungController extends BaseController {
         $this->redirectBack($horseId);
     }
 
+    /**
+     * Passen die Angaben in die Spalten von `plugin_gesundheitstests`
+     * (Audit N26)? Längen in Zeichen wie die VARCHAR-Spalten, die
+     * Zusammenfassung in Bytes wie TEXT. Das Datum muss ein echtes
+     * Kalenderdatum sein - `2026-13-45` besteht das Format, aber nicht den
+     * Rückweg über DateTime.
+     */
+    public static function eingabenGueltig(string $art, string $zusammenfassung, string $ausgestelltVon, string $ausgestelltAm): bool {
+        if (mb_strlen($art) > 100 || mb_strlen($ausgestelltVon) > 150 || strlen($zusammenfassung) > 65535) {
+            return false;
+        }
+        if ($ausgestelltAm === '') {
+            return true;
+        }
+        $datum = \DateTime::createFromFormat('!Y-m-d', $ausgestelltAm);
+        return $datum !== false && $datum->format('Y-m-d') === $ausgestelltAm;
+    }
+
     /** Gibt es dieses Pferd (und ist es nicht im Papierkorb)? */
     private static function pferdExistiert(PDO $db, int $horseId): bool {
         $stmt = $db->prepare('SELECT 1 FROM horses WHERE id = :id AND deleted_at IS NULL');
@@ -557,7 +795,9 @@ class VerwaltungController extends BaseController {
 
         return [
             'name' => $filename,
-            'original' => basename((string) $file['name']),
+            // file_original_name ist VARCHAR(255). Ein längerer Name ließ den
+            // INSERT scheitern und die Datei verwaist zurück (Audit N26).
+            'original' => mb_substr(basename((string) $file['name']), 0, 255),
             'mime' => $mime,
         ];
     }

@@ -30,6 +30,7 @@ use Tests\Support\HttpClient;
 class StatistikDashboardPluginTest extends FunctionalTestCase {
 
     use HorseListHelper;
+    use DeinstallationHelper;
     // Für Schritt 2c: eine Deckstation als verknüpfter Kontakt (Addons#139).
     use PersonStationHelper;
 
@@ -371,6 +372,137 @@ class StatistikDashboardPluginTest extends FunctionalTestCase {
         } finally {
             $db->exec("DELETE FROM `plugins` WHERE `slug` = 'besucherstatistik'");
         }
+    }
+
+    /**
+     * Audit M30: „Deinstallieren → Daten löschen“ entfernt neben den eigenen
+     * Tabellen (Register `owns`) auch die Zähltabelle des aufgegangenen
+     * Addons `besucherstatistik` - über den uninstall()-Hook, weil das nur
+     * bei nicht mehr aktivem Alt-Addon geschehen darf.
+     *
+     * Bliebe sie stehen, liefe die Übernahme bei der nächsten Aktivierung
+     * erneut (der Marker ist mit der Meta-Tabelle weg): alte Zähler kämen
+     * zurück, und ein inzwischen entzogenes Recht ebenso.
+     *
+     * Gegenprobe: Ohne Plugin::uninstall() bleibt die Alttabelle stehen, und
+     * nach der Reaktivierung hat die Editor-Gruppe das entzogene Recht wieder.
+     */
+    public function testVolloeschungEntferntAlttabelleUndRechtKommtNichtZurueck(): void {
+        $admin = $this->authenticatedClient();
+        $db = Database::getInstance();
+        $this->setzeAktivierung($admin, true);
+
+        $unique = uniqid();
+        $pferdId = $this->createHorse($admin, "StatVolloeschung-{$unique}", ['status' => 'active']);
+        $editorGroupId = $this->findBuiltinGroupId($admin, 'Editor');
+
+        $this->altTabelleAnlegen($db);
+        $db->prepare('REPLACE INTO `' . self::TABELLE_ALT . '` (`horse_id`, `views`) VALUES (:id, 42)')
+            ->execute(['id' => $pferdId]);
+        $db->prepare(
+            "INSERT IGNORE INTO `group_permissions` (`group_id`, `module`, `action`) VALUES (:g, 'besucherstatistik', 'view')"
+        )->execute(['g' => $editorGroupId]);
+        $db->prepare('DELETE FROM `' . self::TABELLE_META . '` WHERE `meta_key` = :k')->execute(['k' => self::MARKER]);
+
+        try {
+            // Übernahme wie auf einer Bestandsinstallation ...
+            $this->setzeAktivierung($admin, false);
+            $this->setzeAktivierung($admin, true);
+            $this->assertSame(42, $this->aufrufe($db, $pferdId), 'Voraussetzung: Übernahme gelaufen.');
+            $this->assertTrue($this->hatRecht($db, $editorGroupId, 'statistik-dashboard', 'view'));
+
+            // ... dann entzieht der Admin das Recht bewusst.
+            $db->prepare(
+                "DELETE FROM `group_permissions` WHERE `group_id` = :g AND `module` = 'statistik-dashboard'"
+            )->execute(['g' => $editorGroupId]);
+
+            $entferntVorher = $this->auditAnzahl('Alttabelle der Besucherstatistik mit entfernt');
+            $this->deinstallierenMitDaten($admin, self::SLUG);
+
+            $this->assertFalse($this->tabelleExistiert($db, self::TABELLE_ALT), 'Die Alttabelle muss mit „Daten löschen“ verschwinden.');
+            $this->assertFalse($this->tabelleExistiert($db, self::TABELLE_AUFRUFE));
+            $this->assertFalse($this->tabelleExistiert($db, self::TABELLE_META));
+            $protokoll = $this->deinstallationsProtokoll(self::SLUG);
+            $this->assertStringContainsString('uninstall()-Hook des Addons ausgeführt.', $protokoll);
+            $this->assertStringNotContainsString('WARNUNG', $protokoll, $protokoll);
+            $this->assertSame($entferntVorher + 1, $this->auditAnzahl('Alttabelle der Besucherstatistik mit entfernt'));
+
+            $this->setzeAktivierung($admin, true);
+
+            $this->assertFalse(
+                $this->hatRecht($db, $editorGroupId, 'statistik-dashboard', 'view'),
+                'Ein bewusst entzogenes Recht darf nach der Vollöschung und Reaktivierung nicht zurückkommen.'
+            );
+            $this->assertSame(
+                0,
+                (int) $db->query('SELECT COUNT(*) FROM `' . self::TABELLE_AUFRUFE . '`')->fetchColumn(),
+                'Nach der Vollöschung beginnt die Zählung von vorn.'
+            );
+            $this->assertNull($this->markerWert($db), 'Ohne Alttabelle gibt es nichts zu übernehmen und keinen Marker.');
+        } finally {
+            $db->exec('DROP TABLE IF EXISTS `' . self::TABELLE_ALT . '`');
+            $db->prepare(
+                "DELETE FROM `group_permissions` WHERE `group_id` = :g AND `module` = 'besucherstatistik'"
+            )->execute(['g' => $editorGroupId]);
+            $this->setzeAktivierung($admin, true);
+        }
+    }
+
+    /**
+     * Audit M30, die Grenze des Hooks: Ist `besucherstatistik` noch aktiviert,
+     * zählt es in seine Tabelle - sie zu löschen bräche seine Zählung auf der
+     * öffentlichen Detailseite. Die Tabelle bleibt, das Protokoll sagt es.
+     */
+    public function testAlttabelleBleibtBeiAktivemAltAddon(): void {
+        $admin = $this->authenticatedClient();
+        $db = Database::getInstance();
+        $this->setzeAktivierung($admin, true);
+        $this->altTabelleAnlegen($db);
+
+        // Aktivierungszeile ohne Verzeichnis: folgenlos für den
+        // PluginManager, maßgeblich für den Hook (wie hinweisAltesAddon()).
+        $db->exec(
+            "INSERT INTO `plugins` (`slug`, `enabled`, `installed_version`) VALUES ('besucherstatistik', 1, '1.1.3')
+             ON DUPLICATE KEY UPDATE `enabled` = 1"
+        );
+
+        try {
+            $vorher = $this->auditAnzahl('Alttabelle der Besucherstatistik NICHT entfernt');
+            $this->deinstallierenMitDaten($admin, self::SLUG);
+
+            $this->assertTrue(
+                $this->tabelleExistiert($db, self::TABELLE_ALT),
+                'Bei aktivem Alt-Addon darf seine Tabelle nicht gelöscht werden.'
+            );
+            $this->assertFalse($this->tabelleExistiert($db, self::TABELLE_AUFRUFE), 'Die eigenen Tabellen gehen trotzdem.');
+            $this->assertSame($vorher + 1, $this->auditAnzahl('Alttabelle der Besucherstatistik NICHT entfernt'));
+        } finally {
+            $db->exec("DELETE FROM `plugins` WHERE `slug` = 'besucherstatistik'");
+            $db->exec('DROP TABLE IF EXISTS `' . self::TABELLE_ALT . '`');
+            $this->setzeAktivierung($admin, true);
+        }
+    }
+
+    /** Die Tabelle des alten Addons, exakt wie besucherstatistik::install(). */
+    private function altTabelleAnlegen(PDO $db): void {
+        $db->exec(
+            'CREATE TABLE IF NOT EXISTS `' . self::TABELLE_ALT . '` (
+                `horse_id` INT NOT NULL PRIMARY KEY,
+                `views` INT UNSIGNED NOT NULL DEFAULT 0,
+                `last_viewed_at` DATETIME NULL DEFAULT NULL,
+                FOREIGN KEY (`horse_id`) REFERENCES `horses`(`id`) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+        );
+    }
+
+    /** Anzahl der Protokolleinträge dieses Addons zu einer Aktion (letzte 10 Minuten). */
+    private function auditAnzahl(string $aktion): int {
+        $stmt = Database::getInstance()->prepare(
+            "SELECT COUNT(*) FROM audit_logs
+             WHERE category = 'statistik-dashboard' AND action = ? AND created_at >= (NOW() - INTERVAL 10 MINUTE)"
+        );
+        $stmt->execute([$aktion]);
+        return (int) $stmt->fetchColumn();
     }
 
     /** Aktiviert/deaktiviert das Addon über den echten Admin-Endpunkt. */

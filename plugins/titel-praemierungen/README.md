@@ -47,6 +47,14 @@ der gewünschten Gruppe unter `/admin/groups` die Berechtigung
 - Beim Löschen eines Pferdes verschwinden dessen Auszeichnungen automatisch
   mit (`ON DELETE CASCADE`).
 
+## Deinstallation (Framework#338)
+
+Seit 1.2.1 steht `plugin_titel_praemierungen` im Datenregister (`owns`) der
+`plugin.json` (Audit M30). „Deinstallieren → Daten löschen“ entfernt die
+Daten; die Rückfrageseite nennt vorher die Zahl der Einträge. Bis 1.2.0
+blieben sie trotz „Daten löschen“ stehen und waren nach erneuter Aktivierung
+wieder da.
+
 ## Berechtigungen
 
 | Modul | Aktion | Beschreibung |
