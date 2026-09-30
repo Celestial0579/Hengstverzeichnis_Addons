@@ -1,14 +1,25 @@
 {
     "slug": "gesundheitstests",
     "name": "DNA-/Gesundheitstest-Verwaltung",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "core_compatibility": ">=0.8.0-beta.1",
     "core_supported_max": "0.9",
     "description": "Erfasst DNA-Tests, Röntgenbefunde und Gesundheitszeugnisse strukturiert pro Pferd inkl. Dokument-Upload (außerhalb des Webroots, Zugriff nur über geschützte Download-Route). Öffentliche Anzeige nur für explizit freigegebene Einträge (Opt-in).",
     "author": "Hengstverzeichnis_Addons",
     "hooks": [
         "horse.detail_sections",
-        "horse.edit_sections"
+        "horse.edit_sections",
+        "horse.before_delete",
+        "horse.deleted"
     ],
+    "owns": {
+        "tables": [
+            "plugin_gesundheitstests"
+        ],
+        "directories": [
+            "storage/plugin_gesundheitstests"
+        ],
+        "settings": []
+    },
     "entry": "Plugin.php"
 }

@@ -241,6 +241,19 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   (oder `APP_URL` bzw. `TRUSTED_HOSTS` setzen), damit die Team-Mail wieder
   einen Link enthält.
 
+- **`gesundheitstests` (1.3.0): Dokumentablage bis zum Kern-Release
+  separat sichern** (Audit N27). Die Kern-Option „Hochgeladene Dateien
+  mitsichern“ erfasst `storage/plugin_gesundheitstests` noch nicht; der
+  SQL-Dump enthält die Einträge, die Dokumente fehlen. Ein Kern-Release, das
+  die Verzeichnisse aus dem Datenregister (`owns.directories`) mitsichert,
+  folgt.
+
+  **Für Betreiber:** Das Verzeichnis `storage/plugin_gesundheitstests` bis
+  dahin selbst sichern (rsync, Hoster-Backup), insbesondere **vor einer
+  Deinstallation mit „Daten löschen“**, die es jetzt tatsächlich entfernt, und
+  vor einem Umzug. Datenbank und Ablage immer gemeinsam zurückspielen (siehe
+  „Verwaiste Dokumente“ unter „Behoben“).
+
 ### Behoben
 
 - **`kontaktanfrage` 1.2.0, `mitgliedsstatus` 1.2.0: Zusammenführen,
@@ -528,7 +541,71 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   Der Knopf lädt das Skript jetzt bei Bedarf selbst nach. Ein bereits
   gemerktes Pferd wird dabei nicht versehentlich wieder entfernt.
 
+- **„Daten löschen“ beim Deinstallieren löscht jetzt wirklich**
+  (Audit M27, M30). `gesundheitstests`, `verkaufsboerse`,
+  `zuchtschau-ergebnisse`, `titel-praemierungen` und `statistik-dashboard`
+  hatten kein Datenregister (`owns`) in der `plugin.json`. Die Rückfrageseite
+  meldete „rückstandsfrei“, das Protokoll „Daten gelöscht“. Tatsächlich
+  blieben die Tabellen samt Inserenten-E-Mails, Richternamen und
+  Gesundheitsdaten stehen, bei `gesundheitstests` auch die Dokumentablage,
+  und erschienen nach erneuter Aktivierung wieder.
+  - Das Register ist nachgetragen; die Rückfrageseite nennt jetzt, was
+    verschwindet, mit Zeilen- und Dateizahlen.
+  - `zuchtschau-ergebnisse`: Die Teilwertungstabelle steht vor der
+    Ergebnistabelle, damit ihr Fremdschlüssel das Löschen nicht verhindert.
+  - `statistik-dashboard` entfernt dabei über seinen neuen `uninstall()`-Hook
+    auch die Zähltabelle `plugin_besucherstatistik_views` des aufgegangenen
+    Addons `besucherstatistik`, sofern dieses nicht mehr aktiv ist. So bringt
+    eine Reaktivierung weder alte Zähler noch ein entzogenes Recht zurück. Ist
+    es noch aktiv, bleibt die Tabelle stehen, und das Protokoll sagt es.
+
+  **Für Betreiber:** Wer eines dieser Addons mit „Daten löschen“
+  deinstalliert, verliert jetzt tatsächlich dessen Daten. Das war zugesagt,
+  geschah aber nicht. Mit „Daten behalten“ ändert sich nichts. Die
+  Alttabelle von `besucherstatistik` nennt die Rückfrageseite nicht, weil sie
+  nicht im Register steht.
+
+- **`gesundheitstests` (1.3.0): keine verwaisten Dokumente mehr** (Audit
+  N26).
+  - Wird ein Pferd endgültig gelöscht (einzeln, über „Papierkorb leeren“ oder
+    durch die 30-Tage-Bereinigung), entfernt das Addon auch dessen Dokumente
+    aus `storage/plugin_gesundheitstests`, erst nachdem der Kern das Pferd
+    tatsächlich gelöscht hat (Hooks `horse.before_delete` und
+    `horse.deleted`). Das Protokoll nennt die Anzahl, keine Dateinamen des
+    Uploads. Der Papierkorb allein lässt alles stehen.
+  - Eingaben (Länge, Datum) werden vor dem Hochladen geprüft und mit einem
+    Hinweis abgewiesen, statt mit einem Serverfehler zu enden und die Datei
+    ohne Eintrag zurückzulassen. Überlange Originaldateinamen werden auf 255
+    Zeichen gekürzt.
+  - Scheitert das Speichern trotzdem, wird die bereits abgelegte Datei wieder
+    entfernt; der Fehler selbst wird weiter gemeldet.
+  - **Verwaiste Dokumente:** Die Aktivierung bzw. das Update auf 1.3.0 (und
+    jede weitere Aktivierung) entfernt Dokumente ohne Eintrag, die älter als
+    24 Stunden sind, nur mit selbst vergebenem Ablagenamen `gtest_…`; die
+    Anzahl steht im Protokoll.
+
+  **Für Betreiber:** Nach einer Rücksicherung nur der Datenbank ohne die
+  Ablage gelten die Dokumente neuerer Einträge als verwaist und werden bei der
+  nächsten Aktivierung entfernt. Ablage und Datenbank gemeinsam zurückspielen.
+
 ### Geändert
+
+- **Datenregister-Pflicht im Manifest-Test.** `tests/Manifest/PluginManifestTest`
+  prüft je Addon: Jede Tabelle, die das Addon per `CREATE TABLE` anlegt, und
+  jede Ablage unter `storage/plugin_*` steht in `owns`; Kindtabellen stehen
+  vor ihrer Elterntabelle; das Register hält die Grenzen des Kerns ein
+  (Präfix `plugin_`, relative Verzeichnisse außerhalb der geschützten Orte).
+  Tabellennamen aus Konstanten (`self::TABELLE`, `Klasse::TABELLE`) werden
+  je Klasse aufgelöst.
+
+- **`gesundheitstests` 1.3.0, `statistik-dashboard` 1.3.0, `verkaufsboerse`
+  1.4.1, `zuchtschau-ergebnisse` 1.3.1, `titel-praemierungen` 1.2.1
+  (Datenregister).** `core_compatibility` und `core_supported_max` bleiben
+  unverändert. `owns` wertet der Kern seit 0.8 aus; ältere Kerne ignorieren
+  den Schlüssel (`zuchtschau-ergebnisse` und `titel-praemierungen` laufen dort
+  unverändert, nur ohne Datenlöschung). `horse.before_delete` und
+  `horse.deleted` gibt es seit Framework#164, den `uninstall()`-Hook seit
+  Framework#338.
 
 - **`beispiel-erweiterungspunkte` 1.1.0**: belegt die drei neuen Kern-Hooks
   `contact.merged`, `contact.anonymized` und `contact.erased` mit einem

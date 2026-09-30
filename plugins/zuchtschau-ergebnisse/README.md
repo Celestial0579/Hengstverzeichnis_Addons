@@ -69,6 +69,17 @@ hinterlassen von sich aus keine Spur
 ([#134](https://github.com/Celestial0579/Hengstverzeichnis_Addons/issues/134)).
 Richtername und Kommentar bleiben draußen (Personenbezug bzw. freier Text).
 
+## Deinstallation (Framework#338)
+
+Seit 1.3.1 stehen `plugin_zuchtschau_teilwertungen` und
+`plugin_zuchtschau_ergebnisse` im Datenregister (`owns`) der `plugin.json`
+(Audit M30). „Deinstallieren → Daten löschen“ entfernt die Daten; die
+Rückfrageseite nennt vorher die Zahl der Einträge. Bis 1.3.0 blieben sie trotz
+„Daten löschen“ stehen und waren nach erneuter Aktivierung wieder da. Die
+Teilwertungstabelle steht dort bewusst vor der Ergebnistabelle: Der Kern
+löscht in der Reihenfolge des Registers, und ihr Fremdschlüssel verhinderte
+sonst das Löschen der Ergebnistabelle.
+
 ## Berechtigungen
 
 | Modul | Aktion | Beschreibung |

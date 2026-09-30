@@ -47,6 +47,7 @@ use App\Controllers\BaseController;
 use App\Database;
 use App\Plugin\HookManager;
 use App\Plugin\PluginPage;
+use App\Service\AuditLogger;
 use PDO;
 
 class Plugin {
@@ -143,18 +144,14 @@ class Plugin {
      *
      * ### Was mit der alten Tabelle passiert
      *
-     * Sie bleibt liegen. `plugin_besucherstatistik_views` gehört einem
-     * fremden Addon; sie zu löschen wäre erstens nicht Sache dieses Addons
-     * und nähme zweitens die einzige Rückfallebene, falls an der Übernahme
-     * etwas nicht stimmt.
+     * Bei der Übernahme bleibt sie liegen: Sie ist die einzige
+     * Rückfallebene, falls an der Übernahme etwas nicht stimmt.
      *
-     * Den geordneten Weg für Daten deinstallierter Addons gibt es seit Kern
-     * 0.8 (Framework#338: das Register `owns` in der plugin.json, ausgewertet
-     * beim Deinstallieren). Er gehört ins Manifest von `besucherstatistik`,
-     * nicht hierher - das Addon räumt seine eigenen Daten weg, wenn der
-     * Betreiber es deinstalliert. Für dieses Addon steht das Register noch
-     * aus; es ist eine Aufgabe über alle 20 Addons hinweg und kein Nebenzug
-     * von Addons#139.
+     * Die eigenen Tabellen dieses Addons stehen seit 1.3.0 im Datenregister
+     * `owns` der plugin.json (Framework#338, Audit M30) und verschwinden mit
+     * „Deinstallieren → Daten löschen“. Die Alttabelle steht bewusst NICHT
+     * dort, sondern wird in uninstall() abgeräumt - nur, wenn
+     * `besucherstatistik` nicht mehr aktiv ist. Warum, steht dort.
      */
     private function uebernahmeAusBesucherstatistik(PDO $db): void {
         if ($this->marker($db, self::MARKER_UEBERNAHME) !== null) {
@@ -241,6 +238,70 @@ class Plugin {
             $db->rollBack();
             throw $e;
         }
+    }
+
+    /**
+     * Framework-Hook (#338): Der Kern ruft uninstall() nur bei
+     * „Deinstallieren → Daten löschen“ auf, VOR dem Datenregister.
+     *
+     * Die eigenen Tabellen entfernt das Register (`owns` in der plugin.json).
+     * Hier geht es allein um die Zähltabelle des aufgegangenen Addons
+     * `besucherstatistik` (Audit M30). Bliebe sie stehen, fände eine spätere
+     * Reaktivierung sie wieder vor: Die Übernahme liefe erneut (der Marker
+     * ist mit der Meta-Tabelle gelöscht), brächte die alten Zähler zurück -
+     * und schriebe ein inzwischen entzogenes Recht `statistik-dashboard.view`
+     * per INSERT IGNORE wieder hinein.
+     *
+     * Warum nicht einfach ins Register: Das Register löscht bedingungslos.
+     * Auf Bestandsinstallationen kann das Alt-Addon aber noch liegen und
+     * sogar aktiv sein (siehe StatistikController::hinweisAltesAddon()) -
+     * dann nähme ihm ein DROP die Tabelle, und seine Zählung auf der
+     * öffentlichen Detailseite liefe ins Leere. Deshalb nur, wenn es laut
+     * Tabelle `plugins` nicht aktiv ist; sonst bleibt die Tabelle stehen, und
+     * das Protokoll sagt es.
+     *
+     * Die Rückfrageseite des Kerns nennt die Alttabelle nicht, weil sie nicht
+     * im Register steht; die README erwähnt sie deshalb ausdrücklich.
+     */
+    public function uninstall(): void {
+        $db = Database::getInstance();
+
+        $stmt = $db->prepare(
+            'SELECT COUNT(*) FROM `information_schema`.`TABLES`
+             WHERE `TABLE_SCHEMA` = DATABASE() AND `TABLE_NAME` = :name'
+        );
+        $stmt->execute(['name' => self::TABELLE_ALT]);
+        if ((int) $stmt->fetchColumn() === 0) {
+            return;
+        }
+
+        if (self::altesAddonAktiv($db)) {
+            AuditLogger::log(
+                'Alttabelle der Besucherstatistik NICHT entfernt',
+                'statistik-dashboard',
+                'Tabelle ' . self::TABELLE_ALT . ' bleibt stehen: Das Addon „' . self::SLUG_ALT
+                    . '“ ist noch aktiviert und zählt in sie. Nach seiner Deinstallation mit „Daten löschen“ '
+                    . 'bzw. dem Entfernen von Hand verschwindet sie.'
+            );
+            return;
+        }
+
+        $db->exec('DROP TABLE IF EXISTS `' . self::TABELLE_ALT . '`');
+        AuditLogger::log(
+            'Alttabelle der Besucherstatistik mit entfernt',
+            'statistik-dashboard',
+            'Tabelle ' . self::TABELLE_ALT . ' des aufgegangenen Addons „' . self::SLUG_ALT . '“ gelöscht.'
+        );
+    }
+
+    /**
+     * Ist das aufgegangene Addon `besucherstatistik` laut Tabelle `plugins`
+     * noch aktiviert? Dieselbe Abfrage wie der Hinweis auf der Statistikseite.
+     */
+    public static function altesAddonAktiv(PDO $db): bool {
+        $stmt = $db->prepare('SELECT COUNT(*) FROM `plugins` WHERE `slug` = :slug AND `enabled` = 1');
+        $stmt->execute(['slug' => self::SLUG_ALT]);
+        return (int) $stmt->fetchColumn() > 0;
     }
 
     /** Liest einen Marker; null, wenn er nicht gesetzt ist. */
@@ -557,9 +618,7 @@ class StatistikController extends BaseController {
      * den Release Notes.
      */
     private function hinweisAltesAddon(PDO $db): string {
-        $stmt = $db->prepare("SELECT COUNT(*) FROM `plugins` WHERE `slug` = :slug AND `enabled` = 1");
-        $stmt->execute(['slug' => Plugin::SLUG_ALT]);
-        if ((int) $stmt->fetchColumn() === 0) {
+        if (!Plugin::altesAddonAktiv($db)) {
             return '';
         }
 

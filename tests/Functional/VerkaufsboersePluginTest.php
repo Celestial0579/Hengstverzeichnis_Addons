@@ -540,7 +540,8 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
     /**
      * Framework#338: uninstall() räumt die Zähler des Formulars aus der
      * Kern-Tabelle `login_attempts` ab - beide Typen, und nur diese. Die
-     * Inserate bleiben: Die plugin.json deklariert kein `owns`.
+     * Inserate fasst der Hook nicht an; sie entfernt der Kern danach über das
+     * Datenregister `owns` (Audit M30, DatenregisterDeinstallationTest).
      *
      * Läuft im PHPUnit-Prozess statt über /admin/plugins, damit das Addon für
      * die übrigen Tests aktiv bleibt.
@@ -573,7 +574,7 @@ class VerkaufsboersePluginTest extends FunctionalTestCase {
             $this->assertSame(0, $this->zaehlerStand('verkaufsboerse'));
             $this->assertSame(0, $this->zaehlerStand(self::INSERAT_TYP));
             $this->assertSame(1, $this->zaehlerStand('deckanfrage', $fremd), 'Fremde Zähler bleiben stehen');
-            $this->assertSame(1, $this->countListings($horseId), 'Die Inserate bleiben');
+            $this->assertSame(1, $this->countListings($horseId), 'Der Hook selbst lässt die Inserate stehen');
             $this->assertNull(
                 $this->einstellung('captcha_provider_verkaufsboerse'),
                 'Die Anbieterwahl der Sicherheitsfrage dieses Formulars gehört dem Addon und geht mit (1.4.0).'
