@@ -108,9 +108,11 @@ class BildauslieferungTest extends FunctionalTestCase {
         $eintraege = json_decode($json->body, true);
         $this->assertIsArray($eintraege);
         $this->assertNotEmpty($eintraege, 'Das gemerkte Pferd muss in der Antwort stehen.');
-        $this->assertSame(
-            '/media/horse-image?id=' . $horseId,
-            $eintraege[0]['image_url'] ?? null,
+        // Ab Kern-Audit M14 haengt MediaUrl eine Inhaltsversion (&v=<12 hex>)
+        // an; der Test bleibt mit altem und neuem Kern gruen.
+        $this->assertMatchesRegularExpression(
+            '#^/media/horse-image\\?id=' . $horseId . '(&v=[0-9a-f]{12})?$#',
+            (string)($eintraege[0]['image_url'] ?? ''),
             'merkliste /api: Die geschuetzte Adresse gehoert schon in das JSON, nicht erst in das JS.'
         );
 
