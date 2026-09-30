@@ -204,16 +204,28 @@ class ExportController extends BaseController {
         PluginPage::render('Katalog-Export', $content);
     }
 
+    /**
+     * Ein Filterwert aus der Query als getrimmter Text.
+     *
+     * `?q_color[]=x` liefert in PHP ein Array; trim() warf darauf einen
+     * TypeError (HTTP 500 statt Export). Nicht-Text zählt wie ein leeres
+     * Feld - derselbe Umgang wie im Kern-Katalog (Framework-Audit N87).
+     */
+    private static function textParam(string $key): string {
+        $wert = $_GET[$key] ?? '';
+        return is_string($wert) ? trim($wert) : '';
+    }
+
     public function exportCsv(): void {
         $where = ["h.deleted_at IS NULL"];
         $params = [];
 
-        $qName = trim($_GET['q_name'] ?? '');
-        $qUeln = trim($_GET['q_ueln'] ?? '');
-        $search = trim($_GET['search'] ?? '');
-        $birthYearFrom = !empty($_GET['birth_year_from']) ? (int) $_GET['birth_year_from'] : null;
-        $birthYearTo = !empty($_GET['birth_year_to']) ? (int) $_GET['birth_year_to'] : null;
-        $qColor = trim($_GET['q_color'] ?? '');
+        $qName = self::textParam('q_name');
+        $qUeln = self::textParam('q_ueln');
+        $search = self::textParam('search');
+        $birthYearFrom = !empty(self::textParam('birth_year_from')) ? (int) self::textParam('birth_year_from') : null;
+        $birthYearTo = !empty(self::textParam('birth_year_to')) ? (int) self::textParam('birth_year_to') : null;
+        $qColor = self::textParam('q_color');
         // Zuchtstatus-Whitelist seit dem Status-Split (Framework #188);
         // der Lebensstatus filtert separat über q_deceased. Der Alt-Wert
         // q_status=deceased mappt wie auf der Katalogseite (PublicController)
@@ -227,12 +239,12 @@ class ExportController extends BaseController {
         // Geschlecht/Rasse wie auf der Katalogseite: q_sex Whitelist gegen die
         // ENUM-Werte, q_breed Teilstring-Suche.
         $qSex = in_array($_GET['q_sex'] ?? '', ['stallion', 'mare', 'gelding'], true) ? $_GET['q_sex'] : '';
-        $qBreed = trim($_GET['q_breed'] ?? '');
-        $qBreeder = trim($_GET['q_breeder'] ?? '');
-        $qOwner = trim($_GET['q_owner'] ?? '');
-        $qStation = trim($_GET['q_station'] ?? '');
-        $qSire = trim($_GET['q_sire'] ?? '');
-        $qDam = trim($_GET['q_dam'] ?? '');
+        $qBreed = self::textParam('q_breed');
+        $qBreeder = self::textParam('q_breeder');
+        $qOwner = self::textParam('q_owner');
+        $qStation = self::textParam('q_station');
+        $qSire = self::textParam('q_sire');
+        $qDam = self::textParam('q_dam');
 
         // Kontakt-Treffer über EXISTS statt über multiplizierende JOINs -
         // dieselbe Bauart wie PublicController::catalog() im Kern (#125).

@@ -551,6 +551,26 @@ class KatalogExportPluginTest extends FunctionalTestCase {
      * Gegenprobe gelaufen: Ohne den PluginAudit::log()-Aufruf in
      * ExportController::exportCsv() findet die Abfrage keinen Eintrag.
      */
+    /**
+     * Filterwerte als Array (`?q_color[]=x`) lösten per trim() einen
+     * TypeError aus - HTTP 500 statt Export. Nicht-Text zählt jetzt wie ein
+     * leeres Feld (Gegenstück zu Framework-Audit N87 im Kern-Katalog).
+     */
+    public function testArrayParameterFuehrenNichtZumFehler(): void {
+        $admin = $this->authenticatedClient();
+        $admin->post('/admin/plugins/toggle', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'slug' => self::SLUG,
+            'enable' => '1',
+        ]);
+
+        foreach (['q_color', 'q_name', 'search', 'q_breeder', 'birth_year_from'] as $feld) {
+            $antwort = $admin->get('/plugin/katalog-export/csv?' . $feld . '%5B%5D=x');
+            $this->assertSame(200, $antwort->statusCode, "{$feld}[]=x darf keinen Fehler auslösen, Body: {$antwort->body}");
+            $this->assertStringContainsString('text/csv', (string) $antwort->header('Content-Type'));
+        }
+    }
+
     public function testExportStehtImProtokoll(): void {
         $admin = $this->authenticatedClient();
         $admin->post('/admin/plugins/toggle', [
