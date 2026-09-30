@@ -76,6 +76,14 @@ class Plugin {
         $hooks->addFilter('contact.edit_sections', [$this, 'kontaktOptOut']);
         $hooks->addFilter('admin.dashboard_tiles', [$this, 'dashboardKachel']);
 
+        // Opt-out und Anfragen hängen ohne Fremdschlüssel am Kontakt - was
+        // der Kern beim Zusammenführen, Anonymisieren und endgültigen
+        // Löschen nicht mitnehmen kann, zieht Kontaktereignisse nach
+        // (Framework#474, #476). Auf älteren Kernen feuern diese Hooks nie.
+        $hooks->addAction('contact.merged', [$this, 'kontaktZusammengefuehrt']);
+        $hooks->addAction('contact.anonymized', [$this, 'kontaktAnonymisiert']);
+        $hooks->addAction('contact.erased', [$this, 'kontaktGeloescht']);
+
         // Aufbewahrungsfrist (DSGVO): Die eingegebene E-Mail-Adresse ist ein
         // personenbezogenes Datum, sie darf nicht unbegrenzt liegenbleiben.
         // Registriert wird nur die Aufgabe - ausgeführt wird sie erst, wenn
@@ -231,6 +239,61 @@ class Plugin {
     public function kontaktOptOut(array $sections, array $kontakt): array {
         $sections[] = Formular::optOutAbschnitt($kontakt);
         return $sections;
+    }
+
+    /**
+     * contact.merged (Framework#474, Audit M33): nach dem Commit, Quelle im
+     * Stand davor, Ziel im Stand danach. Siehe Kontaktereignisse.
+     *
+     * @param array<string, mixed> $quelle
+     * @param array<string, mixed> $ziel
+     */
+    public function kontaktZusammengefuehrt(int $quelleId, int $zielId, array $quelle = [], array $ziel = []): void {
+        $n = Kontaktereignisse::zusammengefuehrt(Database::getInstance(), $quelleId, $zielId);
+        if ($n['optout'] + $n['anfragen'] > 0) {
+            PluginAudit::log(
+                self::SLUG,
+                'Kontakt zusammengeführt: Opt-out und Anfragen übernommen',
+                "Kontakt #{$quelleId} -> #{$zielId}",
+                "Opt-out übernommen: {$n['optout']}; Anfragen umgehängt: {$n['anfragen']}"
+            );
+        }
+    }
+
+    /**
+     * contact.anonymized (Framework#476, Audit N45): kein CASCADE greift.
+     *
+     * @param array<string, mixed> $vorher nur zum Abgleich, wird nicht gespeichert
+     */
+    public function kontaktAnonymisiert(int $kontaktId, array $vorher = []): void {
+        $n = Kontaktereignisse::anonymisiert(Database::getInstance(), $kontaktId);
+        if ($n > 0) {
+            PluginAudit::log(
+                self::SLUG,
+                'Kontakt anonymisiert: Anfragen gelöst',
+                "Kontakt #{$kontaktId}",
+                "Anfragen vom Kontakt gelöst: {$n}"
+            );
+        }
+    }
+
+    /**
+     * contact.erased (Framework#476, Audit N45): nach jedem endgültigen
+     * Löschen, $anlass 'dsgvo' oder 'papierkorb'.
+     *
+     * @param array<string, mixed> $kontakt
+     */
+    public function kontaktGeloescht(int $kontaktId, array $kontakt = [], string $anlass = ''): void {
+        $n = Kontaktereignisse::geloescht(Database::getInstance(), $kontaktId);
+        if ($n['optout'] + $n['anfragen'] > 0) {
+            PluginAudit::log(
+                self::SLUG,
+                'Kontakt endgültig gelöscht: Anfragen gelöst, Opt-out entfernt',
+                "Kontakt #{$kontaktId}",
+                'Anlass: ' . ($anlass === 'dsgvo' ? 'dsgvo' : 'papierkorb')
+                    . "; Anfragen gelöst: {$n['anfragen']}; Opt-out entfernt: {$n['optout']}"
+            );
+        }
     }
 
     /**
@@ -1148,6 +1211,118 @@ final class Verwaltungslink {
             return $alterRueckfall();
         }
         return \App\Security\BaseUrl::forLinks($settingBaseUrl);
+    }
+}
+
+/**
+ * Die drei Kern-Ereignisse, nach denen die eigenen Zeilen zum Kontakt
+ * nachgezogen werden müssen (Kern-#474 Audit M33, Kern-#476 Audit N45).
+ *
+ * Beide Tabellen tragen BEWUSST keinen Fremdschlüssel (siehe install()) -
+ * der Kern kann sie also weder umhängen noch mitlöschen. Ohne diese Klasse
+ * passierte Folgendes:
+ *
+ *  - ZUSAMMENFÜHREN. Das Opt-out blieb am aufgegebenen Datensatz im
+ *    Papierkorb. Der behaltene Kontakt zeigte wieder das Formular, und das
+ *    Team leitete an die dabei übernommene E-Mail-Adresse weiter - an genau
+ *    den Menschen, der widersprochen hatte. Gespeicherte Anfragen zeigten
+ *    auf den Papierkorb und waren nicht mehr weiterleitbar.
+ *  - ANONYMISIEREN. Der Kontakt bleibt bestehen, nur seine Angaben sind weg.
+ *    Die gespeicherten Anfragen verknüpften weiter „Wer hat wann warum nach
+ *    diesem Menschen gefragt“ mit seiner Kennung.
+ *  - ENDGÜLTIG LÖSCHEN. Anfragen und Opt-out blieben als Waisen unter einer
+ *    Kennung liegen, die auf älteren Datenbanken neu vergeben werden kann
+ *    (siehe Ziel::intern()).
+ *
+ * Alle drei Hooks feuern NACH dem Commit des Kerns; ein Fehler hier macht
+ * nichts rückgängig, der HookManager fängt ihn ab. Auf Kernen bis v0.9.0
+ * feuern sie nie - dort bleibt es beim bisherigen Verhalten (Aufräumlauf für
+ * verwaiste Opt-outs).
+ *
+ * Ins Protokoll kommen nur Kennungen und Zähler, nie Namen.
+ */
+final class Kontaktereignisse {
+
+    private function __construct() {}
+
+    /**
+     * Zusammenführen: Quelle -> Ziel.
+     *
+     * Opt-out RESTRIKTIV (Kern-Doku zu contact.merged): Hatte die Quelle
+     * widersprochen, gilt der Widerspruch jetzt auch am Ziel - ein
+     * bestehendes Opt-out des Ziels bleibt unverändert. Die Zeile der Quelle
+     * bleibt stehen: Wird die Quelle aus dem Papierkorb zurückgeholt, soll
+     * sie ihren Widerspruch nicht verloren haben. Umgekehrt wird NICHTS
+     * aufgehoben - es gibt keine „Freigabe“, die übertragen werden könnte.
+     *
+     * Gespeicherte Anfragen hängen mit um: Sie galten demselben Menschen.
+     * Ist das Ziel jünger als eine Anfrage, verweigert die Weiterleitung sie
+     * weiterhin (Audit N23) - dann bleibt nur die Antwort über das Team.
+     *
+     * @return array{optout:int, anfragen:int}
+     */
+    public static function zusammengefuehrt(PDO $db, int $quelleId, int $zielId): array {
+        if ($quelleId < 1 || $zielId < 1 || $quelleId === $zielId) {
+            return ['optout' => 0, 'anfragen' => 0];
+        }
+
+        $db->beginTransaction();
+        try {
+            $optout = $db->prepare(
+                'INSERT IGNORE INTO `plugin_kontaktanfrage_optout` (contact_id, disabled_by, disabled_at)
+                 SELECT ?, disabled_by, disabled_at FROM `plugin_kontaktanfrage_optout` WHERE contact_id = ?'
+            );
+            $optout->execute([$zielId, $quelleId]);
+
+            $anfragen = $db->prepare(
+                'UPDATE `plugin_kontaktanfrage_requests` SET contact_id = ? WHERE contact_id = ?'
+            );
+            $anfragen->execute([$zielId, $quelleId]);
+
+            $db->commit();
+        } catch (\Throwable $e) {
+            $db->rollBack();
+            throw $e;
+        }
+
+        return ['optout' => $optout->rowCount(), 'anfragen' => $anfragen->rowCount()];
+    }
+
+    /**
+     * Anonymisiert: Die Anfragen verlieren ihren Bezug (contact_id 0, in der
+     * Verwaltung „Datensatz entfernt“). Die Angaben des Anfragenden gehören
+     * dem Anfragenden und laufen weiter mit der Aufbewahrungsfrist aus; die
+     * Verknüpfung mit dem anonymisierten Menschen ist, was hier weg muss.
+     *
+     * Das Opt-out bleibt: Es ist eine Schutzangabe ohne Inhalt, und der
+     * anonymisierte Datensatz soll nicht plötzlich wieder anfragbar sein.
+     *
+     * @return int Anzahl gelöster Anfragen
+     */
+    public static function anonymisiert(PDO $db, int $kontaktId): int {
+        if ($kontaktId < 1) {
+            return 0;
+        }
+        $stmt = $db->prepare('UPDATE `plugin_kontaktanfrage_requests` SET contact_id = 0 WHERE contact_id = ?');
+        $stmt->execute([$kontaktId]);
+        return $stmt->rowCount();
+    }
+
+    /**
+     * Endgültig gelöscht (DSGVO oder Papierkorb): Anfragen lösen wie oben,
+     * das Opt-out gleich mit entfernen - der Datensatz, dem es galt, ist weg,
+     * und eine später neu vergebene Kennung erbte es sonst.
+     *
+     * @return array{optout:int, anfragen:int}
+     */
+    public static function geloescht(PDO $db, int $kontaktId): array {
+        if ($kontaktId < 1) {
+            return ['optout' => 0, 'anfragen' => 0];
+        }
+        $anfragen = self::anonymisiert($db, $kontaktId);
+        $stmt = $db->prepare('DELETE FROM `plugin_kontaktanfrage_optout` WHERE contact_id = ?');
+        $stmt->execute([$kontaktId]);
+        return ['optout' => $stmt->rowCount(), 'anfragen' => $anfragen];
     }
 }
 

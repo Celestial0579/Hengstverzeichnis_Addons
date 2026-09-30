@@ -254,6 +254,39 @@ class BeispielErweiterungspunktePluginTest extends FunctionalTestCase {
             'Der Kontakt-Abschnitt darf genau einmal erscheinen - sonst sind die person./station.-Aliasse mitregistriert.'
         );
 
+        // Zusammenfuehren (Kern-#474): Die Notiz der Quelle wandert zum Ziel,
+        // das keine eigene hat. Danach feuert contact.deleted fuer die Quelle.
+        $quelleId = $this->createContact($admin, "BeispielQuelle-{$unique}");
+        $zielId = $this->createContact($admin, "BeispielZiel-{$unique}");
+        $admin->post(self::BASIS . '/kontaktnotiz', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'contact_id' => (string)$quelleId,
+            'notiz' => "Quellvermerk-{$unique}",
+        ]);
+        $merge = $admin->post('/admin/contacts/merge', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'source_id' => (string)$quelleId,
+            'target_id' => (string)$zielId,
+        ]);
+        $this->assertStringStartsWith('/admin/contacts?success=merged', (string)$merge->location(), $merge->body);
+        $this->assertSame(
+            "Quellvermerk-{$unique}",
+            $this->kontaktNotiz($zielId),
+            'contact.merged muss die Notiz der Quelle an das Ziel haengen.'
+        );
+        $this->assertNull($this->kontaktNotiz($quelleId), 'Die Notiz ist umgezogen, nicht kopiert.');
+        $this->assertStringContainsString("Kontakt #{$quelleId} -&gt; #{$zielId}", $this->ereignisbuch($admin));
+
+        // Anonymisieren (Kern-#476): kein CASCADE - die Notiz muss das Addon
+        // selbst loeschen.
+        $anon = $admin->post('/admin/gdpr/anonymize-person', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'person_id' => (string)$zielId,
+            'request_id' => '0',
+        ]);
+        $this->assertSame("/admin/gdpr?success=anonymized&person_id={$zielId}", $anon->location(), $anon->body);
+        $this->assertNull($this->kontaktNotiz($zielId), 'contact.anonymized muss die Notiz zum Menschen entfernen.');
+
         $loeschen = $admin->post('/admin/contacts/delete', [
             'csrf_token' => $this->currentCsrfToken($admin),
             'id' => (string)$contactId,
@@ -264,6 +297,18 @@ class BeispielErweiterungspunktePluginTest extends FunctionalTestCase {
             $this->ereignisbuch($admin),
             'contact.deleted muss beim Verschieben in den Papierkorb feuern.'
         );
+
+        // Endgueltig loeschen (Kern-#476): Die Notiz hat keinen
+        // Fremdschluessel und bliebe ohne contact.erased als Waise liegen.
+        $this->assertNotNull($this->kontaktNotiz($contactId), 'Im Papierkorb ist die Notiz nur stillgelegt.');
+        $endgueltig = $admin->post('/admin/trash/permanent-delete', [
+            'csrf_token' => $this->currentCsrfToken($admin),
+            'type' => 'contact',
+            'id' => (string)$contactId,
+        ]);
+        $this->assertSame('/admin/trash?success=purged', $endgueltig->location(), $endgueltig->body);
+        $this->assertNull($this->kontaktNotiz($contactId), 'contact.erased muss die Notiz mitloeschen.');
+        $this->assertStringContainsString('Anlass papierkorb', $this->ereignisbuch($admin));
 
         // -------------------------------------------------------------
         // 7. Papierkorb: before_delete -> trashed -> restored -> deleted
@@ -500,6 +545,16 @@ class BeispielErweiterungspunktePluginTest extends FunctionalTestCase {
         $this->assertSame('/admin/plugins?success=1', $antwort->location());
     }
 
+    /** Die eigene Notiz zu einem Kontakt, auch stillgelegt - direkt aus der Tabelle. */
+    private function kontaktNotiz(int $contactId): ?string {
+        $stmt = \App\Database::getInstance()->prepare(
+            "SELECT notiz FROM `plugin_beispiel_notizen` WHERE bezug_typ = 'contact' AND bezug_id = ?"
+        );
+        $stmt->execute([$contactId]);
+        $wert = $stmt->fetchColumn();
+        return $wert === false ? null : (string)$wert;
+    }
+
     /** Der Inhalt der eigenen Verwaltungsseite - dort steht das Ereignisbuch. */
     private function ereignisbuch(HttpClient $admin): string {
         $seite = $admin->get(self::BASIS . '/ereignisbuch');
@@ -547,6 +602,9 @@ class BeispielErweiterungspunktePluginTest extends FunctionalTestCase {
             'horse.deleted',
             'contact.after_save',
             'contact.deleted',
+            'contact.merged',
+            'contact.anonymized',
+            'contact.erased',
         ];
 
         foreach ($erwartet as $hook) {

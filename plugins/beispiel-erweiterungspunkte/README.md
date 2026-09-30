@@ -64,7 +64,7 @@ und sieht, was gefeuert hat — statt es aus einer Logdatei zu fischen.
 **Actions** (reagieren, können nichts abbrechen):
 `horse.before_save` · `horse.after_save` · `horse.before_delete` ·
 `horse.trashed` · `horse.restored` · `horse.deleted` · `contact.after_save` ·
-`contact.deleted`
+`contact.deleted` · `contact.merged` · `contact.anonymized` · `contact.erased`
 
 **Filter** (Wert hereinnehmen, verändert zurückgeben):
 `horse.detail_sections` · `horse.edit_sections` · `horse.publish_blockers` ·

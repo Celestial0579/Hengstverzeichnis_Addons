@@ -93,6 +93,70 @@ class Plugin {
         $hooks->addFilter('contact.detail_sections', [$this, 'oeffentlicherAbschnitt']);
         $hooks->addFilter('contact.edit_sections', [$this, 'pflegeAbschnitte']);
         $hooks->addFilter('admin.dashboard_tiles', [$this, 'dashboardKachel']);
+
+        // Zusammenführen und Anonymisieren erreicht der Fremdschlüssel nicht -
+        // siehe Kontaktereignisse (Framework#474, #476). Auf älteren Kernen
+        // feuern diese Hooks nie.
+        $hooks->addAction('contact.merged', [$this, 'kontaktZusammengefuehrt']);
+        $hooks->addAction('contact.anonymized', [$this, 'kontaktAnonymisiert']);
+        $hooks->addAction('contact.erased', [$this, 'kontaktGeloescht']);
+    }
+
+    /**
+     * contact.merged (Framework#474, Audit M33). Siehe Kontaktereignisse.
+     *
+     * @param array<string, mixed> $quelle
+     * @param array<string, mixed> $ziel
+     */
+    public function kontaktZusammengefuehrt(int $quelleId, int $zielId, array $quelle = [], array $ziel = []): void {
+        $e = Kontaktereignisse::zusammengefuehrt(Database::getInstance(), $quelleId, $zielId);
+        if ($e['status'] === 'nichts' && $e['civicrm'] === 'nichts') {
+            return;
+        }
+        // Nur Kennungen und das Ergebnis - weder Status noch CiviCRM-Kennung.
+        PluginAudit::log(
+            self::SLUG,
+            'Kontakt zusammengeführt: Angaben nachgezogen',
+            "Kontakt #{$quelleId} -> #{$zielId}",
+            "Mitgliedsstatus: {$e['status']}; CiviCRM-Zuordnung: {$e['civicrm']}"
+                . ($e['status'] === 'uebernommen' ? '; öffentliche Freigabe am Ziel aus' : '')
+        );
+    }
+
+    /**
+     * contact.anonymized (Framework#476, Audit N45): kein CASCADE greift, die
+     * Zeilen müssen hier weg.
+     *
+     * @param array<string, mixed> $vorher nur zum Abgleich, wird nicht gespeichert
+     */
+    public function kontaktAnonymisiert(int $kontaktId, array $vorher = []): void {
+        $this->entfernen($kontaktId, 'Kontakt anonymisiert: Mitgliedsstatus und CiviCRM-Zuordnung entfernt', 'anonymisiert');
+    }
+
+    /**
+     * contact.erased (Framework#476, Audit N45). Der CASCADE hat die Zeilen
+     * im Normalfall schon entfernt; das hier ist die zweite Linie.
+     *
+     * @param array<string, mixed> $kontakt
+     */
+    public function kontaktGeloescht(int $kontaktId, array $kontakt = [], string $anlass = ''): void {
+        $this->entfernen(
+            $kontaktId,
+            'Kontakt endgültig gelöscht: Mitgliedsstatus und CiviCRM-Zuordnung entfernt',
+            $anlass === 'dsgvo' ? 'dsgvo' : 'papierkorb'
+        );
+    }
+
+    private function entfernen(int $kontaktId, string $aktion, string $anlass): void {
+        $n = Kontaktereignisse::entfernen(Database::getInstance(), $kontaktId);
+        if ($n['status'] + $n['civicrm'] > 0) {
+            PluginAudit::log(
+                self::SLUG,
+                $aktion,
+                "Kontakt #{$kontaktId}",
+                "Anlass: {$anlass}; Statuszeilen: {$n['status']}; CiviCRM-Zuordnungen: {$n['civicrm']}"
+            );
+        }
     }
 
     /**
@@ -586,6 +650,139 @@ final class Verknuepfung {
 
         // Die von CiviCRM dokumentierte Adresse der Kontaktansicht.
         return $basis . '/civicrm/contact/view?reset=1&cid=' . $civicrmId;
+    }
+}
+
+/**
+ * Die drei Kern-Ereignisse, nach denen die eigenen Zeilen zum Kontakt
+ * nachgezogen werden müssen (Framework#474 Audit M33, Framework#476 Audit N45).
+ *
+ * Der Fremdschlüssel mit CASCADE (siehe install()) deckt nur das
+ * endgültige Löschen ab. Er deckt NICHT ab:
+ *
+ *  - ANONYMISIEREN. Der Kontakt bleibt bestehen, kein CASCADE greift. Die
+ *    CiviCRM-Zuordnung „Kontakt #5 -> CiviCRM 1234“ machte den anonymisierten
+ *    Datensatz über das Fremdsystem wieder einer Person zuordenbar, und
+ *    „ist kein Mitglied“ ist eine Aussage über genau diesen Menschen. Beides
+ *    wird gelöscht.
+ *  - ZUSAMMENFÜHREN. Die Zeilen blieben am aufgegebenen Datensatz im
+ *    Papierkorb und gingen beim Leeren mit dem CASCADE verloren.
+ *
+ * Alle drei Hooks feuern NACH dem Commit des Kerns; ein Fehler hier macht
+ * nichts rückgängig. Auf Kernen bis v0.9.0 feuern sie nie. Ins Protokoll
+ * kommen nur Kennungen und Zähler - nie die CiviCRM-Kennung und nie ein
+ * Wortlaut.
+ */
+final class Kontaktereignisse {
+
+    private function __construct() {}
+
+    /**
+     * Zusammenführen: Quelle -> Ziel.
+     *
+     * Was das Ziel schon hat, gewinnt - es ist der Datensatz, den die
+     * Redaktion behalten wollte. Nur was dem Ziel FEHLT, kommt von der Quelle:
+     *
+     *  - Status: Hat das Ziel keine Zeile oder nur „keine Angabe“ ohne offenen
+     *    Bestandswortlaut, übernimmt es Status, Bestandswortlaut und
+     *    Offen-Kennzeichen der Quelle. Die öffentliche Freigabe wird dabei
+     *    NICHT übertragen (Kern-Doku zu contact.merged: Freigaben gelten dem
+     *    Datensatz, dem sie erteilt wurden) - sie steht danach auf aus, auch
+     *    wenn das Ziel sie für „keine Angabe“ gesetzt hatte.
+     *  - CiviCRM: Hat das Ziel keine Zuordnung, wandert die der Quelle.
+     *
+     * Widersprechen sich beide, bleibt das Ziel unverändert und die Quelle
+     * im Papierkorb behält ihre Zeile (bis zum CASCADE beim Leeren); der
+     * Rückgabewert meldet den Konflikt fürs Protokoll.
+     *
+     * @return array{status:string, civicrm:string} je 'uebernommen', 'konflikt' oder 'nichts'
+     */
+    public static function zusammengefuehrt(PDO $db, int $quelleId, int $zielId): array {
+        $ergebnis = ['status' => 'nichts', 'civicrm' => 'nichts'];
+        if ($quelleId < 1 || $zielId < 1 || $quelleId === $zielId) {
+            return $ergebnis;
+        }
+
+        $db->beginTransaction();
+        try {
+            $lesen = $db->prepare(
+                'SELECT contact_id, status, altwert, offen FROM `' . Status::TABELLE . '`
+                 WHERE contact_id IN (?, ?) FOR UPDATE'
+            );
+            $lesen->execute([$quelleId, $zielId]);
+            $zeilen = [];
+            foreach ($lesen->fetchAll(PDO::FETCH_ASSOC) ?: [] as $zeile) {
+                $zeilen[(int) $zeile['contact_id']] = $zeile;
+            }
+            $quelle = $zeilen[$quelleId] ?? null;
+            $ziel = $zeilen[$zielId] ?? null;
+
+            if ($quelle !== null) {
+                $quelleSagtEtwas = (string) $quelle['status'] !== Werte::KEINE_ANGABE || (int) $quelle['offen'] === 1;
+                $zielLeer = $ziel === null
+                    || ((string) $ziel['status'] === Werte::KEINE_ANGABE && (int) $ziel['offen'] === 0);
+
+                if ($quelleSagtEtwas && $zielLeer) {
+                    $db->prepare(
+                        'INSERT INTO `' . Status::TABELLE . '` (contact_id, status, oeffentlich, altwert, offen, geaendert_von)
+                         SELECT :ziel, status, 0, altwert, offen, geaendert_von FROM `' . Status::TABELLE . '`
+                         WHERE contact_id = :quelle
+                         ON DUPLICATE KEY UPDATE
+                            status = VALUES(status),
+                            oeffentlich = 0,
+                            altwert = VALUES(altwert),
+                            offen = VALUES(offen),
+                            geaendert_von = VALUES(geaendert_von)'
+                    )->execute(['ziel' => $zielId, 'quelle' => $quelleId]);
+                    $ergebnis['status'] = 'uebernommen';
+                } elseif ($quelleSagtEtwas) {
+                    $ergebnis['status'] = 'konflikt';
+                }
+            }
+
+            // Die Zuordnung wandert (UPDATE statt Kopie): Eine CiviCRM-Kennung
+            // gehört zu genau einem Menschen, und der ist jetzt das Ziel.
+            $hatCivi = $db->prepare('SELECT 1 FROM `' . Verknuepfung::TABELLE . '` WHERE contact_id = ? FOR UPDATE');
+            $hatCivi->execute([$zielId]);
+            $zielHatCivi = $hatCivi->fetchColumn() !== false;
+            $hatCivi->execute([$quelleId]);
+            $quelleHatCivi = $hatCivi->fetchColumn() !== false;
+            if ($quelleHatCivi) {
+                if (!$zielHatCivi) {
+                    $db->prepare('UPDATE `' . Verknuepfung::TABELLE . '` SET contact_id = ? WHERE contact_id = ?')
+                        ->execute([$zielId, $quelleId]);
+                    $ergebnis['civicrm'] = 'uebernommen';
+                } else {
+                    $ergebnis['civicrm'] = 'konflikt';
+                }
+            }
+
+            $db->commit();
+        } catch (\Throwable $e) {
+            $db->rollBack();
+            throw $e;
+        }
+
+        return $ergebnis;
+    }
+
+    /**
+     * Anonymisiert oder endgültig gelöscht: Status und CiviCRM-Zuordnung
+     * entfernen. Beim endgültigen Löschen hat der CASCADE das meist schon
+     * getan - der Aufruf ist dann ein Nichts, schadet aber nicht und deckt
+     * eine Installation ab, auf der die Fremdschlüssel fehlen.
+     *
+     * @return array{status:int, civicrm:int} Anzahl entfernter Zeilen
+     */
+    public static function entfernen(PDO $db, int $kontaktId): array {
+        if ($kontaktId < 1) {
+            return ['status' => 0, 'civicrm' => 0];
+        }
+        $status = $db->prepare('DELETE FROM `' . Status::TABELLE . '` WHERE contact_id = ?');
+        $status->execute([$kontaktId]);
+        $civi = $db->prepare('DELETE FROM `' . Verknuepfung::TABELLE . '` WHERE contact_id = ?');
+        $civi->execute([$kontaktId]);
+        return ['status' => $status->rowCount(), 'civicrm' => $civi->rowCount()];
     }
 }
 

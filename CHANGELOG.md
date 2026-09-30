@@ -243,6 +243,38 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ### Behoben
 
+- **`kontaktanfrage` 1.2.0, `mitgliedsstatus` 1.2.0: Zusammenführen,
+  Anonymisieren und endgültiges Löschen ziehen die Addon-Daten nach**
+  (Audit M33, N45). Der Kern meldet diese drei Vorgänge seit Framework#474
+  und #476 über die Hooks `contact.merged`, `contact.anonymized` und
+  `contact.erased`; beide Addons hören jetzt darauf.
+  - `kontaktanfrage`: Beim Zusammenführen gilt ein Opt-out der Quelle auch am
+    behaltenen Kontakt. Bisher blieb es am Datensatz im Papierkorb, der
+    behaltene Kontakt zeigte wieder das Formular, und das Team leitete an die
+    dabei übernommene Adresse weiter – an den Menschen, der widersprochen
+    hatte. Gespeicherte Anfragen hängen zum behaltenen Kontakt um. Beim
+    Anonymisieren und endgültigen Löschen verlieren die Anfragen ihren Bezug
+    zum Kontakt („Datensatz entfernt“); beim Löschen verschwindet auch das
+    Opt-out.
+  - `mitgliedsstatus`: Beim Anonymisieren werden Mitgliedsstatus und
+    CiviCRM-Zuordnung gelöscht. Über die Kennung im Fremdsystem war der
+    anonymisierte Mensch bisher wieder zu finden. Beim Zusammenführen
+    übernimmt der behaltene Kontakt, was ihm fehlt – ohne die öffentliche
+    Freigabe. Hat er eigene Angaben, gewinnt er, und das Protokoll nennt den
+    Konflikt.
+
+  Jede Nachführung steht im Protokoll der Addons, nur mit Kennungen.
+  `core_compatibility` und `core_supported_max` bleiben unverändert
+  (Linie 0.9).
+
+  **Für Betreiber:** Frühere Zusammenführungen und Anonymisierungen holt das
+  Update nicht nach. Wer vor dem Update Kontakte zusammengeführt hat, prüft
+  im Bearbeitungsformular des behaltenen Kontakts Opt-out und
+  Mitgliedsstatus, solange die Quelle noch im Papierkorb liegt. Für
+  bereits anonymisierte Kontakte lassen sich CiviCRM-Zuordnung und Status im
+  Bearbeitungsformular entfernen. Auf Kernen bis v0.9.0 feuern die Hooks
+  nicht; dort bleibt es beim bisherigen Verhalten.
+
 - **`deckanfrage` (1.2.1): Überlange Eingaben führen nicht mehr zu einer
   Fehlerseite** (Audit N24). Namen oder E-Mail-Adressen über 150 Zeichen,
   sehr lange Nachrichten und ungültiges UTF-8 scheiterten erst am Speichern
@@ -497,6 +529,11 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   gemerktes Pferd wird dabei nicht versehentlich wieder entfernt.
 
 ### Geändert
+
+- **`beispiel-erweiterungspunkte` 1.1.0**: belegt die drei neuen Kern-Hooks
+  `contact.merged`, `contact.anonymized` und `contact.erased` mit einem
+  Beispiel (eigene Notiz umhängen bzw. löschen). `BEWUSST_NICHT_ABGEDECKT` ist
+  wieder leer.
 
 - **`datenmigration` 1.2.0, `kontaktanfrage` 1.1.1.** `core_compatibility`
   und `core_supported_max` bleiben unverändert (Linie 0.9).

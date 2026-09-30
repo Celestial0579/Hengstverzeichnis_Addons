@@ -235,6 +235,21 @@ Kontakt endgültig gelöscht, müssen sie mitgehen - sonst bliebe „Kontakt 42 
 kein Mitglied" in einer Nebentabelle liegen, während der Kern die Löschung für
 vollständig hält.
 
+Der Fremdschlüssel deckt nur das endgültige Löschen ab. Für die anderen
+beiden Fälle hört das Addon (ab 1.2.0) auf die Kern-Hooks aus Framework#474
+und #476:
+
+- **`contact.anonymized`:** Der Kontakt bleibt bestehen, kein CASCADE greift.
+  Mitgliedsstatus und CiviCRM-Zuordnung werden gelöscht - über die Kennung im
+  Fremdsystem wäre der anonymisierte Mensch sonst wieder zu finden.
+- **`contact.merged`:** Was dem behaltenen Kontakt fehlt, kommt von der
+  Quelle: ein Status (wenn das Ziel keinen hat oder nur „keine Angabe“ ohne
+  offenen Bestandswortlaut) und die CiviCRM-Zuordnung (wenn das Ziel keine
+  hat). Die öffentliche Freigabe wird **nicht** übertragen, sie steht danach
+  auf aus. Hat das Ziel eigene Angaben, gewinnt es; das Protokoll nennt den
+  Konflikt, die Quelle im Papierkorb behält ihre Zeilen bis zum Leeren.
+- **`contact.erased`:** zweite Linie hinter dem CASCADE.
+
 Protokolleinträge der Kategorie `mitgliedsstatus` bleiben beim Deinstallieren
 **stehen**: Sie sind der Nachweis, wer wann welchen Kontakt als Nichtmitglied
 geführt und wer eine Angabe öffentlich geschaltet hat. Ein Nachweis, den das
