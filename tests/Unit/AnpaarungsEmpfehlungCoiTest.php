@@ -157,7 +157,7 @@ class AnpaarungsEmpfehlungCoiTest extends TestCase {
         $graph = AncestorTreeBuilder::loadFromDatabase($pdo);
 
         $baseId = 20;
-        $candidateIds = [21, 22, 23, 24, 25, 26];
+        $candidateIds = [21, 22, 23, 24, 25, 26, 27];
         $sawPositiveCoi = false;
 
         foreach ([3, 6, 8] as $depth) {
@@ -228,6 +228,32 @@ class AnpaarungsEmpfehlungCoiTest extends TestCase {
                 !empty($baum['dam']['is_placeholder']),
                 "Der Weg '{$weg}' hat DE555 aufgelöst, obwohl das Pferd gelöscht ist."
             );
+        }
+    }
+
+    /**
+     * Framework-Audit N73 ausdrücklich (erst grün mit einem Framework-Pin, der
+     * den Kern-Fix enthält): Ein mehrdeutiger Name und ein Namensvetter mit
+     * widersprechender UELN lösen auf BEIDEN Wegen nicht auf. Der große
+     * Vergleichstest oben deckt das über Kandidat 27 mit ab; dieser Test
+     * benennt die Ursache. Pferd 40 und 42 hängen an Old Rex - ein falsch
+     * aufgelöster Elternteil erzeugte einen gemeinsamen Ahnen mit der Basis.
+     */
+    public function testMehrdeutigerOderWidersprechenderNameErgibtPlatzhalterWieImKern(): void {
+        $pdo = self::fakeDatabase();
+        self::injectDatabase($pdo);
+        $graph = AncestorTreeBuilder::loadFromDatabase($pdo);
+
+        foreach (['kantenbasiert' => $graph->build(27, 3), 'PedigreeBuilder' => PedigreeBuilder::build(27, 3)] as $weg => $baum) {
+            $this->assertIsArray($baum['sire'] ?? null, "Weg '{$weg}': Vater-Knoten fehlt.");
+            $this->assertIsArray($baum['dam'] ?? null, "Weg '{$weg}': Mutter-Knoten fehlt.");
+            $this->assertNull($baum['sire']['id'],
+                "Der Weg '{$weg}' hat den Namensvetter mit anderer UELN eingesetzt.");
+            $this->assertTrue(!empty($baum['sire']['is_placeholder']), "Weg '{$weg}': Vater muss Platzhalter sein.");
+            $this->assertSame('DE999', $baum['sire']['ueln'] ?? null);
+            $this->assertNull($baum['dam']['id'],
+                "Der Weg '{$weg}' hat den mehrdeutigen Namen 'Doppel' aufgelöst.");
+            $this->assertTrue(!empty($baum['dam']['is_placeholder']), "Weg '{$weg}': Mutter muss Platzhalter sein.");
         }
     }
 
@@ -395,6 +421,15 @@ class AnpaarungsEmpfehlungCoiTest extends TestCase {
             // selben Query mit deleted_at IS NULL, es bleibt der Platzhalter).
             ['id' => 26, 'name' => 'Kandidat Lebensnummer', 'sex' => 'stallion',
              'sire_ueln' => 'DE777', 'dam_ueln' => 'DE555'],
+            // Framework-Audit N73: Namens-Fallback nur eindeutig und ohne
+            // UELN-Widerspruch. "Doppel" gibt es zweimal ohne UELN (mehrdeutig),
+            // "Namensvetter" trägt eine andere UELN als die im Kind hinterlegte.
+            // Beide Wege müssen den Platzhalter liefern, nicht Pferd 40 bzw. 42.
+            ['id' => 27, 'name' => 'Kandidat Mehrdeutig', 'sex' => 'stallion',
+             'sire_name' => 'Namensvetter', 'sire_ueln' => 'DE999', 'dam_name' => 'Doppel'],
+            ['id' => 40, 'name' => 'Doppel', 'sire_id' => 1],
+            ['id' => 41, 'name' => 'doppel'],
+            ['id' => 42, 'name' => 'Namensvetter', 'ueln' => 'DE888', 'sire_id' => 1],
             // Lange Ahnenkette bis zu Old Rex (erst bei Tiefe > 6 im Baum)
             ['id' => 30, 'name' => 'Kette 0', 'sire_id' => 31],
             ['id' => 31, 'name' => 'Kette 1', 'sire_id' => 32],

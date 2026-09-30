@@ -118,9 +118,13 @@ class Plugin {
  * Bewusste Näherung: Der Freitext-Eltern-Lookup des PedigreeBuilder
  * vergleicht über die DB-Kollation (utf8mb4_unicode_ci), hier wird mit
  * mb_strtolower() verglichen - Groß-/Kleinschreibung ist damit abgedeckt,
- * exotische Kollations-Gleichheiten (z. B. Akzentgleichheit) nicht. Und wo
- * die DB bei mehreren Namens-Treffern einen unbestimmten per LIMIT 1 wählt,
- * gewinnt hier deterministisch die kleinste ID.
+ * exotische Kollations-Gleichheiten (z. B. Akzentgleichheit) nicht.
+ *
+ * Namens-Fallback seit Framework-Audit N73 wie im Kern: Er greift nur ohne
+ * UELN-Treffer, ignoriert bei hinterlegter UELN jeden Kandidaten mit eigener
+ * UELN (Widerspruch zur Angabe) und liefert bei mehr als einem Kandidaten
+ * keinen Treffer (mehrdeutig -> Platzhalter). Früher wählte die DB hier per
+ * LIMIT 1 ein beliebiges gleichnamiges Pferd.
  */
 final class AncestorTreeBuilder {
 
@@ -147,7 +151,12 @@ final class AncestorTreeBuilder {
     /** @var array<string, int> kleingeschriebene UELN/Fremd-UELN/Lebensnummer => Pferde-ID */
     private array $uelnIndex = [];
 
-    /** @var array<string, int> kleingeschriebener Name => Pferde-ID */
+    /**
+     * Kleingeschriebener Name => alle Kandidaten mit diesem Namen, je mit der
+     * Angabe, ob das Pferd eine eigene UELN trägt (Framework-Audit N73).
+     *
+     * @var array<string, array<int, array{id: int, hat_ueln: bool}>>
+     */
     private array $nameIndex = [];
 
     /**
@@ -171,8 +180,13 @@ final class AncestorTreeBuilder {
                 self::rememberSmallestId($this->uelnIndex, $ueln, (int) $id);
             }
             $nameKey = mb_strtolower(trim((string) ($row['name'] ?? '')));
-            if ($nameKey !== '' && !isset($this->nameIndex[$nameKey])) {
-                $this->nameIndex[$nameKey] = (int) $id;
+            if ($nameKey !== '') {
+                // "ueln IS NULL OR ueln = ''" im Kern; rtrim(' ') wie die
+                // PAD-SPACE-Kollation, in der ' ' = '' gilt.
+                $this->nameIndex[$nameKey][] = [
+                    'id' => (int) $id,
+                    'hat_ueln' => rtrim((string) ($row['ueln'] ?? ''), ' ') !== '',
+                ];
             }
         }
 
@@ -325,11 +339,18 @@ final class AncestorTreeBuilder {
             }
         }
 
+        // Spiegel des Namens-Zweigs in PedigreeBuilder::findParentByUelnOrName()
+        // (Framework-Audit N73): Mit hinterlegter UELN zählen nur Kandidaten
+        // ohne eigene UELN, und nur ein eindeutiger Kandidat wird aufgelöst.
         $cleanName = trim((string) ($name ?? ''));
         if (!empty($cleanName)) {
             $key = mb_strtolower($cleanName);
-            if (isset($this->nameIndex[$key])) {
-                return $this->nameIndex[$key];
+            $kandidaten = array_values(array_filter(
+                $this->nameIndex[$key] ?? [],
+                static fn(array $k): bool => $cleanUeln === '' || !$k['hat_ueln']
+            ));
+            if (count($kandidaten) === 1) {
+                return $kandidaten[0]['id'];
             }
         }
 
