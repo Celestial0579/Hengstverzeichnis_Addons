@@ -262,7 +262,9 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   exportiert keine dunkelbraunen Pferde und keine Braunschimmel mehr, `%` und
   `_` wirken nicht mehr als Jokerzeichen. Unabhängig vom Framework-Pin, weil
   das Addon eigenes SQL hat. `core_compatibility` und `core_supported_max`
-  bleiben unverändert (Linie 0.9).
+  bleiben unverändert (Linie 0.9). Außerdem führen Filterwerte als Array
+  (`?q_color[]=x`) nicht mehr zu HTTP 500, sondern zählen wie ein leeres
+  Feld (Gegenstück zu Framework-Audit N87).
 
 - **`kontaktanfrage` 1.2.0, `mitgliedsstatus` 1.2.0: Zusammenführen,
   Anonymisieren und endgültiges Löschen ziehen die Addon-Daten nach**
