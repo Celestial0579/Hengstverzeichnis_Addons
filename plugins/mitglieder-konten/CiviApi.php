@@ -45,8 +45,13 @@ class CiviApi {
      * Hoechstzahl IDs je `IN`-Abfrage in statusNachId(). Eine Liste mit
      * 1.500 IDs in einem Aufruf sprengt je nach Server die Laenge des
      * POST-Felds bzw. die Parametergrenze der Datenbank.
+     *
+     * Eins unter SEITENGROESSE: Ein Block liefert hoechstens so viele Zeilen,
+     * wie er IDs hat, passt also immer in EINE Seite - und weil die Seite
+     * nicht voll ist, fragt hole() auch nicht nach einer leeren zweiten. Mit
+     * 200 brauchte der Tageslauf bei 1.500 Zuordnungen 8 Runden statt 4.
      */
-    public const ID_BLOCK = 200;
+    public const ID_BLOCK = self::SEITENGROESSE - 1;
 
     /** Umgebungsvariable fuer die Ausnahme "CiviCRM im eigenen Netz" (M5). */
     public const ENV_INTERNE_HOSTS = 'MITGLIEDER_KONTEN_INTERNE_HOSTS';
@@ -55,6 +60,23 @@ class CiviApi {
     public const FEHLER_NETZ = 'CiviCRM ist nicht erreichbar oder die Adresse ist nicht zulässig.';
     public const FEHLER_ZUGANG = 'CiviCRM hat den Zugang abgelehnt - Schlüssel prüfen.';
     public const FEHLER_ANTWORT = 'CiviCRM lieferte keine auswertbare Antwort.';
+
+    /**
+     * Das gepruefte Ziel (zielPruefen()) - einmal je Instanz. $basis ist
+     * readonly, eine zweite Aufloesung braechte keine zusaetzliche
+     * Sicherheit, nur zwei weitere DNS-Abfragen je HTTP-Runde; gepinnt
+     * (CURLOPT_RESOLVE) wird weiterhin genau die gepruefte Adresse.
+     *
+     * @var array{host: string, port: int, ips: array<int, string>}|null
+     */
+    private ?array $ziel = null;
+
+    /**
+     * Ein curl-Handle je Instanz: curl_reset() behaelt die offene
+     * Verbindung und die TLS-Sitzung, jede weitere Runde spart den
+     * Verbindungsaufbau samt Handshake.
+     */
+    private ?\CurlHandle $handle = null;
 
     public function __construct(
         private readonly string $basis,
@@ -348,7 +370,7 @@ class CiviApi {
 
         // M5: erst pruefen und aufloesen, dann verbinden - und zwar genau mit
         // der geprueften Adresse.
-        $ziel = self::zielPruefen($this->basis, fn(string $host): array => $this->aufloesen($host), self::interneHosts());
+        $ziel = $this->ziel ??= self::zielPruefen($this->basis, fn(string $host): array => $this->aufloesen($host), self::interneHosts());
         $ip = $ziel['ips'][0];
         $festgenagelt = sprintf(
             '%s:%d:%s',
@@ -359,8 +381,10 @@ class CiviApi {
 
         $url = rtrim($this->basis, '/') . '/civicrm/ajax/api4/' . rawurlencode($entitaet) . '/' . rawurlencode($aktion);
 
-        $ch = curl_init($url);
+        $ch = $this->handle ??= curl_init();
+        curl_reset($ch);
         curl_setopt_array($ch, [
+            CURLOPT_URL => $url,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => http_build_query(['params' => json_encode($params, JSON_THROW_ON_ERROR)]),
@@ -391,7 +415,6 @@ class CiviApi {
         $roh = curl_exec($ch);
         $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
         $netzfehler = curl_error($ch);
-        unset($ch);
 
         // M5: Die Oberflaeche erfaehrt nur die generische Meldung. Ein
         // curl-Text wie "Connection refused" oder ein Statuscode eines

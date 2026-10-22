@@ -214,15 +214,16 @@ class MitgliederKontenCiviApiTest extends TestCase {
 
     public function testStatusNachIdFragtInBloecken(): void {
         $protokoll = new \ArrayObject();
-        $ids = range(1, 250);
+        $ids = range(1, 600);
         $client = $this->attrappe(array_fill_keys($ids, true), $protokoll);
 
         $status = $client->statusNachId($ids);
 
-        $this->assertCount(250, $status);
-        $this->assertCount(2, $protokoll, 'Zwei Bloecke zu hoechstens ' . CiviApi::ID_BLOCK . '.');
+        $this->assertCount(600, $status);
+        $this->assertCount(2, $protokoll, 'Zwei Bloecke zu hoechstens ' . CiviApi::ID_BLOCK . ' - und keine leere Folgeseite.');
         $this->assertCount(CiviApi::ID_BLOCK, $protokoll[0]['where'][0][2]);
-        $this->assertCount(50, $protokoll[1]['where'][0][2]);
+        $this->assertCount(600 - CiviApi::ID_BLOCK, $protokoll[1]['where'][0][2]);
+        $this->assertLessThan(CiviApi::SEITENGROESSE, CiviApi::ID_BLOCK, 'Ein Block muss in eine Seite passen.');
     }
 
     public function testStatusWerteWerdenStrengAbgebildet(): void {

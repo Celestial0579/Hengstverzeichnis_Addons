@@ -649,6 +649,17 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ### Geändert
 
+- **`mitglieder-konten`: weniger Netzrunden zu CiviCRM.** Der Client löste
+  den Host vor jeder HTTP-Runde neu auf (A und AAAA) und baute jedes Mal eine
+  neue TLS-Verbindung auf; die Statusabfrage zerlegte die IDs zudem in
+  200er-Blöcke, obwohl eine Seite 500 Zeilen fasst. Jetzt wird je Vorgang
+  einmal aufgelöst und geprüft (gepinnt wird weiterhin genau die geprüfte
+  Adresse), die Verbindung bleibt offen, und ein Block hat 499 IDs – er
+  passt immer in eine Seite, ohne leere Folgeabfrage. Der Tageslauf mit
+  1.500 Zuordnungen braucht 4 statt 8 Runden. Bei einem Resolver, der
+  AAAA-Anfragen verwirft, kostete jede Runde bis zu 5 s.
+
+
 - **Datenregister-Pflicht im Manifest-Test.** `tests/Manifest/PluginManifestTest`
   prüft je Addon: Jede Tabelle, die das Addon per `CREATE TABLE` anlegt, und
   jede Ablage unter `storage/plugin_*` steht in `owns`; Kindtabellen stehen
