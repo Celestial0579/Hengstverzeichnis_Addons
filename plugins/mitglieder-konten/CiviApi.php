@@ -96,19 +96,45 @@ class CiviApi {
      * Zukunft") waere geraten: Es gibt Status ohne Enddatum, Kulanzfristen
      * und beendete Mitgliedschaften mit Enddatum in der Zukunft.
      *
+     * $nurIds beschraenkt die Abfrage auf bestimmte Mitgliedschaften (#222):
+     * Die Anlage prueft damit ihre Auswahl von hoechstens hundert IDs in
+     * EINER Runde frisch gegen CiviCRM, statt dafuer den ganzen Bestand ein
+     * zweites Mal zu holen. Die Bedingungen "laeuft" und Typfilter gelten
+     * dabei weiter - eine ausgewaehlte ID, die nicht (mehr) laeuft oder zu
+     * einer anderen Art gehoert, kommt nicht zurueck. null = alle, [] = keine
+     * Anfrage.
+     *
      * @param array<int, int> $typIds Leer = alle Mitgliedschaftsarten
+     * @param array<int, int>|null $nurIds
      * @return array<int, array{membership_id:int, contact_id:int, email:string, name:string}>
      */
-    public function laufendeMitgliedschaften(array $typIds = []): array {
+    public function laufendeMitgliedschaften(array $typIds = [], ?array $nurIds = null): array {
+        // Die Bedingung "laeuft" steht immer an erster Stelle - daran
+        // unterscheidet sich diese Anfrage von der Statusabfrage per ID
+        // (statusNachId()), die NUR nach IDs fragt.
         $where = [['status_id.is_current_member', '=', true]];
         if ($typIds !== []) {
             $where[] = ['membership_type_id', 'IN', array_values($typIds)];
         }
+        $select = ['id', 'contact_id', 'contact_id.display_name', 'contact_id.email_primary.email'];
 
-        $zeilen = $this->hole('Membership', [
-            'select' => ['id', 'contact_id', 'contact_id.display_name', 'contact_id.email_primary.email'],
-            'where' => $where,
-        ]);
+        $gefragt = null;
+        if ($nurIds === null) {
+            $zeilen = $this->hole('Membership', ['select' => $select, 'where' => $where]);
+        } else {
+            $ids = array_values(array_unique(array_filter(array_map('intval', $nurIds), static fn(int $id): bool => $id > 0)));
+            $gefragt = array_flip($ids);
+            $zeilen = [];
+            foreach (array_chunk($ids, self::ID_BLOCK) as $block) {
+                $teil = $this->hole('Membership', [
+                    'select' => $select,
+                    'where' => array_merge($where, [['id', 'IN', $block]]),
+                ]);
+                foreach ($teil as $z) {
+                    $zeilen[] = $z;
+                }
+            }
+        }
 
         $ergebnis = [];
         foreach ($zeilen as $z) {
@@ -116,6 +142,15 @@ class CiviApi {
             $kontaktId = (int)($z['contact_id'] ?? 0);
             if ($mitgliedschaftId <= 0 || $kontaktId <= 0) {
                 continue;
+            }
+            // Nur, wonach gefragt wurde, und jede ID einmal - eine Antwort
+            // mit fremden oder doppelten IDs darf nichts anlegen lassen, was
+            // nicht ausgewaehlt war.
+            if ($gefragt !== null) {
+                if (!isset($gefragt[$mitgliedschaftId])) {
+                    continue;
+                }
+                unset($gefragt[$mitgliedschaftId]);
             }
             $ergebnis[] = [
                 'membership_id' => $mitgliedschaftId,

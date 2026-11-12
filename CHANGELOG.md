@@ -649,6 +649,31 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ### Geändert
 
+- **`mitglieder-konten` (1.2.0): CiviCRM wird nur noch gefragt, wenn es
+  nötig ist** (#222). Die Verwaltungsseite holte bei jedem Aufruf alle
+  laufenden Mitgliedschaften aus CiviCRM, und die Anlage holte sie für
+  dieselbe Auswahl ein zweites Mal – bei 1.496 Mitgliedern je sieben
+  HTTP-Runden, bei einem langsamen CiviCRM über der Zeitgrenze der Anfrage.
+  - Die Vorschau lädt auf Anforderung („Vorschau laden"). Nach einer Anlage
+    erscheint sie von selbst. Zwischengespeichert wird sie nicht: Sie enthält
+    Namen und Adressen aller Mitglieder.
+  - Die Anlage prüft weiterhin frisch, aber nur ihre Auswahl: ein Abruf über
+    höchstens 100 Mitgliedschaften.
+  - Zuordnungen und Konten liest die Vorschau je einmal statt je zweimal.
+
+- **`mitglieder-konten` (1.2.0): ein Stapel, eine Mailverbindung** (#223).
+  Jede Zugangsdaten-Mail baute ihre eigene SMTP-Verbindung auf – bei 100
+  Konten 100 Verbindungen samt STARTTLS und Anmeldung in einer Anfrage, rund
+  eine Minute gegen einen entfernten Server. Begrenzte der Anbieter die
+  Verbindungen, starb die Anfrage, bevor sie melden konnte, welche Mails
+  fehlen. Der Stapel geht jetzt über `Mailer::inEinerSitzung()` des Kerns
+  (nach v0.9.0; auf einem älteren Kern bleibt es beim bisherigen Weg), und
+  die Anlage läuft zu Ende, auch wenn PHPs Zeitlimit erreicht ist oder der
+  Browser auflegt.
+
+  **Für Betreiber:** Die Seite *Mitglieder-Konten* zeigt die Vorschau nicht
+  mehr von selbst – ein Klick lädt sie.
+
 - **`mitglieder-konten`: weniger Netzrunden zu CiviCRM.** Der Client löste
   den Host vor jeder HTTP-Runde neu auf (A und AAAA) und baute jedes Mal eine
   neue TLS-Verbindung auf; die Statusabfrage zerlegte die IDs zudem in
