@@ -266,7 +266,10 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   2.22.2 → 2.22.3 und `codeql-action/upload-sarif` 4.39.1 → 4.39.3. Die
   Testdatenbank der CI läuft jetzt mit MariaDB 11.8.9 statt 11.8.8 (24
   behobene CVEs) – derselbe Stand, den die `docker-compose.yml` des Kerns
-  künftig ausliefert.
+  künftig ausliefert. Im Lock der Testumgebung steigen `symfony/serializer`
+  8.1.5 → 8.1.11 (CVE-2026-118515, CVE-2026-121623, CVE-2026-122053) und
+  `web-auth/webauthn-lib` 5.3.5 → 5.3.8; beide kommen nur über den Kern als
+  Testabhängigkeit herein und werden mit den Addons nicht ausgeliefert.
 
 ### Behoben
 
