@@ -120,13 +120,13 @@
             "version": "dev-main",
             "source": {
                 "type": "git",
-                "url": "git@github.com:Celestial0579/Hengstverzeichnis_Framework.git",
-                "reference": "360941d3cc77f1a07838c915b34fab50eaf705ac"
+                "url": "https://github.com/Celestial0579/Hengstverzeichnis_Framework.git",
+                "reference": "3983d8128c0431b958ffd9bd9668bd2bf6116f6b"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/Celestial0579/Hengstverzeichnis_Framework/zipball/360941d3cc77f1a07838c915b34fab50eaf705ac",
-                "reference": "360941d3cc77f1a07838c915b34fab50eaf705ac",
+                "url": "https://api.github.com/repos/Celestial0579/Hengstverzeichnis_Framework/zipball/3983d8128c0431b958ffd9bd9668bd2bf6116f6b",
+                "reference": "3983d8128c0431b958ffd9bd9668bd2bf6116f6b",
                 "shasum": ""
             },
             "require": {
@@ -157,7 +157,11 @@
                 "proprietary"
             ],
             "description": "Hengstverzeichnis-Framework. Seit #353 hat die Anwendung eine Laufzeit-Abhaengigkeit (web-auth/webauthn-lib fuer Passkeys); vendor/ wird deshalb mit dem Release ausgeliefert und im Docker-Image gebaut. require-dev deckt weiterhin nur die Testsuite ab.",
-            "time": "2026-11-10T02:37:31+00:00"
+            "support": {
+                "source": "https://github.com/Celestial0579/Hengstverzeichnis_Framework/tree/main",
+                "issues": "https://github.com/Celestial0579/Hengstverzeichnis_Framework/issues"
+            },
+            "time": "2026-11-12T21:44:12+00:00"
         },
         {
             "name": "myclabs/deep-copy",
@@ -4107,5 +4111,5 @@
         "php": ">=8.5"
     },
     "platform-dev": {},
-    "plugin-api-version": "2.9.0"
+    "plugin-api-version": "2.11.0"
 }
