@@ -259,6 +259,15 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   Datenbank und Ablage immer gemeinsam zurückspielen (siehe „Verwaiste
   Dokumente“ unter „Behoben“).
 
+- **CI-Werkzeuge aktualisiert.** Betroffen war nur die CI, nicht die Addons.
+  `filelock` 3.32.3 → 4.2.1 in `.github/pre-commit-requirements.txt` schließt
+  die 12 offenen Dependabot-Meldungen des Repositories (eine davon „hoch“)
+  und den Scorecard-Befund „Vulnerabilities“. Dazu `harden-runner`
+  2.22.2 → 2.22.3 und `codeql-action/upload-sarif` 4.39.1 → 4.39.3. Die
+  Testdatenbank der CI läuft jetzt mit MariaDB 11.8.9 statt 11.8.8 (24
+  behobene CVEs) – derselbe Stand, den die `docker-compose.yml` des Kerns
+  künftig ausliefert.
+
 ### Behoben
 
 - **`katalog-export` 1.3.1: Farbfilter lieferte zusätzliche Farben**
