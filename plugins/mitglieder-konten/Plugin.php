@@ -20,6 +20,10 @@
 //     verschickt, ist nicht rückholbar. Also: Vorschau, Auswahl, Anlage in
 //     Stapeln. Die Vorschau zeigt VOR dem ersten Konto, was schiefgehen
 //     würde - belegte Namen, Nummern mit `@`, fehlende Lesegruppe.
+//     Seit 1.2.0 (#222) lädt die Vorschau nur auf Anforderung, und die
+//     Anlage fragt CiviCRM nur nach ihrer Auswahl: Der ganze Bestand geht
+//     nicht mehr bei jedem Seitenaufruf über die Leitung und nie zweimal je
+//     Klick. Zwischengespeichert wird er nicht - siehe Punkt 1.
 //
 //  3. BENUTZERNAME = MITGLIEDSCHAFTS-ID (vom Betreiber so entschieden).
 //     Endet eine Mitgliedschaft und tritt jemand später neu ein, vergibt
@@ -71,6 +75,12 @@
 //  8. VERSANDFEHLER WERDEN GEMELDET (Audit N31) - in der Verwaltung und im
 //     Protokoll, mit Benutzernamen, nie mit Passwort. Einen Weg "Zugangsdaten
 //     neu erzeugen und versenden" gibt es noch nicht (Folge-Issue).
+//
+//  9. EIN STAPEL, EINE MAILVERBINDUNG (seit 1.2.0, #223). Die Zugangsdaten
+//     gehen über Mailer::inEinerSitzung() des Kerns hinaus, sobald es die
+//     Methode gibt; die Anlage läuft zu Ende, auch wenn der Browser auflegt.
+//     Die Passwörter existieren nur in diesem einen Request - eine
+//     Warteschlange für den Versand hiesse, sie abzulegen.
 //
 // Installation (lokal im Framework-Repo):
 //   cp -r mitglieder-konten plugins/mitglieder-konten
@@ -570,6 +580,40 @@ final class Zuordnung {
         return $ergebnis;
     }
 
+    /**
+     * Beide Sichten auf die Tabelle aus EINER Abfrage (#222): die Zuordnung
+     * je Mitgliedschaft (wie alle()) und je CiviCRM-Kontakt die juengste
+     * (wie nachKontakt()). Die Vorschau braucht beide und las die Tabelle
+     * dafuer bisher zweimal ganz.
+     *
+     * @return array{0: array<int, int>, 1: array<int, array{membership_id:int, user_id:int}>}
+     */
+    public static function bestand(): array {
+        try {
+            $zeilen = Database::getInstance()
+                ->query(
+                    'SELECT membership_id, user_id, civicrm_contact_id FROM `' . self::TABELLE . '`
+                     ORDER BY angelegt_am ASC, membership_id ASC'
+                )
+                ->fetchAll(PDO::FETCH_ASSOC);
+        } catch (\Throwable $e) {
+            return [[], []];
+        }
+
+        $nachMitgliedschaft = [];
+        $nachKontakt = [];
+        foreach ((array)$zeilen as $z) {
+            $nachMitgliedschaft[(int)$z['membership_id']] = (int)$z['user_id'];
+            // Spaetere Zeilen ueberschreiben fruehere: Die juengste gewinnt.
+            $nachKontakt[(int)$z['civicrm_contact_id']] = [
+                'membership_id' => (int)$z['membership_id'],
+                'user_id' => (int)$z['user_id'],
+            ];
+        }
+
+        return [$nachMitgliedschaft, $nachKontakt];
+    }
+
     public static function merken(int $membershipId, int $userId, int $civicrmContactId): void {
         $stmt = Database::getInstance()->prepare(
             'INSERT INTO `' . self::TABELLE . '` (membership_id, user_id, civicrm_contact_id)
@@ -600,27 +644,7 @@ final class Zuordnung {
      * @return array<int, array{membership_id:int, user_id:int}> contact_id => Zuordnung
      */
     public static function nachKontakt(): array {
-        try {
-            $zeilen = Database::getInstance()
-                ->query(
-                    'SELECT membership_id, user_id, civicrm_contact_id FROM `' . self::TABELLE . '`
-                     ORDER BY angelegt_am ASC, membership_id ASC'
-                )
-                ->fetchAll(PDO::FETCH_ASSOC);
-        } catch (\Throwable $e) {
-            return [];
-        }
-
-        $ergebnis = [];
-        foreach ((array)$zeilen as $z) {
-            // Spaetere Zeilen ueberschreiben fruehere: Die juengste gewinnt.
-            $ergebnis[(int)$z['civicrm_contact_id']] = [
-                'membership_id' => (int)$z['membership_id'],
-                'user_id' => (int)$z['user_id'],
-            ];
-        }
-
-        return $ergebnis;
+        return self::bestand()[1];
     }
 
     /**
@@ -679,9 +703,16 @@ final class Abgleich {
      * "1.496 Konten, 37 Fehler im Protokoll" und "37 Faelle, die vorher zu
      * klaeren sind".
      *
+     * $nurIds (#222): nur diese Mitgliedschaften. So prueft anlegen() seine
+     * Auswahl frisch, ohne den ganzen Bestand ein zweites Mal aus CiviCRM zu
+     * holen. Die Regeln je Zeile sind dieselben; "dieselbe Adresse zweimal im
+     * Stapel" und "ein altes Konto, zwei neue Mitgliedschaften" beziehen sich
+     * dann auf die Auswahl - also auf den Stapel, der tatsaechlich entsteht.
+     *
+     * @param array<int, int>|null $nurIds null = alle laufenden Mitgliedschaften
      * @return array{zeilen: array<int, array<string, mixed>>, fehler: ?string}
      */
-    public static function vorschau(?CiviApi $client = null): array {
+    public static function vorschau(?CiviApi $client = null, ?array $nurIds = null): array {
         $client ??= Konfiguration::client();
 
         if (!$client->eingerichtet()) {
@@ -695,7 +726,7 @@ final class Abgleich {
         }
 
         try {
-            $mitgliedschaften = $client->laufendeMitgliedschaften(Konfiguration::typIds());
+            $mitgliedschaften = $client->laufendeMitgliedschaften(Konfiguration::typIds(), $nurIds);
         } catch (CiviApiFehler $e) {
             $e->protokollieren();
             return ['zeilen' => [], 'fehler' => $e->getMessage()];
@@ -705,10 +736,10 @@ final class Abgleich {
         // Stapel - die spaetere ist blockiert" braucht eine feste Reihenfolge.
         usort($mitgliedschaften, static fn(array $a, array $b): int => $a['membership_id'] <=> $b['membership_id']);
 
-        $bekannt = Zuordnung::alle();
-        $nachKontakt = Zuordnung::nachKontakt();
-        $belegt = self::belegteBenutzernamen();
-        $adressen = self::belegteAdressen();
+        // Je EINE Abfrage fuer die Zuordnungen und fuer die Konten (#222) -
+        // bisher lasen zwei Methoden je Tabelle sie nacheinander ganz.
+        [$bekannt, $nachKontakt] = Zuordnung::bestand();
+        [$belegt, $adressen] = self::belegteKennungen();
 
         // N29: Kandidaten fuer einen Wiedereintritt sammeln und den Status
         // ihrer ALTEN Mitgliedschaft in EINEM Aufruf erfragen - ohne
@@ -840,11 +871,22 @@ final class Abgleich {
             return $ergebnis;
         }
 
-        $vorschau = self::vorschau($client);
+        // Frisch gegen CiviCRM geprueft, aber nur die Auswahl (#222): eine
+        // Runde ueber hoechstens MAX_JE_STAPEL IDs. Bisher holte die Anlage
+        // dafuer den ganzen Bestand - zum zweiten Mal, denn die Seite mit
+        // den Kaestchen hatte ihn gerade erst geladen.
+        $vorschau = self::vorschau($client, $auswahl);
         if ($vorschau['fehler'] !== null) {
             $ergebnis['fehler'][] = $vorschau['fehler'];
             return $ergebnis;
         }
+
+        // Ab hier entstehen Konten, deren Passwoerter nur in diesem Request
+        // existieren. Bricht PHP ihn am Zeitlimit ab oder legt der Browser
+        // auf, bevor die Zugangsdaten zugestellt sind, kennt sie niemand mehr
+        // (#223) - deshalb laeuft er zu Ende, auch ohne Zuhoerer. Der Bericht
+        // wartet dann in der Sitzung.
+        self::langeLaufzeitErlauben();
 
         $nachId = [];
         foreach ($vorschau['zeilen'] as $zeile) {
@@ -973,7 +1015,6 @@ final class Abgleich {
             return [];
         }
 
-        $fehler = [];
         try {
             $mailer ??= new Mailer();
         } catch (\Throwable $e) {
@@ -987,6 +1028,28 @@ final class Abgleich {
             )];
         }
 
+        // EINE SMTP-Verbindung fuer den ganzen Stapel (#223), sobald der Kern
+        // das kann (Mailer::inEinerSitzung(), nach v0.9.0). Ohne die Klammer
+        // baut jede Mail ihre eigene Verbindung auf - TCP, STARTTLS,
+        // Anmeldung, Abbau: bei hundert Konten hundert Verbindungen in einem
+        // Request, rund eine Minute gegen einen entfernten Server, und viele
+        // Anbieter begrenzen Verbindungen je Minute weit darunter. Auf einem
+        // aelteren Kern bleibt es beim bisherigen Weg.
+        $zustellen = static fn(Mailer $m): array => self::zustellen($daten, $m);
+
+        return method_exists($mailer, 'inEinerSitzung')
+            ? $mailer->inEinerSitzung($zustellen)
+            : $zustellen($mailer);
+    }
+
+    /**
+     * Der Versand selbst, siehe zugangsdatenZustellen().
+     *
+     * @param array<int, array<string, string>> $daten
+     * @return array<int, string> Fehlertexte fuer die Verwaltung
+     */
+    private static function zustellen(array $daten, Mailer $mailer): array {
+        $fehler = [];
         $ohneAdresse = [];
         $gescheitert = [];
         foreach ($daten as $satz) {
@@ -1397,51 +1460,56 @@ final class Abgleich {
         return $ergebnis;
     }
 
-    /** @return array<string, true> Kleingeschriebene Benutzernamen */
-    private static function belegteBenutzernamen(): array {
-        try {
-            $namen = Database::getInstance()
-                ->query('SELECT username FROM users')
-                ->fetchAll(PDO::FETCH_COLUMN);
-        } catch (\Throwable $e) {
-            return [];
-        }
-
-        $belegt = [];
-        foreach ((array)$namen as $name) {
-            $belegt[mb_strtolower((string)$name, 'UTF-8')] = true;
-        }
-
-        return $belegt;
-    }
-
     /**
-     * Vergebene E-Mail-Adressen, kleingeschrieben -> Benutzer-ID (N29).
+     * Vergebene Benutzernamen und E-Mail-Adressen, je kleingeschrieben - aus
+     * EINER Abfrage (#222; bisher lasen zwei Methoden `users` nacheinander
+     * ganz).
      *
-     * INKLUSIVE soft-geloeschter Konten: Der UNIQUE-Index auf `users.email`
-     * erfasst auch sie. Klein geschrieben, weil die Kollation
+     * Adressen INKLUSIVE soft-geloeschter Konten (N29): Der UNIQUE-Index auf
+     * `users.email` erfasst auch sie. Klein geschrieben, weil die Kollation
      * utf8mb4_unicode_ci Gross- und Kleinschreibung nicht unterscheidet.
      *
-     * @return array<string, int>
+     * @return array{0: array<string, true>, 1: array<string, int>} Benutzernamen; Adresse => Benutzer-ID
      */
-    private static function belegteAdressen(): array {
+    private static function belegteKennungen(): array {
         try {
             $zeilen = Database::getInstance()
-                ->query('SELECT id, email FROM users WHERE email IS NOT NULL')
+                ->query('SELECT id, username, email FROM users')
                 ->fetchAll(PDO::FETCH_ASSOC);
         } catch (\Throwable $e) {
-            return [];
+            return [[], []];
         }
 
-        $belegt = [];
+        $namen = [];
+        $adressen = [];
         foreach ((array)$zeilen as $z) {
-            $adresse = mb_strtolower(trim((string)$z['email']), 'UTF-8');
+            $namen[mb_strtolower((string)$z['username'], 'UTF-8')] = true;
+            $adresse = mb_strtolower(trim((string)($z['email'] ?? '')), 'UTF-8');
             if ($adresse !== '') {
-                $belegt[$adresse] = (int)$z['id'];
+                $adressen[$adresse] = (int)$z['id'];
             }
         }
 
-        return $belegt;
+        return [$namen, $adressen];
+    }
+
+    /**
+     * Laesst den laufenden Request zu Ende laufen - auch ueber das Zeitlimit
+     * von PHP hinaus und wenn der Browser auflegt (#223).
+     *
+     * Ueber den Helfer des Kerns, wo es ihn gibt (nach v0.9.0); auf einem
+     * aelteren Kern dasselbe von Hand. Was beides nicht aufhebt, sind die
+     * Zeitgrenzen von PHP-FPM und eines vorgeschalteten Proxys.
+     */
+    private static function langeLaufzeitErlauben(): void {
+        if (class_exists(\App\Helper\LongRunning::class)) {
+            \App\Helper\LongRunning::allow();
+            return;
+        }
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(0);
+        }
+        ignore_user_abort(true);
     }
 }
 
@@ -1471,9 +1539,44 @@ class VerwaltungController extends BaseController {
         $inhalt = $this->meldung();
         $inhalt .= $this->angehaltenKarte();
         $inhalt .= $this->zugangKarte();
-        $inhalt .= $this->vorschauKarte();
+        // Die Vorschau nur auf Anforderung (#222). Sie holt den ganzen
+        // Bestand der laufenden Mitgliedschaften aus CiviCRM - mehrere
+        // HTTP-Runden, bei einem langsamen CiviCRM viele Sekunden. Frueher
+        // tat das JEDER Aufruf dieser Seite, auch wer nur den Zugang ansehen
+        // oder eine angehaltene Aenderung bestaetigen wollte.
+        $inhalt .= $this->vorschauAngefordert() ? $this->vorschauKarte() : $this->vorschauEinladung();
 
         PluginPage::render('Mitglieder-Konten', $inhalt);
+    }
+
+    private function vorschauAngefordert(): bool {
+        return ($_GET['vorschau'] ?? '') === '1';
+    }
+
+    /**
+     * Was statt der Vorschau erscheint, solange niemand sie angefordert hat.
+     *
+     * Kein Zwischenspeicher: Die Vorschau enthaelt Namen und Adressen aller
+     * Mitglieder. Sie in `settings` oder in der Sitzung abzulegen, hiesse,
+     * einen Auszug aus CiviCRM in jede Sicherung zu schreiben - dieses Addon
+     * haelt aus gutem Grund keine Mitgliederdaten vor (Punkt 1 im Dateikopf).
+     * Ein Klick laedt sie frisch.
+     */
+    private function vorschauEinladung(): string {
+        if (!Konfiguration::client()->eingerichtet()) {
+            // Ohne Zugang geht ohnehin keine Anfrage hinaus - der Hinweis
+            // darauf soll wie bisher gleich zu sehen sein.
+            return $this->vorschauKarte();
+        }
+
+        return "<div class='card' style='margin-top:1.5rem;'>
+            <h2 style='font-size:1.15rem;margin-top:0;'>Vorschau</h2>
+            <p style='color:var(--text-muted);'>
+                Die Vorschau fragt die laufenden Mitgliedschaften bei CiviCRM ab und zeigt, für wen ein Konto
+                angelegt würde. Je nach Größe des Bestands dauert das einige Sekunden.
+            </p>
+            <a class='btn' href='" . Plugin::VERWALTUNG . "?vorschau=1'>Vorschau laden</a>
+        </div>";
     }
 
     public function zugang(): void {
@@ -1607,7 +1710,8 @@ class VerwaltungController extends BaseController {
             'fehler' => $ergebnis['fehler'],
         ];
 
-        $this->zurueck('angelegt');
+        // Mit Vorschau: Wer in Stapeln anlegt, will den naechsten sehen.
+        $this->zurueck('angelegt', true);
     }
 
     /**
@@ -1910,6 +2014,8 @@ class VerwaltungController extends BaseController {
                 <strong>{$zaehler['vorhanden']}</strong> haben schon ein Konto &middot;
                 <strong>{$zaehler['blockiert']}</strong> gehen nicht.
                 Je Durchgang werden höchstens <strong>{$deckel}</strong> Konten angelegt.
+                Stand: eben aus CiviCRM geladen &middot;
+                <a href='" . Plugin::VERWALTUNG . "?vorschau=1'>neu laden</a>
             </p>
             <form method='POST' action='" . Plugin::VERWALTUNG . "/anlegen'
                   data-confirm='Ausgewählte Konten jetzt anlegen bzw. übernehmen? Zugangsdaten neuer Konten gehen unmittelbar heraus.'>
@@ -1932,8 +2038,8 @@ class VerwaltungController extends BaseController {
         }
     }
 
-    private function zurueck(string $status): never {
-        header('Location: ' . Plugin::VERWALTUNG . '?mk=' . $status);
+    private function zurueck(string $status, bool $mitVorschau = false): never {
+        header('Location: ' . Plugin::VERWALTUNG . '?mk=' . $status . ($mitVorschau ? '&vorschau=1' : ''));
         exit;
     }
 }

@@ -1343,4 +1343,198 @@ class MitgliederKontenPluginTest extends FunctionalTestCase {
         $this->assertSame('blockiert', $zeile['zustand']);
         $this->assertStringContainsString('gelöscht', $zeile['grund']);
     }
+
+    // ---- #222: CiviCRM wird nur gefragt, wenn es noetig ist -------------
+
+    /**
+     * Die Anlage prueft ihre Auswahl frisch gegen CiviCRM - aber nur die
+     * Auswahl, in EINER Runde. Bis 1.1.x holte sie dafuer den ganzen Bestand
+     * ein zweites Mal (die Seite mit den Kaestchen hatte ihn gerade geladen):
+     * bei 1.496 Mitgliedschaften drei Runden und mehr je Klick.
+     */
+    public function testDieAnlageFragtNurNachIhrerAuswahl(): void {
+        $this->einrichten($this->authenticatedClient(), 'MK Auswahl');
+        $x = substr(uniqid(), -6);
+        foreach (['9961', '9962', '9963'] as $name) {
+            $this->aufraeumen[] = $name;
+        }
+        $client = $this->attrappe([
+            $this->civiZeile(9961, 961, 'Gewaehlt', "gewaehlt-{$x}@example.org"),
+            $this->civiZeile(9962, 962, 'Nicht gewaehlt', "nicht-{$x}@example.org"),
+            $this->civiZeile(9963, 963, 'Auch gewaehlt'),
+        ]);
+
+        $ergebnis = Abgleich::anlegen([9961, 9963], $client, $this->mailer());
+
+        $this->assertSame(2, $ergebnis['angelegt'], implode(' | ', $ergebnis['fehler']));
+        $this->assertSame(0, $ergebnis['uebersprungen']);
+
+        $this->assertCount(1, $client->protokoll, 'Eine Anfrage an CiviCRM fuer den ganzen Stapel.');
+        $bedingungen = $client->protokoll[0]['where'];
+        $this->assertSame(['status_id.is_current_member', '=', true], $bedingungen[0], 'Weiterhin nur laufende Mitgliedschaften.');
+        $this->assertSame(['id', 'IN', [9961, 9963]], $bedingungen[count($bedingungen) - 1], 'Gefragt wird nach der Auswahl, nicht nach dem Bestand.');
+
+        // Die Attrappe liefert - wie ein CiviCRM, das den Filter nicht
+        // beachtet - trotzdem alle drei Zeilen. Angelegt wird nur, wonach
+        // gefragt war.
+        $db = Database::getInstance();
+        $this->assertSame(0, (int)$db->query("SELECT COUNT(*) FROM users WHERE username = '9962'")->fetchColumn());
+        $this->assertSame(2, (int)$db->query("SELECT COUNT(*) FROM users WHERE username IN ('9961', '9963')")->fetchColumn());
+    }
+
+    /**
+     * Die Regeln der Vorschau gelten auch fuer die gezielte Pruefung: Zwei
+     * Mitglieder mit derselben Adresse im SELBEN Stapel - die zweite ist
+     * blockiert. Und was nicht mehr laeuft, kommt gar nicht erst zurueck.
+     */
+    public function testDieGezieltePruefungKenntDieselbenHinderungsgruende(): void {
+        $this->einrichten($this->authenticatedClient(), 'MK Auswahl Regeln');
+        $x = substr(uniqid(), -6);
+        foreach (['9971', '9972', '9973'] as $name) {
+            $this->aufraeumen[] = $name;
+        }
+        $client = $this->attrappe([
+            $this->civiZeile(9971, 971, 'Erste', "familie-{$x}@example.org"),
+            $this->civiZeile(9972, 972, 'Zweite', "familie-{$x}@example.org"),
+        ]);
+
+        // 9973 steht in der Auswahl, laeuft in CiviCRM aber nicht (mehr).
+        $ergebnis = Abgleich::anlegen([9972, 9971, 9973], $client, $this->mailer());
+
+        $this->assertSame(1, $ergebnis['angelegt'], implode(' | ', $ergebnis['fehler']));
+        $this->assertSame(2, $ergebnis['uebersprungen'], 'Die gemeinsame Adresse und die nicht laufende Mitgliedschaft.');
+        $db = Database::getInstance();
+        $this->assertSame(1, (int)$db->query("SELECT COUNT(*) FROM users WHERE username = '9971'")->fetchColumn(), 'Die kleinere Nummer bekommt das Konto - wie in der Vorschau.');
+        $this->assertSame(0, (int)$db->query("SELECT COUNT(*) FROM users WHERE username IN ('9972', '9973')")->fetchColumn());
+    }
+
+    /**
+     * Die Verwaltungsseite fragt CiviCRM nur noch, wenn jemand die Vorschau
+     * verlangt. Frueher tat das JEDER Aufruf - auch wer nur den Zugang
+     * ansehen oder eine angehaltene Aenderung bestaetigen wollte, wartete auf
+     * mehrere Runden gegen CiviCRM.
+     *
+     * Gemessen an der Fehlermeldung: `civi.example.org` gibt es nicht. Wer
+     * dort anfragt, bekommt "nicht erreichbar"; wer nicht fragt, bekommt
+     * keine Meldung.
+     */
+    public function testDieVerwaltungsseiteFragtCiviCrmNurAufAnforderung(): void {
+        $admin = $this->authenticatedClient();
+        $this->addonAktivieren($admin);
+        $gruppe = $this->leseGruppeAnlegen($admin, 'MK auf Anforderung ' . substr(uniqid(), -6));
+        $csrf = $this->csrfTokenFrom($admin, '/plugin/mitglieder-konten/verwaltung');
+        $this->assertStringContainsString(
+            'mk=gespeichert',
+            $this->zugangSpeichern($admin, $csrf, 'https://civi.example.org', 'schluessel-' . uniqid(), 'team@example.org')
+        );
+        // Die Zielgruppe direkt: Mit Gruppe 0 braeche die Vorschau schon vor
+        // der Anfrage an CiviCRM ab, und der Test saehe den Unterschied nicht.
+        Konfiguration::speichern([Konfiguration::S_GRUPPE => (string)$gruppe]);
+        Konfiguration::leereCache();
+
+        $seite = '/plugin/mitglieder-konten/verwaltung';
+
+        $ohne = $admin->get($seite);
+        $this->assertSame(200, $ohne->statusCode);
+        $this->assertStringContainsString('Vorschau laden', $ohne->body);
+        $this->assertStringContainsString($seite . '?vorschau=1', $ohne->body);
+        $this->assertStringNotContainsString(CiviApi::FEHLER_NETZ, $ohne->body, 'Ohne Anforderung geht keine Anfrage an CiviCRM.');
+        $this->assertStringNotContainsString('membership_ids', $ohne->body);
+
+        $mit = $admin->get($seite . '?vorschau=1');
+        $this->assertSame(200, $mit->statusCode);
+        $this->assertStringContainsString(CiviApi::FEHLER_NETZ, $mit->body, 'Mit Anforderung wird CiviCRM gefragt - und ist hier nicht erreichbar.');
+        $this->assertStringNotContainsString('Vorschau laden', $mit->body);
+
+        // Nach einer Anlage erscheint die Vorschau von selbst: Wer in Stapeln
+        // anlegt, will den naechsten sehen.
+        $angelegt = $admin->post($seite . '/anlegen', [
+            'csrf_token' => $this->csrfTokenFrom($admin, $seite),
+            'membership_ids' => ['4711'],
+        ]);
+        $this->assertSame($seite . '?mk=angelegt&vorschau=1', $angelegt->location(), "Body: {$angelegt->body}");
+    }
+
+    // ---- #223: Eine SMTP-Verbindung fuer den ganzen Stapel ----------------
+
+    /**
+     * Mailer-Attrappe, die mitschreibt, ob eine Mail INNERHALB von
+     * inEinerSitzung() hinausging. Die Methode definiert sie selbst - der
+     * Test laeuft damit auch gegen einen Kern, der sie noch nicht kennt.
+     */
+    private function sitzungsMailer(): Mailer {
+        return new class () extends Mailer {
+            public int $sitzungen = 0;
+            private bool $offen = false;
+            /** @var array<int, array{0: string, 1: bool}> Empfaenger und ob die Sitzung offen war */
+            public array $mails = [];
+
+            public function __construct() {
+                parent::__construct();
+            }
+
+            public function inEinerSitzung(callable $versand): mixed {
+                $this->sitzungen++;
+                $this->offen = true;
+                try {
+                    return $versand($this);
+                } finally {
+                    $this->offen = false;
+                }
+            }
+
+            public function sendWelcomeEmail(string $userEmail, string $userName, string $initialPassword): bool {
+                $this->mails[] = [$userEmail, $this->offen];
+                return true;
+            }
+
+            public function send(string $toEmail, string $subject, string $htmlBody, string $textBody = ''): bool {
+                $this->mails[] = [$toEmail, $this->offen];
+                return true;
+            }
+        };
+    }
+
+    /**
+     * Alle Zugangsdaten eines Stapels gehen ueber EINE Sitzung des Mailers -
+     * die Mails an die Mitglieder und die Sammelmail an das Verwaltungsteam.
+     * Ohne die Klammer baute jede Mail ihre eigene SMTP-Verbindung auf: bei
+     * hundert Konten hundert Verbindungen in einem Request.
+     */
+    public function testDieZugangsdatenGehenUeberEineSitzung(): void {
+        $this->einrichten($this->authenticatedClient(), 'MK Sitzung');
+        $x = substr(uniqid(), -6);
+        foreach (['9981', '9982', '9983'] as $name) {
+            $this->aufraeumen[] = $name;
+        }
+        $mailer = $this->sitzungsMailer();
+
+        $ergebnis = Abgleich::anlegen([9981, 9982, 9983], $this->attrappe([
+            $this->civiZeile(9981, 981, 'Mit Post', "eins-{$x}@example.org"),
+            $this->civiZeile(9982, 982, 'Auch mit Post', "zwei-{$x}@example.org"),
+            $this->civiZeile(9983, 983, 'Ohne Post'),
+        ]), $mailer);
+
+        $this->assertSame(3, $ergebnis['angelegt'], implode(' | ', $ergebnis['fehler']));
+        $this->assertSame([], $ergebnis['fehler']);
+        $this->assertSame(1, $mailer->sitzungen, 'Eine Sitzung fuer den ganzen Stapel.');
+        $this->assertSame(
+            [["eins-{$x}@example.org", true], ["zwei-{$x}@example.org", true], ['team@example.org', true]],
+            $mailer->mails,
+            'Jede Mail - auch die Sammelmail - geht innerhalb der Sitzung hinaus.'
+        );
+    }
+
+    /** Ohne neue Konten wird auch keine Sitzung eroeffnet. */
+    public function testOhneNeueKontenWirdKeineSitzungEroeffnet(): void {
+        $this->einrichten($this->authenticatedClient(), 'MK ohne Sitzung');
+        $mailer = $this->sitzungsMailer();
+
+        $ergebnis = Abgleich::anlegen([9991], $this->attrappe([]), $mailer);
+
+        $this->assertSame(0, $ergebnis['angelegt']);
+        $this->assertSame(1, $ergebnis['uebersprungen']);
+        $this->assertSame(0, $mailer->sitzungen);
+        $this->assertSame([], $mailer->mails);
+    }
 }

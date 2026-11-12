@@ -242,4 +242,117 @@ class MitgliederKontenCiviApiTest extends TestCase {
 
         $this->assertSame([1 => true], $client->statusNachId([1]));
     }
+
+    // ---- laufendeMitgliedschaften mit Auswahl (#222) ---------------------
+
+    /**
+     * Attrappe fuer die Listenabfrage: liefert zu jeder ID der letzten
+     * Bedingung eine Zeile - und bei einer kleinen Auswahl auch die ID 99,
+     * nach der niemand gefragt hat. (Bei einem vollen Block nicht: 499 IDs
+     * plus eine waeren eine volle Seite und loesten eine Folgeabfrage aus,
+     * die es gegen ein echtes CiviCRM nicht gibt.)
+     *
+     * @param \ArrayObject<int, array<string, mixed>> $protokoll
+     */
+    private function listenAttrappe(\ArrayObject $protokoll): CiviApi {
+        return new class ('https://civi.example.org', 'schluessel', $protokoll) extends CiviApi {
+            /** @param \ArrayObject<int, array<string, mixed>> $protokoll */
+            public function __construct(string $basis, string $key, private readonly \ArrayObject $protokoll) {
+                parent::__construct($basis, $key);
+            }
+
+            protected function sende(string $entitaet, string $aktion, array $params): array {
+                $this->protokoll[] = $params;
+                if ((int)($params['offset'] ?? 0) > 0) {
+                    return ['values' => []];
+                }
+                $letzte = end($params['where']);
+                $ids = is_array($letzte) && $letzte[0] === 'id' ? $letzte[2] : [1, 2, 3];
+                $werte = [];
+                foreach (array_merge($ids, count($ids) < 100 ? [99] : []) as $id) {
+                    $werte[] = [
+                        'id' => $id,
+                        'contact_id' => 1000 + $id,
+                        'contact_id.display_name' => "Mitglied {$id}",
+                        'contact_id.email_primary.email' => "m{$id}@example.org",
+                    ];
+                }
+
+                return ['values' => $werte];
+            }
+        };
+    }
+
+    /**
+     * Die Anlage prueft ihre Auswahl in EINER Runde, statt den ganzen
+     * Bestand zu holen. Die Bedingungen "laeuft" und Typfilter bleiben
+     * dabei stehen - und zwar "laeuft" an erster Stelle, daran erkennt man
+     * die Listenabfrage.
+     */
+    public function testEineAuswahlWirdGezieltUndMitAllenFilternErfragt(): void {
+        $protokoll = new \ArrayObject();
+        $client = $this->listenAttrappe($protokoll);
+
+        $zeilen = $client->laufendeMitgliedschaften([3, 4], [10, 11, 11, 0, -5, '12']);
+
+        $this->assertCount(1, $protokoll, 'Eine Runde fuer die ganze Auswahl.');
+        $this->assertSame(
+            [
+                ['status_id.is_current_member', '=', true],
+                ['membership_type_id', 'IN', [3, 4]],
+                ['id', 'IN', [10, 11, 12]],
+            ],
+            $protokoll[0]['where']
+        );
+        $this->assertSame(
+            [10, 11, 12],
+            array_column($zeilen, 'membership_id'),
+            'Die ungefragte ID 99 aus der Antwort zaehlt nicht.'
+        );
+        $this->assertSame('m10@example.org', $zeilen[0]['email']);
+    }
+
+    public function testEineGrosseAuswahlGehtInBloecken(): void {
+        $protokoll = new \ArrayObject();
+        $client = $this->listenAttrappe($protokoll);
+
+        $zeilen = $client->laufendeMitgliedschaften([], range(1, 600));
+
+        $this->assertCount(600, $zeilen);
+        $this->assertSame(range(1, 600), array_column($zeilen, 'membership_id'));
+        $this->assertCount(2, $protokoll, 'Zwei Bloecke zu hoechstens ' . CiviApi::ID_BLOCK . ' - und keine leere Folgeseite.');
+        $this->assertSame('id', $protokoll[0]['where'][1][0], 'Ohne Typfilter folgt die Auswahl direkt auf "laeuft".');
+        $this->assertCount(CiviApi::ID_BLOCK, $protokoll[0]['where'][1][2]);
+    }
+
+    /** Liefert CiviCRM eine ausgewaehlte ID zweimal, zaehlt sie einmal. */
+    public function testEineDoppeltGelieferteIdZaehltEinmal(): void {
+        $protokoll = new \ArrayObject();
+        $client = $this->listenAttrappe($protokoll);
+
+        // Die Attrappe haengt 99 an jede Antwort - hier ist 99 auch gefragt.
+        $zeilen = $client->laufendeMitgliedschaften([], [98, 99]);
+
+        $this->assertSame([98, 99], array_column($zeilen, 'membership_id'));
+    }
+
+    public function testEineLeereAuswahlFragtGarNicht(): void {
+        $protokoll = new \ArrayObject();
+
+        $this->assertSame([], $this->listenAttrappe($protokoll)->laufendeMitgliedschaften([], []));
+        $this->assertCount(0, $protokoll);
+    }
+
+    public function testOhneAuswahlBleibtDieAbfrageWieSieWar(): void {
+        $protokoll = new \ArrayObject();
+        $client = $this->listenAttrappe($protokoll);
+
+        $zeilen = $client->laufendeMitgliedschaften([7]);
+
+        $this->assertSame(
+            [['status_id.is_current_member', '=', true], ['membership_type_id', 'IN', [7]]],
+            $protokoll[0]['where']
+        );
+        $this->assertSame([1, 2, 3, 99], array_column($zeilen, 'membership_id'), 'Ohne Auswahl wird nichts ausgesiebt.');
+    }
 }
