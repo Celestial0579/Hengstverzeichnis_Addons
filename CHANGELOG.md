@@ -259,6 +259,35 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   Datenbank und Ablage immer gemeinsam zurückspielen (siehe „Verwaiste
   Dokumente“ unter „Behoben“).
 
+- **CI-Werkzeuge und Testumgebung auf aktuellem Stand.** Betroffen war nur
+  die CI, nicht die Addons.
+  - `.github/pre-commit-requirements.txt`: `pre-commit` 4.6.2 → 4.7.0,
+    `filelock` 3.32.3 → 4.2.9, `virtualenv` 21.14.13 → 21.15.5, dazu
+    `python-discovery` 1.9.4, `platformdirs` 4.14.5, `nodeenv` 1.12.0,
+    `identify` 2.6.20 und `distlib` 0.4.4. Das schließt die 12 offenen
+    Dependabot-Meldungen des Repositories (eine davon „hoch“) und den
+    Scorecard-Befund „Vulnerabilities“. Erzeugt mit `pip-compile`, alle
+    Hashes zusätzlich gegen PyPI geprüft; der Aufruf in
+    `pre-commit-requirements.in` trägt jetzt `--uploaded-prior-to=P7D`,
+    dieselbe Schonfrist von 7 Tagen wie bei Dependabot.
+  - `harden-runner` 2.22.2 → 2.22.3, `codeql-action/upload-sarif`
+    4.39.1 → 4.39.3, `softprops/action-gh-release` 3.0.2 → 3.0.3, das
+    Semgrep-Image von einem Stand aus dem Juli auf 1.183.0.
+  - Die Testdatenbank der CI läuft mit MariaDB 11.8.9 statt 11.8.8 (24
+    behobene CVEs) – derselbe Stand, den die `docker-compose.yml` des Kerns
+    künftig ausliefert.
+  - Der Lock der Testumgebung ist komplett nachgezogen: der Kern von
+    `f9921d4` auf `360941d` (dazwischen liegen im Kern nur PHPUnit-Bumps),
+    `symfony/serializer` 8.1.5 → 8.1.11 (CVE-2026-118515, CVE-2026-121623,
+    CVE-2026-122053), `web-auth/webauthn-lib` 5.3.5 → 5.3.12 und 19 weitere
+    Pakete (neu dabei: `symfony/polyfill-php81`). Die Testumgebung benutzt damit dieselben Bibliotheksfassungen,
+    die der Kern ausliefert. Alle diese Pakete kommen nur über den Kern als
+    Testabhängigkeit herein und werden mit den Addons nicht ausgeliefert.
+  - Zurückgestellt, weil jünger als 7 Tage: `harden-runner` 2.22.4,
+    `softprops/action-gh-release` 3.0.4, Semgrep 1.184.0,
+    `doctrine/deprecations` 1.2.0 und `paragonie/constant_time_encoding`
+    3.1.4.
+
 ### Behoben
 
 - **`katalog-export` 1.3.1: Farbfilter lieferte zusätzliche Farben**
