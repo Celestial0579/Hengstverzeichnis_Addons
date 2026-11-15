@@ -39,6 +39,9 @@ class GesundheitstestsPluginTest extends FunctionalTestCase {
     private const ALTE_SEITE = '/plugin/gesundheitstests/verwaltung';
 
     /** Kleinste Datei, die `finfo` als application/pdf erkennt. */
+    /** 8x8-JPEG mit EXIF: Make "GPSKAMERA", Model "Testmodell" und GPS-Position (wie im Unit-Test). */
+    private const JPEG_MIT_GPS = '/9j/4AAQSkZJRgABAQAAAQABAAD/4QC2RXhpZgAATU0AKgAAAAgAAwEPAAIAAAAKAAAAMgEQAAIAAAALAAAAPIglAAQAAAABAAAASAAAAABHUFNLQU1FUkEAVGVzdG1vZGVsbAAAAAQAAQACAAAAAk4AAAAAAgAFAAAAAwAAAH4AAwACAAAAAkUAAAAABAAFAAAAAwAAAJYAAAAAAAAANQAAAAEAAAAEAAAAAQAAAAwAAAABAAAACAAAAAEAAAAwAAAAAQAAAB4AAAAB/9sAQwAGBAUGBQQGBgUGBwcGCAoQCgoJCQoUDg8MEBcUGBgXFBYWGh0lHxobIxwWFiAsICMmJykqKRkfLTAtKDAlKCko/9sAQwEHBwcKCAoTCgoTKBoWGigoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgo/8AAEQgACAAIAwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/aAAwDAQACEQMRAD8A84ooorwj6U//2Q==';
+
     private const PDF_INHALT = "%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n";
 
     /**
@@ -370,6 +373,87 @@ class GesundheitstestsPluginTest extends FunctionalTestCase {
             "befund-{$unique}.pdf",
             $admin->get('/uploads/plugin_gesundheitstests/')->body
         );
+    }
+
+    /**
+     * GHSA-v26w-vc3j-wm5x: Ein hochgeladenes Befundfoto verliert vor der
+     * Ablage GPS-Position und Kameradaten, wie Pferdefotos im Kern (Audit
+     * M21). Geprüft werden Ablage, Verwaltungsabruf und öffentlicher Abruf.
+     */
+    public function testHochgeladenesFotoVerliertGpsUndKamera(): void {
+        $admin = $this->authenticatedClient();
+        $this->enablePlugin($admin);
+
+        $unique = uniqid();
+        $horseId = $this->createHorse($admin, "GTestFoto-{$unique}", ['status' => 'active']);
+        $form = $admin->get('/admin/horses/edit?id=' . $horseId);
+        $roh = base64_decode(self::JPEG_MIT_GPS);
+        $this->assertStringContainsString('GPSKAMERA', $roh);
+
+        $admin->postFile(
+            self::ALTE_SEITE . '/store',
+            [
+                'csrf_token' => $form->formField('csrf_token') ?? '',
+                'horse_id' => (string) $horseId,
+                'test_type' => "Foto-Befund-{$unique}",
+                'is_public' => '1',
+            ],
+            'document',
+            "foto-{$unique}.jpg",
+            $roh,
+            'image/jpeg'
+        );
+
+        $stmt = \App\Database::getInstance()->prepare('SELECT id, file_name, file_mime FROM `plugin_gesundheitstests` WHERE test_type = ?');
+        $stmt->execute(["Foto-Befund-{$unique}"]);
+        $zeile = $stmt->fetch(\PDO::FETCH_ASSOC);
+        $this->assertIsArray($zeile, 'Der Eintrag muss angelegt sein.');
+        $this->assertSame('image/jpeg', $zeile['file_mime'], 'Das Foto muss angenommen worden sein.');
+
+        $abgelegt = (string) file_get_contents(\FRAMEWORK_VENDOR_DIR . '/storage/plugin_gesundheitstests/' . $zeile['file_name']);
+        $this->assertNotSame('', $abgelegt);
+        $this->assertStringNotContainsString('GPSKAMERA', $abgelegt, 'In der Ablage darf kein EXIF mehr stehen.');
+        $this->assertStringNotContainsString('Testmodell', $abgelegt);
+
+        foreach (['Verwaltung' => $admin, 'Gast' => $this->newClient()] as $wer => $client) {
+            $antwort = $client->get('/plugin/gesundheitstests/download?id=' . $zeile['id']);
+            $this->assertSame(200, $antwort->statusCode, $wer);
+            $this->assertSame('image/jpeg', $antwort->header('Content-Type'), $wer);
+            $this->assertStringNotContainsString('GPSKAMERA', $antwort->body, $wer);
+            $this->assertSame(strlen($antwort->body), (int) $antwort->header('Content-Length'), $wer);
+        }
+    }
+
+    /**
+     * GHSA-v26w-vc3j-wm5x: Fotos, die vor dem Fix abgelegt wurden, tragen
+     * ihre Metadaten noch in der Ablage. Die Auslieferung bereinigt sie.
+     */
+    public function testAltbestandFotoWirdBeiDerAuslieferungBereinigt(): void {
+        $admin = $this->authenticatedClient();
+        $this->enablePlugin($admin);
+
+        $unique = uniqid();
+        $horseId = $this->createHorse($admin, "GTestAltfoto-{$unique}", ['status' => 'active']);
+        $storageDir = \FRAMEWORK_VENDOR_DIR . '/storage/plugin_gesundheitstests';
+        if (!is_dir($storageDir)) {
+            mkdir($storageDir, 0750, true);
+        }
+        $fileName = "gtest_functional_{$unique}.jpg";
+        file_put_contents($storageDir . '/' . $fileName, base64_decode(self::JPEG_MIT_GPS));
+
+        $db = \App\Database::getInstance();
+        $db->prepare(
+            'INSERT INTO `plugin_gesundheitstests`
+                (horse_id, test_type, file_name, file_original_name, file_mime, is_public)
+             VALUES (?, ?, ?, ?, ?, 1)'
+        )->execute([$horseId, "Altfoto-{$unique}", $fileName, "alt-{$unique}.jpg", 'image/jpeg']);
+        $entryId = (int) $db->lastInsertId();
+
+        $antwort = $this->newClient()->get("/plugin/gesundheitstests/download?id={$entryId}");
+        $this->assertSame(200, $antwort->statusCode);
+        $this->assertStringStartsWith("\xFF\xD8", $antwort->body);
+        $this->assertStringNotContainsString('GPSKAMERA', $antwort->body);
+        $this->assertStringNotContainsString('Testmodell', $antwort->body);
     }
 
     /**

@@ -21,6 +21,16 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   unverschlüsselt zu verbinden. Auf Kernen ab 0.9.1-beta.1 baut der Kern die
   Verbindung, für sie ändert sich nichts.
 
+- **`gesundheitstests` (1.3.1): Befundfotos ohne GPS- und Kameradaten**
+  (GHSA-v26w-vc3j-wm5x, niedrig). Hochgeladene Bilder wurden bisher
+  byteweise abgelegt und ausgeliefert. Bei Einträgen, die öffentlich
+  freigegeben sind, konnte deshalb jeder Besucher die GPS-Position der
+  Aufnahme auslesen, dazu Zeitpunkt und Kamera. Jetzt entfernt das Addon
+  diese Metadaten vor der Ablage, wie es der Kern bei Pferdefotos tut (Audit
+  M21, `App\Service\BildMetadaten`). Ältere Bilder in der Ablage werden beim
+  Abruf bereinigt. Kerne ohne `BildMetadaten` (vor 0.9.1-beta.1) nehmen nur
+  noch PDFs an, und ältere Bilder bekommt dort nur die Verwaltung.
+
 ## [0.9.1-beta.2] – 2026-11-15
 
 Vorabversion zur Kern-Beta 0.9.1-beta.2. Neu gegenüber 0.9.1-beta.1:

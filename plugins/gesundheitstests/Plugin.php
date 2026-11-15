@@ -789,7 +789,21 @@ class VerwaltungController extends BaseController {
         }
 
         $filename = 'gtest_' . time() . '_' . bin2hex(random_bytes(8)) . '.' . $allowedMimeTypes[$mime];
-        if (!move_uploaded_file($file['tmp_name'], $storageDir . '/' . $filename)) {
+        if (Bildbereinigung::istBild($mime)) {
+            // Fotos von Befunden tragen oft GPS-Position, Aufnahmezeit und
+            // Kamera im EXIF-/XMP-Block. Sie werden VOR der Ablage entfernt,
+            // wie bei Pferdefotos im Kern (Audit M21, GHSA-v26w-vc3j-wm5x).
+            // Ohne Bereinigung landet kein Bild in der Ablage.
+            if (!is_uploaded_file($file['tmp_name'])) {
+                return null;
+            }
+            $bytes = @file_get_contents($file['tmp_name']);
+            $sauber = $bytes === false ? null : Bildbereinigung::bereinigt($bytes, Bildbereinigung::kernBereiniger());
+            @unlink($file['tmp_name']);
+            if ($sauber === null || !Bildbereinigung::schreibeAtomar($storageDir . '/' . $filename, $sauber)) {
+                return null;
+            }
+        } elseif (!move_uploaded_file($file['tmp_name'], $storageDir . '/' . $filename)) {
             return null;
         }
 
@@ -800,6 +814,59 @@ class VerwaltungController extends BaseController {
             'original' => mb_substr(basename((string) $file['name']), 0, 255),
             'mime' => $mime,
         ];
+    }
+}
+
+/**
+ * Entfernt Metadaten (EXIF mit GPS, XMP, IPTC, Vorschaubilder) aus
+ * hochgeladenen Befundfotos (GHSA-v26w-vc3j-wm5x). Die eigentliche Arbeit
+ * macht App\Service\BildMetadaten aus dem Kern (Audit M21, ab Kern
+ * 0.9.1-beta.1): ein Strukturparser mit Positivliste, der Farbprofil und
+ * Ausrichtung erhält. Kerne ohne BildMetadaten nehmen keine Bilder mehr an,
+ * PDFs bleiben möglich.
+ */
+final class Bildbereinigung {
+
+    public const BILDTYPEN = ['image/jpeg', 'image/png', 'image/webp'];
+
+    public static function istBild(string $mime): bool {
+        return in_array($mime, self::BILDTYPEN, true);
+    }
+
+    /** @return (callable(string): ?string)|null */
+    public static function kernBereiniger(): ?callable {
+        return class_exists(\App\Service\BildMetadaten::class)
+            ? [\App\Service\BildMetadaten::class, 'bereinigeBytes']
+            : null;
+    }
+
+    /**
+     * Die bereinigten Bytes, oder null, wenn es keinen Bereiniger gibt oder
+     * die Datei nicht lesbar ist.
+     *
+     * @param (callable(string): ?string)|null $bereiniger
+     */
+    public static function bereinigt(string $bytes, ?callable $bereiniger): ?string {
+        if ($bereiniger === null || $bytes === '') {
+            return null;
+        }
+        $sauber = $bereiniger($bytes);
+        return is_string($sauber) && $sauber !== '' ? $sauber : null;
+    }
+
+    /** Schreibt über eine Zwischendatei im selben Verzeichnis und rename(). */
+    public static function schreibeAtomar(string $ziel, string $inhalt): bool {
+        $zwischen = $ziel . '.tmp-' . bin2hex(random_bytes(4));
+        if (@file_put_contents($zwischen, $inhalt, LOCK_EX) !== strlen($inhalt)) {
+            @unlink($zwischen);
+            return false;
+        }
+        @chmod($zwischen, 0640);
+        if (!@rename($zwischen, $ziel)) {
+            @unlink($zwischen);
+            return false;
+        }
+        return true;
     }
 }
 
@@ -872,11 +939,29 @@ class DownloadController extends BaseController {
         // Nur ASCII-sicheren Dateinamen im Header verwenden.
         $safeName = preg_replace('/[^A-Za-z0-9._-]/', '_', $originalName) ?: 'dokument';
 
-        header('Content-Type: ' . ($entry['file_mime'] ?: 'application/octet-stream'));
-        header('Content-Length: ' . (string) filesize($path));
+        // Bilder, die vor GHSA-v26w-vc3j-wm5x abgelegt wurden, tragen noch
+        // ihre Metadaten. Sie werden deshalb auch bei der Auslieferung
+        // bereinigt. Gelingt das nicht (unlesbare Datei, Kern ohne
+        // BildMetadaten), bekommt nur die Verwaltung das Original.
+        $mime = (string) ($entry['file_mime'] ?: 'application/octet-stream');
+        $inhalt = null;
+        if (Bildbereinigung::istBild($mime)) {
+            $bytes = @file_get_contents($path);
+            $inhalt = $bytes === false ? null : Bildbereinigung::bereinigt($bytes, Bildbereinigung::kernBereiniger());
+            if ($inhalt === null && !$managerAccess) {
+                $this->renderNotFound('Dokument nicht gefunden.');
+            }
+        }
+
+        header('Content-Type: ' . $mime);
+        header('Content-Length: ' . (string) ($inhalt !== null ? strlen($inhalt) : filesize($path)));
         header('Content-Disposition: attachment; filename="' . $safeName . '"');
         header('X-Content-Type-Options: nosniff');
-        readfile($path);
+        if ($inhalt !== null) {
+            echo $inhalt;
+        } else {
+            readfile($path);
+        }
         exit;
     }
 }
