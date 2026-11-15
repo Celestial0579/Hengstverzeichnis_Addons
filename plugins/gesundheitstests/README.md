@@ -41,7 +41,8 @@ automatischer Veröffentlichung:
   gleiches Muster wie `HorseController::handleImageUpload()` im Kern.
 - Seit 1.3.1 verlieren Fotos ihre Metadaten (GPS-Position, Aufnahmezeit,
   Kamera, XMP, Vorschaubilder), bevor sie in die Ablage kommen. Bilder, die
-  schon früher abgelegt wurden, werden beim Abruf bereinigt
+  schon früher abgelegt wurden, werden beim Abruf bereinigt und seit 1.3.2
+  bei der Aktivierung bzw. nach dem Update einmal auch in der Ablage (#233)
   (GHSA-v26w-vc3j-wm5x). Die Arbeit macht `App\Service\BildMetadaten` aus
   dem Kern (Audit M21). Kerne vor 0.9.1-beta.1 haben diese Klasse nicht und
   nehmen deshalb nur noch PDFs an. Gäste bekommen dort auch keine älteren

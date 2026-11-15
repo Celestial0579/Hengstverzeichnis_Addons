@@ -18,6 +18,39 @@ class GesundheitstestsBildbereinigungTest extends TestCase {
     /** 8x8-JPEG mit EXIF: Make "GPSKAMERA", Model "Testmodell" und GPS-Position. */
     public const JPEG_MIT_GPS = '/9j/4AAQSkZJRgABAQAAAQABAAD/4QC2RXhpZgAATU0AKgAAAAgAAwEPAAIAAAAKAAAAMgEQAAIAAAALAAAAPIglAAQAAAABAAAASAAAAABHUFNLQU1FUkEAVGVzdG1vZGVsbAAAAAQAAQACAAAAAk4AAAAAAgAFAAAAAwAAAH4AAwACAAAAAkUAAAAABAAFAAAAAwAAAJYAAAAAAAAANQAAAAEAAAAEAAAAAQAAAAwAAAABAAAACAAAAAEAAAAwAAAAAQAAAB4AAAAB/9sAQwAGBAUGBQQGBgUGBwcGCAoQCgoJCQoUDg8MEBcUGBgXFBYWGh0lHxobIxwWFiAsICMmJykqKRkfLTAtKDAlKCko/9sAQwEHBwcKCAoTCgoTKBoWGigoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgo/8AAEQgACAAIAwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/aAAwDAQACEQMRAD8A84ooorwj6U//2Q==';
 
+    /** 8x8-PNG mit eXIf-Chunk (Make "GPSKAMERA", GPS) und tEXt-Kommentar mit "GPSKAMERA". */
+    public const PNG_MIT_GPS = 'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAG3RFWHRDb21tZW50AEdQU0tBTUVSQSBLb21tZW50YXJZH+QWAAAAfmVYSWZNTQAqAAAACAADAQ8AAgAAAAoAAAAyARAAAgAAAAsAAAA8iCUABAAAAAEAAABIAAAAAEdQU0tBTUVSQQBUZXN0bW9kZWxsAAAAAgABAAIAAAACTgAAAAACAAUAAAADAAAAZgAAAAAAAAA1AAAAAQAAAAQAAAABAAAADAAAAAGUZ1OHAAAAFElEQVR4nGOUi1rAgA0wYRUdtBIA3xYBKJ8tkFUAAAAASUVORK5CYII=';
+
+    /** 8x8-WebP (VP8X) mit EXIF-Chunk (Make "GPSKAMERA", GPS) und XMP mit "GPSKAMERA-XMP". */
+    public const WEBP_MIT_GPS = 'UklGRuIAAABXRUJQVlA4WAoAAAAMAAAABwAABwAAVlA4TBEAAAAvB8ABAAdQrXoUtP+BiOh/AABFWElGfgAAAE1NACoAAAAIAAMBDwACAAAACgAAADIBEAACAAAACwAAADyIJQAEAAAAAQAAAEgAAAAAR1BTS0FNRVJBAFRlc3Rtb2RlbGwAAAACAAEAAgAAAAJOAAAAAAIABQAAAAMAAABmAAAAAAAAADUAAAABAAAABAAAAAEAAAAMAAAAAVhNUCAkAAAAPHg6eG1wbWV0YT5HUFNLQU1FUkEtWE1QPC94OnhtcG1ldGE+';
+
+    /** @return array<string, array{0: string, 1: int}> */
+    public static function bildformate(): array {
+        return [
+            'JPEG' => [self::JPEG_MIT_GPS, IMAGETYPE_JPEG],
+            'PNG' => [self::PNG_MIT_GPS, IMAGETYPE_PNG],
+            'WebP' => [self::WEBP_MIT_GPS, IMAGETYPE_WEBP],
+        ];
+    }
+
+    /** #233: Alle drei angenommenen Formate verlieren ihre Metadaten, Maße und Typ bleiben. */
+    #[\PHPUnit\Framework\Attributes\DataProvider('bildformate')]
+    public function testJedesAngenommeneFormatVerliertSeineMetadaten(string $b64, int $typ): void {
+        $bereiniger = Bildbereinigung::kernBereiniger();
+        if ($bereiniger === null) {
+            $this->markTestSkipped('Kern ohne App\\Service\\BildMetadaten');
+        }
+        $roh = base64_decode($b64);
+        $this->assertStringContainsString('GPSKAMERA', $roh, 'Testbild muss Metadaten tragen');
+
+        $sauber = Bildbereinigung::bereinigt($roh, $bereiniger);
+        $this->assertNotNull($sauber);
+        $this->assertStringNotContainsString('GPSKAMERA', $sauber);
+        $this->assertStringNotContainsString('Testmodell', $sauber);
+        $groesse = getimagesizefromstring($sauber);
+        $this->assertSame([8, 8, $typ], [$groesse[0], $groesse[1], $groesse[2]]);
+    }
+
     public function testNurJpegPngWebpGeltenAlsBild(): void {
         $this->assertTrue(Bildbereinigung::istBild('image/jpeg'));
         $this->assertTrue(Bildbereinigung::istBild('image/png'));

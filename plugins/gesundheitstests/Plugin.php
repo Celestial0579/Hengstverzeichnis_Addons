@@ -194,6 +194,64 @@ class Plugin {
         );
 
         $this->verwaisteDokumenteEntfernen();
+        $this->bildbestandBereinigen();
+    }
+
+    /**
+     * #233: Bilder, die vor 1.3.1 abgelegt wurden, tragen noch ihre
+     * Metadaten (GPS, Aufnahmezeit, Kamera) in der Ablage und damit in jeder
+     * Sicherung und jedem Export. install() läuft bei der Aktivierung und
+     * nach einem Update einmal; dann wird der Bestand an Ort und Stelle
+     * bereinigt (BildMetadaten::bereinigeDatei(): atomar, schreibt nur bei
+     * einer Änderung, eine bereinigte Datei bleibt bytegleich). Die
+     * Bereinigung bei der Auslieferung bleibt als Sicherheitsnetz.
+     *
+     * Ohne BildMetadaten (Kern vor 0.9.1-beta.1) geschieht nichts. Eine
+     * Aktivierung darf nie an der Bereinigung scheitern, deshalb fängt die
+     * Methode alles ab.
+     */
+    private function bildbestandBereinigen(): void {
+        if (!class_exists(\App\Service\BildMetadaten::class)) {
+            return;
+        }
+        try {
+            $ablage = self::storageDir();
+            // Feste SQL ohne zusammengesetzte IN-Liste, der Typfilter läuft in PHP.
+            $zeilen = Database::getInstance()->query(
+                'SELECT file_name, file_mime FROM `plugin_gesundheitstests` WHERE file_name IS NOT NULL'
+            )->fetchAll(PDO::FETCH_ASSOC);
+
+            $zaehler = ['bereinigt' => 0, 'unlesbar' => 0, 'schreibfehler' => 0];
+            foreach ($zeilen as $zeile) {
+                if (!Bildbereinigung::istBild((string) ($zeile['file_mime'] ?? ''))) {
+                    continue;
+                }
+                $name = (string) $zeile['file_name'];
+                $pfad = $ablage . '/' . basename((string) $name);
+                if (!is_file($pfad) || is_link($pfad)) {
+                    continue;
+                }
+                $ergebnis = \App\Service\BildMetadaten::bereinigeDatei($pfad);
+                if (isset($zaehler[$ergebnis])) {
+                    $zaehler[$ergebnis]++;
+                }
+            }
+
+            if ($zaehler['bereinigt'] + $zaehler['unlesbar'] + $zaehler['schreibfehler'] > 0) {
+                AuditLogger::log(
+                    'Gesundheitstest-Bilder bereinigt',
+                    'gesundheitstests',
+                    sprintf(
+                        'Metadaten aus dem Bestand entfernt: %d bereinigt, %d unlesbar, %d Schreibfehler',
+                        $zaehler['bereinigt'],
+                        $zaehler['unlesbar'],
+                        $zaehler['schreibfehler']
+                    )
+                );
+            }
+        } catch (\Throwable $e) {
+            // Kein Bestand lesbar - die Auslieferung bereinigt weiterhin.
+        }
     }
 
     /** Muster der selbst vergebenen Ablagenamen, siehe handleDocumentUpload(). */
