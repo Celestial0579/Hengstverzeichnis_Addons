@@ -8,6 +8,14 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+## [0.9.1-beta.2] – 2026-11-15
+
+Vorabversion zur Kern-Beta 0.9.1-beta.2. Neu gegenüber 0.9.1-beta.1:
+`mitglieder-konten` 1.3.0 (Zugangsdaten neu erzeugen, eigenes Recht, ab Werk
+nur Admins) und `datenmigration` 1.3.1 (Wartungsmarker und Importverbindung
+über den Kern). Getestet gegen den Kern-Stand `c3cd2f9` mit dem Fix für
+GHSA-jpw7-6m4r-v92q. Alle 36 Addons bleiben bei der Kern-Linie 0.9.
+
 ### Hinzugefügt
 
 - **`mitglieder-konten` (1.3.0): Zugangsdaten neu erzeugen und zustellen**
