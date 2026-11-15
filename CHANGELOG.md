@@ -8,6 +8,16 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+## [0.9.1] – 2026-11-15
+
+**Der Addon-Stand zur Kern-Freigabe v0.9.1.** Was in `v0.9.1-beta.1` und
+`v0.9.1-beta.2` entstanden ist, gilt ab hier als freigegeben, darunter der Fix
+für GHSA-cc6v-96f4-h9cv in `mitglieder-konten`. Der Addon-Katalog des Kerns
+bietet nur Releases ohne Vorabsuffix an; erst mit diesem Release kommen die
+Änderungen bei allen Installationen an. Neu gegenüber `v0.9.1-beta.2` sind die
+beiden Punkte in diesem Abschnitt. Alle 36 Addons bleiben bei der Kern-Linie
+0.9.
+
 ### Sicherheit
 
 - **`datenmigration` (1.3.2): Importverbindung auf älteren Kernen ohne
