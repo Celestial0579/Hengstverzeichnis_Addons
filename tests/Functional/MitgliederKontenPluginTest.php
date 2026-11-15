@@ -1109,6 +1109,95 @@ class MitgliederKontenPluginTest extends FunctionalTestCase {
         $this->assertSame($zweite, Konfiguration::angehalten()['sperren']['ids'] ?? null);
     }
 
+    // ---- Zugangsdaten neu erzeugen (#226) -----------------------------
+
+    /** @return array{must_change_password:int, session_version:int, password_hash:string} */
+    private function kontoSicherheit(int $userId): array {
+        $stmt = Database::getInstance()->prepare('SELECT must_change_password, session_version, password_hash FROM users WHERE id = ?');
+        $stmt->execute([$userId]);
+        $z = $stmt->fetch(\PDO::FETCH_ASSOC);
+        return ['must_change_password' => (int)$z['must_change_password'], 'session_version' => (int)$z['session_version'], 'password_hash' => (string)$z['password_hash']];
+    }
+
+    /**
+     * Erneuerbar ist nur ein unbenutztes Konto in reinen Lesegruppen. Je eine
+     * Grenze: schreibende Gruppe, Anmeldung im Protokoll, Passwort schon
+     * selbst gewechselt, gesperrt.
+     */
+    public function testErneuerbarSindNurUnbenutzteKontenInLesegruppen(): void {
+        $admin = $this->authenticatedClient();
+        $this->einrichten($admin, 'MK 226');
+        $konten = $this->kontenAnlegen([9601, 9602, 9603, 9604, 9605], 96010);
+        $db = Database::getInstance();
+
+        $schreibend = $this->schreibGruppeAnlegen($admin, 'Schreibgruppe 226 ' . substr(uniqid(), -6));
+        $db->prepare('INSERT INTO user_groups (user_id, group_id) VALUES (?, ?)')->execute([$konten[9602], $schreibend]);
+        $db->prepare("INSERT INTO audit_logs (user_id, username, action, category, details) VALUES (?, '9603', 'Benutzer eingeloggt', 'auth', 'Test')")
+            ->execute([$konten[9603]]);
+        $db->prepare('UPDATE users SET must_change_password = 0 WHERE id = ?')->execute([$konten[9604]]);
+        $this->sperren('9605', 'Test');
+
+        $erneuerbar = Abgleich::erneuerbareKonten(array_values($konten));
+
+        $this->assertSame([$konten[9601]], array_keys($erneuerbar));
+    }
+
+    public function testNeueZugangsdatenBeendenSitzungenUndSchluesselUndGehenHinaus(): void {
+        $admin = $this->authenticatedClient();
+        $this->einrichten($admin, 'MK 226');
+        $konten = $this->kontenAnlegen([9611, 9612], 96110);
+        $db = Database::getInstance();
+        $db->prepare("INSERT INTO audit_logs (user_id, username, action, category, details) VALUES (?, '9612', 'Benutzer eingeloggt', 'auth', 'Test')")
+            ->execute([$konten[9612]]);
+        \App\Security\ApiKey::create($konten[9611], 'Test 226', null);
+        $vorher = $this->kontoSicherheit($konten[9611]);
+        $benutzt = $this->kontoSicherheit($konten[9612]);
+        $mailer = $this->mailer();
+
+        $ergebnis = Abgleich::zugangsdatenNeu([$konten[9611], $konten[9612]], $mailer);
+
+        $this->assertSame(1, $ergebnis['erneuert'], implode(' | ', $ergebnis['fehler']));
+        $this->assertSame(1, $ergebnis['abgewiesen'], 'Das angemeldete Konto bekommt kein fremdes Passwort.');
+        $nachher = $this->kontoSicherheit($konten[9611]);
+        $this->assertNotSame($vorher['password_hash'], $nachher['password_hash']);
+        $this->assertSame($vorher['session_version'] + 1, $nachher['session_version'], 'Sitzungen enden.');
+        $this->assertSame(1, $nachher['must_change_password']);
+        $this->assertSame(0, \App\Security\ApiKey::countActive($konten[9611]), 'API-Schluessel sind widerrufen.');
+        $this->assertSame($benutzt, $this->kontoSicherheit($konten[9612]));
+        $this->assertCount(1, $mailer->passwoerter);
+        $this->assertTrue(password_verify($mailer->passwoerter[0], $nachher['password_hash']));
+        $protokoll = $this->letztesAudit('Zugangsdaten neu erzeugt');
+        $this->assertStringContainsString('9611', $protokoll);
+        $this->assertStringNotContainsString($mailer->passwoerter[0], $protokoll);
+    }
+
+    /** Nur ein Admin: Die Geschaeftsstelle mit `manage` sieht die Aktion nicht und wird abgewiesen. */
+    public function testNurAdminsDuerfenZugangsdatenNeuErzeugen(): void {
+        $admin = $this->authenticatedClient();
+        $this->einrichten($admin, 'MK 226');
+        $konten = $this->kontenAnlegen([9621], 96210);
+        $x = substr(uniqid(), -6);
+        $stelle = $this->leseGruppeAnlegen($admin, "Geschaeftsstelle Z {$x}");
+        $this->setGroupPermissions($admin, $stelle, ['mitglieder_konten' => ['manage']]);
+        $this->aufraeumen[] = "gsz{$x}";
+        $stelleClient = $this->createAndLoginEditor($admin, "gsz{$x}", "gsz-{$x}@example.org", [$stelle]);
+        $vorher = $this->kontoSicherheit($konten[9621]);
+
+        $seite = $stelleClient->get('/plugin/mitglieder-konten/verwaltung');
+        $this->assertSame(200, $seite->statusCode);
+        $this->assertStringNotContainsString('zugangsdaten-neu', $seite->body);
+        $csrf = $this->csrfTokenFrom($stelleClient, '/plugin/mitglieder-konten/verwaltung');
+        $antwort = $stelleClient->post('/plugin/mitglieder-konten/verwaltung/zugangsdaten-neu', [
+            'csrf_token' => $csrf, 'user_ids' => [(string)$konten[9621]],
+        ]);
+        $this->assertSame(403, $antwort->statusCode, "Body: {$antwort->body}");
+        $this->assertSame($vorher, $this->kontoSicherheit($konten[9621]));
+
+        $adminSeite = $admin->get('/plugin/mitglieder-konten/verwaltung');
+        $this->assertStringContainsString('zugangsdaten-neu', $adminSeite->body);
+        $this->assertStringContainsString('value="' . $konten[9621] . '"', $adminSeite->body);
+    }
+
     /** Bestaetigen darf nur ein Admin, mit CSRF-Token und fuer die angezeigte Menge. */
     public function testNurAdminsDuerfenBestaetigen(): void {
         $admin = $this->authenticatedClient();

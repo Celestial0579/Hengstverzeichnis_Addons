@@ -145,9 +145,20 @@ kann das Addon nicht aufheben.)
 **Versandfehler werden gemeldet.** Scheitert die Willkommensmail oder die
 Sammelmail an das Verwaltungsteam, oder ist keine Team-Adresse hinterlegt,
 nennt die Verwaltung die betroffenen Benutzernamen, und das Protokoll hält
-den Fall fest — nie mit Passwort. Ein Weg „Zugangsdaten neu erzeugen und
-versenden" fehlt noch (Folge-Issue); bis dahin setzt ein Admin das Passwort
-neu, bei Konten mit Adresse geht auch „Passwort vergessen".
+den Fall fest — nie mit Passwort.
+
+**Zugangsdaten neu erzeugen** (seit 1.3.0, #226). Ein Admin findet auf der
+Verwaltungsseite die Konten, deren Zugangsdaten sich neu erzeugen lassen, und
+stellt sie für eine Auswahl neu zu, auf demselben Weg wie bei der Anlage.
+Erneuerbar ist nur ein Konto, das dieses Addon angelegt hat, das
+ausschließlich in Lesegruppen ist, nicht gesperrt ist und sich noch nie
+angemeldet hat (Passwortwechsel noch erzwungen, keine Anmeldung im
+Protokoll). Sitzungen, offene Mailcodes, ein offener Adressantrag und die
+API-Schlüssel des Kontos enden wie bei jeder Neusetzung durch die
+Verwaltung; der Wechsel bei der nächsten Anmeldung bleibt erzwungen. Mit dem
+Recht `mitglieder_konten.manage` allein geht das nicht: Über die Sammelmail
+bekäme sonst die Geschäftsstelle die neuen Passwörter. Für jedes andere Konto
+setzt ein Admin das Passwort unter *Benutzer*.
 
 **Der tägliche Lauf legt nichts an.** Er fragt den Status der zugeordneten
 Mitgliedschaften **gezielt per ID** ab, ohne den Filter „Mitgliedschaftsarten"
