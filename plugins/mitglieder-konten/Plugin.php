@@ -76,8 +76,9 @@
 //
 //  8. VERSANDFEHLER WERDEN GEMELDET (Audit N31) - in der Verwaltung und im
 //     Protokoll, mit Benutzernamen, nie mit Passwort. Seit 1.3.0 (#226) kann
-//     ein Admin die Zugangsdaten unbenutzter Konten in Lesegruppen neu
-//     erzeugen und zustellen (Abgleich::zugangsdatenNeu()).
+//     wer das Recht zugangsdaten_erneuern hat (ab Werk nur Admins), die
+//     Zugangsdaten unbenutzter Konten in Lesegruppen neu erzeugen und
+//     zustellen (Abgleich::zugangsdatenNeu()).
 //
 //  9. EIN STAPEL, EINE MAILVERBINDUNG (seit 1.2.0, #223). Die Zugangsdaten
 //     gehen über Mailer::inEinerSitzung() des Kerns hinaus, sobald es die
@@ -112,6 +113,8 @@ class Plugin {
 
     public const SLUG = 'mitglieder-konten';
     public const MODUL = 'mitglieder_konten';
+    /** Recht fuer "Zugangsdaten neu erzeugen" (#226). */
+    public const RECHT_ERNEUERN = 'zugangsdaten_erneuern';
     public const VERWALTUNG = '/plugin/mitglieder-konten/verwaltung';
 
     /** Name der taeglichen Aufgabe im Scheduler des Kerns. */
@@ -182,6 +185,15 @@ class Plugin {
                 'label' => 'Mitglieder-Konten ansehen und anlegen',
                 'module_label' => 'Mitglieder-Konten',
             ],
+            [
+                // #226: Ab Werk nur Administratoren (die haben jedes Recht).
+                // Wer es einer Gruppe gibt, gibt ihr neue Passwoerter fremder
+                // Konten - die Grenzen stehen in Abgleich::erneuerbareKonten().
+                'module' => self::MODUL,
+                'action' => self::RECHT_ERNEUERN,
+                'label' => 'Zugangsdaten unbenutzter Konten neu erzeugen und zustellen',
+                'module_label' => 'Mitglieder-Konten',
+            ],
         ];
     }
 
@@ -211,7 +223,7 @@ class Plugin {
             ['method' => 'POST', 'path' => '/verwaltung/anlegen',    'callback' => [VerwaltungController::class, 'anlegen']],
             // Nur Admin (N30) - die Pruefung steht im Controller.
             ['method' => 'POST', 'path' => '/verwaltung/sperren-bestaetigen', 'callback' => [VerwaltungController::class, 'sperrenBestaetigen']],
-            // Nur Admin (#226) - die Pruefung steht im Controller.
+            // Eigenes Recht, ab Werk nur Admin (#226) - Pruefung im Controller.
             ['method' => 'POST', 'path' => '/verwaltung/zugangsdaten-neu', 'callback' => [VerwaltungController::class, 'zugangsdatenNeu']],
         ];
     }
@@ -1946,12 +1958,13 @@ class VerwaltungController extends BaseController {
     }
 
     /**
-     * Zugangsdaten neu erzeugen und zustellen (#226). NUR ADMIN: Mit `manage`
-     * allein bekaeme die Geschaeftsstelle ueber die Sammelmail die neuen
-     * Passwoerter aller Konten ohne eigene Adresse.
+     * Zugangsdaten neu erzeugen und zustellen (#226). Eigenes Recht, ab Werk
+     * nur fuer Administratoren: Mit `manage` allein bekaeme die
+     * Geschaeftsstelle ueber die Sammelmail die neuen Passwoerter aller
+     * Konten ohne eigene Adresse. Ein Admin kann es einer Gruppe geben.
      */
     public function zugangsdatenNeu(): void {
-        $this->requireAdmin();
+        $this->requirePermission(Plugin::MODUL, Plugin::RECHT_ERNEUERN);
         $this->pruefeCsrf();
 
         $auswahl = array_map('intval', (array)($_POST['user_ids'] ?? []));
@@ -2040,11 +2053,11 @@ class VerwaltungController extends BaseController {
     }
 
     /**
-     * Konten, deren Zugangsdaten sich neu erzeugen lassen (#226) - nur fuer
-     * Admins und nur, wenn es welche gibt.
+     * Konten, deren Zugangsdaten sich neu erzeugen lassen (#226) - nur mit
+     * dem Recht dazu und nur, wenn es welche gibt.
      */
     private function erneuernKarte(): string {
-        if (!$this->isAdmin()) {
+        if (!$this->hasPermission(Plugin::MODUL, Plugin::RECHT_ERNEUERN)) {
             return '';
         }
         $konten = array_slice(Abgleich::erneuerbareKonten(), 0, Abgleich::MAX_JE_STAPEL, true);

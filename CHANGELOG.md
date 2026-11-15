@@ -13,8 +13,9 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 - **`mitglieder-konten` (1.3.0): Zugangsdaten neu erzeugen und zustellen**
   (#226). Scheitert nach einer Anlage die Zustellung, musste bisher ein Admin
   jedes Passwort einzeln setzen. Jetzt stellt ein Admin die Zugangsdaten für
-  eine Auswahl neu zu, auf demselben Weg wie bei der Anlage. Nur für Admins
-  und nur für Konten aus diesem Addon in reinen Lesegruppen, die sich noch nie
+  eine Auswahl neu zu, auf demselben Weg wie bei der Anlage. Eigenes Recht
+  `mitglieder_konten.zugangsdaten_erneuern`, ab Werk nur Administratoren, und
+  nur für Konten aus diesem Addon in reinen Lesegruppen, die sich noch nie
   angemeldet haben; Sitzungen und API-Schlüssel des Kontos enden
   (Entscheidung von Tim, 15.11.2026).
 

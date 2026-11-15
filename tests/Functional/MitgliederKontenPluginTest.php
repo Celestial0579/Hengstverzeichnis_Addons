@@ -1171,8 +1171,11 @@ class MitgliederKontenPluginTest extends FunctionalTestCase {
         $this->assertStringNotContainsString($mailer->passwoerter[0], $protokoll);
     }
 
-    /** Nur ein Admin: Die Geschaeftsstelle mit `manage` sieht die Aktion nicht und wird abgewiesen. */
-    public function testNurAdminsDuerfenZugangsdatenNeuErzeugen(): void {
+    /**
+     * Eigenes Recht: Die Geschaeftsstelle mit `manage` allein sieht die
+     * Aktion nicht und wird abgewiesen; mit dem zugewiesenen Recht darf sie.
+     */
+    public function testZugangsdatenNeuVerlangtEinEigenesRecht(): void {
         $admin = $this->authenticatedClient();
         $this->einrichten($admin, 'MK 226');
         $konten = $this->kontenAnlegen([9621], 96210);
@@ -1196,6 +1199,17 @@ class MitgliederKontenPluginTest extends FunctionalTestCase {
         $adminSeite = $admin->get('/plugin/mitglieder-konten/verwaltung');
         $this->assertStringContainsString('zugangsdaten-neu', $adminSeite->body);
         $this->assertStringContainsString('value="' . $konten[9621] . '"', $adminSeite->body);
+
+        // Ein Admin gibt der Gruppe das Recht - dann darf sie.
+        $this->setGroupPermissions($admin, $stelle, ['mitglieder_konten' => ['manage', 'zugangsdaten_erneuern']]);
+        $seite = $stelleClient->get('/plugin/mitglieder-konten/verwaltung');
+        $this->assertStringContainsString('zugangsdaten-neu', $seite->body);
+        $antwort = $stelleClient->post('/plugin/mitglieder-konten/verwaltung/zugangsdaten-neu', [
+            'csrf_token' => $this->csrfTokenFrom($stelleClient, '/plugin/mitglieder-konten/verwaltung'),
+            'user_ids' => [(string)$konten[9621]],
+        ]);
+        $this->assertSame(302, $antwort->statusCode, "Body: {$antwort->body}");
+        $this->assertNotSame($vorher['password_hash'], $this->kontoSicherheit($konten[9621])['password_hash']);
     }
 
     /** Bestaetigen darf nur ein Admin, mit CSRF-Token und fuer die angezeigte Menge. */
