@@ -424,6 +424,105 @@ class GesundheitstestsPluginTest extends FunctionalTestCase {
         }
     }
 
+    /** @return array<string, array{0: string, 1: string, 2: string}> */
+    public static function weitereBildformate(): array {
+        return [
+            'PNG' => [\Tests\Unit\GesundheitstestsBildbereinigungTest::PNG_MIT_GPS, 'image/png', 'png'],
+            'WebP' => [\Tests\Unit\GesundheitstestsBildbereinigungTest::WEBP_MIT_GPS, 'image/webp', 'webp'],
+        ];
+    }
+
+    /** #233: Auch PNG und WebP kommen ohne Metadaten in die Ablage und zum Gast. */
+    #[\PHPUnit\Framework\Attributes\DataProvider('weitereBildformate')]
+    public function testHochgeladenesPngUndWebpVerlierenIhreMetadaten(string $b64, string $mime, string $endung): void {
+        $admin = $this->authenticatedClient();
+        $this->enablePlugin($admin);
+
+        $unique = uniqid();
+        $horseId = $this->createHorse($admin, "GTestFormat-{$unique}", ['status' => 'active']);
+        $form = $admin->get('/admin/horses/edit?id=' . $horseId);
+        $admin->postFile(
+            self::ALTE_SEITE . '/store',
+            [
+                'csrf_token' => $form->formField('csrf_token') ?? '',
+                'horse_id' => (string) $horseId,
+                'test_type' => "Format-Befund-{$unique}",
+                'is_public' => '1',
+            ],
+            'document',
+            "foto-{$unique}.{$endung}",
+            base64_decode($b64),
+            $mime
+        );
+
+        $stmt = \App\Database::getInstance()->prepare('SELECT id, file_name, file_mime FROM `plugin_gesundheitstests` WHERE test_type = ?');
+        $stmt->execute(["Format-Befund-{$unique}"]);
+        $zeile = $stmt->fetch(\PDO::FETCH_ASSOC);
+        $this->assertIsArray($zeile);
+        $this->assertSame($mime, $zeile['file_mime'], 'Das Bild muss angenommen worden sein.');
+
+        $abgelegt = (string) file_get_contents(\FRAMEWORK_VENDOR_DIR . '/storage/plugin_gesundheitstests/' . $zeile['file_name']);
+        $this->assertStringNotContainsString('GPSKAMERA', $abgelegt);
+
+        $antwort = $this->newClient()->get('/plugin/gesundheitstests/download?id=' . $zeile['id']);
+        $this->assertSame(200, $antwort->statusCode);
+        $this->assertSame($mime, $antwort->header('Content-Type'));
+        $this->assertStringNotContainsString('GPSKAMERA', $antwort->body);
+    }
+
+    /**
+     * #233: Die Aktivierung (install()) bereinigt Bilder, die mit Metadaten
+     * in der Ablage liegen, an Ort und Stelle. PDFs bleiben unberührt.
+     */
+    public function testAktivierungBereinigtDenBildbestandAufDerPlatte(): void {
+        $admin = $this->authenticatedClient();
+        $this->enablePlugin($admin);
+
+        $unique = uniqid();
+        $horseId = $this->createHorse($admin, "GTestBestand-{$unique}", ['status' => 'active']);
+        $ablage = \FRAMEWORK_VENDOR_DIR . '/storage/plugin_gesundheitstests';
+        if (!is_dir($ablage)) {
+            mkdir($ablage, 0750, true);
+        }
+        $bilder = [
+            "gtest_bestand_{$unique}.jpg" => [self::JPEG_MIT_GPS, 'image/jpeg'],
+            "gtest_bestand_{$unique}.png" => [\Tests\Unit\GesundheitstestsBildbereinigungTest::PNG_MIT_GPS, 'image/png'],
+            "gtest_bestand_{$unique}.webp" => [\Tests\Unit\GesundheitstestsBildbereinigungTest::WEBP_MIT_GPS, 'image/webp'],
+        ];
+        $pdf = "gtest_bestand_{$unique}.pdf";
+        $pdfInhalt = "%PDF-1.4\n% GPSKAMERA im PDF bleibt\n";
+        $db = \App\Database::getInstance();
+        $insert = $db->prepare('INSERT INTO `plugin_gesundheitstests` (horse_id, test_type, file_name, file_mime) VALUES (?, ?, ?, ?)');
+        foreach ($bilder as $name => [$b64, $mime]) {
+            file_put_contents($ablage . '/' . $name, base64_decode($b64));
+            $insert->execute([$horseId, "Bestand-{$unique}", $name, $mime]);
+        }
+        file_put_contents($ablage . '/' . $pdf, $pdfInhalt);
+        $insert->execute([$horseId, "Bestand-{$unique}", $pdf, 'application/pdf']);
+
+        try {
+            // install() läuft bei jeder Aktivierung.
+            $admin->post('/admin/plugins/toggle', [
+                'csrf_token' => $this->currentCsrfToken($admin),
+                'slug' => self::SLUG,
+                'enable' => '0',
+            ]);
+            $this->enablePlugin($admin);
+
+            foreach (array_keys($bilder) as $name) {
+                $inhalt = (string) file_get_contents($ablage . '/' . $name);
+                $this->assertNotSame('', $inhalt, $name);
+                $this->assertStringNotContainsString('GPSKAMERA', $inhalt, "{$name} muss auf der Platte bereinigt sein.");
+            }
+            $this->assertSame($pdfInhalt, file_get_contents($ablage . '/' . $pdf), 'PDFs fasst die Bereinigung nicht an.');
+            $this->assertNotEmpty($this->protokollEintraege('Gesundheitstest-Bilder bereinigt', 'Metadaten aus dem Bestand entfernt'));
+        } finally {
+            foreach (array_merge(array_keys($bilder), [$pdf]) as $name) {
+                @unlink($ablage . '/' . $name);
+            }
+        }
+    }
+
     /**
      * GHSA-v26w-vc3j-wm5x: Fotos, die vor dem Fix abgelegt wurden, tragen
      * ihre Metadaten noch in der Ablage. Die Auslieferung bereinigt sie.

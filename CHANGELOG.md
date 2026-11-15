@@ -17,6 +17,14 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
   bricht der Import mit einer klaren Meldung ab. Auf Installationen mit
   mysqlnd ändert sich nichts.
 
+- **`gesundheitstests` (1.3.2): Bildbestand wird einmal in der Ablage
+  bereinigt** (#233). Bilder, die vor 1.3.1 hochgeladen wurden, trugen ihre
+  Metadaten weiter in `storage/plugin_gesundheitstests` und damit in jeder
+  Sicherung. Bei der Aktivierung und nach dem Update bereinigt das Addon sie
+  jetzt an Ort und Stelle über `BildMetadaten::bereinigeDatei()` aus dem
+  Kern. Das Ergebnis steht im Protokoll unter „Gesundheitstest-Bilder
+  bereinigt“. Neu sind auch Tests für PNG und WebP.
+
 ## [0.9.1] – 2026-11-15
 
 **Der Addon-Stand zur Kern-Freigabe v0.9.1.** Was in `v0.9.1-beta.1` und
