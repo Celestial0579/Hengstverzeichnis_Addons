@@ -1791,14 +1791,30 @@ final class Importregel {
 final class TlsNachbau {
 
     /**
+     * Mit denselben Treiber-Guards wie Database::tlsOptionen() im Kern (#232):
+     * Ohne pdo_mysql gibt es keine Optionen, und der PDO-Konstruktor meldet
+     * "could not find driver". Ohne mysqlnd fehlt der Prüfschalter; verlangt
+     * DB_SSL_VERIFY die Prüfung, wird abgebrochen statt still ohne Prüfung
+     * verbunden. Die beiden letzten Parameter sind nur für Tests da.
+     *
      * @param array<string, string> $orte Ergebnis von openssl_get_cert_locations()
      * @param callable(string): string $umgebung Liest eine Umgebungsvariable
      * @return array<int, mixed>
      */
-    public static function optionen(bool $ssl, string $ca, bool $verify, array $orte, callable $umgebung): array {
-        if (!$ssl) {
+    public static function optionen(
+        bool $ssl,
+        string $ca,
+        bool $verify,
+        array $orte,
+        callable $umgebung,
+        ?bool $treiberDa = null,
+        ?bool $pruefschalterDa = null
+    ): array {
+        $treiberDa ??= class_exists(\Pdo\Mysql::class);
+        if (!$ssl || !$treiberDa) {
             return [];
         }
+        $pruefschalterDa ??= defined(\Pdo\Mysql::class . '::ATTR_SSL_VERIFY_SERVER_CERT');
         $optionen = $ca !== '' ? [\Pdo\Mysql::ATTR_SSL_CA => $ca] : self::zertifikatsspeicher($orte, $umgebung);
         if ($optionen === []) {
             throw new \PDOException(
@@ -1807,7 +1823,14 @@ final class TlsNachbau {
                 . 'Verbindung liefe unverschlüsselt. DB_SSL_CA auf eine CA-Datei setzen.'
             );
         }
-        $optionen[\Pdo\Mysql::ATTR_SSL_VERIFY_SERVER_CERT] = $verify;
+        if ($pruefschalterDa) {
+            $optionen[\Pdo\Mysql::ATTR_SSL_VERIFY_SERVER_CERT] = $verify;
+        } elseif ($verify) {
+            throw new \PDOException(
+                'DB_SSL_VERIFY verlangt die Prüfung des Server-Zertifikats, der PDO-Treiber '
+                . '(pdo_mysql ohne mysqlnd) kann sie nicht einschalten.'
+            );
+        }
         return $optionen;
     }
 
@@ -1817,6 +1840,9 @@ final class TlsNachbau {
      * @return array<int, string>
      */
     public static function zertifikatsspeicher(array $orte, callable $umgebung): array {
+        if (!class_exists(\Pdo\Mysql::class)) {
+            return [];
+        }
         $dateiEnv = (string) ($orte['default_cert_file_env'] ?? 'SSL_CERT_FILE');
         $verzEnv = (string) ($orte['default_cert_dir_env'] ?? 'SSL_CERT_DIR');
         $kandidaten = [
