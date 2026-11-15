@@ -8,6 +8,13 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+## [0.9.1-beta.1] – 2026-11-15
+
+Vorabversion zur Kern-Beta 0.9.1-beta.1. Sie enthält alles seit 0.9.0, darunter
+den Fix für GHSA-cc6v-96f4-h9cv (`mitglieder-konten` 1.1.1: der tägliche
+Abgleich sperrt nur noch Konten in reinen Lesegruppen) und `mitglieder-konten`
+1.2.0. Alle 36 Addons bleiben bei der Kern-Linie 0.9.
+
 ### Sicherheit
 
 - **`mitglieder-konten` (1.1.1): Der tägliche Abgleich sperrt nur noch
