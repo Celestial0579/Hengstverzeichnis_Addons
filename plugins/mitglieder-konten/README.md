@@ -108,6 +108,21 @@ verschickt, ist nicht rückholbar. Die Vorschau zeigt je Zeile, was geschähe:
 anlegbar, hat schon ein Konto, oder der Hinderungsgrund. Je Durchgang werden
 höchstens 100 Konten angelegt.
 
+**Die Vorschau lädt auf Anforderung** (seit 1.2.0). Sie holt alle laufenden
+Mitgliedschaften aus CiviCRM — bei 1.496 Mitgliedern mehrere Abrufe, bei
+einem langsamen CiviCRM viele Sekunden. Die Verwaltungsseite zeigt deshalb
+zuerst nur den Knopf „Vorschau laden"; wer den Zugang ansehen oder eine
+angehaltene Änderung bestätigen will, wartet nicht mehr auf CiviCRM. Nach
+einer Anlage erscheint die Vorschau von selbst, damit der nächste Stapel
+gleich zu sehen ist. Zwischengespeichert wird sie nicht: Sie enthält Namen
+und Adressen aller Mitglieder, und dieses Addon hält keine Mitgliederdaten
+vor.
+
+**Die Anlage prüft nur ihre Auswahl** (seit 1.2.0). Vor dem ersten Konto
+fragt sie CiviCRM frisch — aber nur nach den ausgewählten Mitgliedschaften,
+in einem Abruf, statt den ganzen Bestand ein zweites Mal zu holen. Die Regeln
+sind dieselben wie in der Vorschau.
+
 **Keine stille Zweitanlage.** Die Zuordnung Mitgliedschafts-ID → Benutzer-ID
 steht in `plugin_mitglieder_konten_zuordnung`, mit der Mitgliedschafts-ID als
 Primärschlüssel. Ein zweiter Lauf findet die Zeile und legt nichts noch einmal
@@ -117,6 +132,15 @@ an; ein bestehendes Passwort wird nie zurückgesetzt.
 für Konten im Papierkorb. Eine Adresse, die schon einem Konto gehört, oder
 dieselbe Adresse zweimal im Stapel (etwa eine gemeinsame Familienadresse)
 erscheint vorher als „geht nicht" — nicht erst als Fehler beim Anlegen.
+
+**Ein Stapel, eine Mailverbindung** (seit 1.2.0, mit einem Kern nach
+v0.9.0). Die Zugangsdaten eines Stapels gehen über eine einzige
+SMTP-Verbindung hinaus; vorher baute jede Mail ihre eigene auf, bei hundert
+Konten hundert Verbindungen in einer Anfrage. Die Anfrage läuft außerdem zu
+Ende, auch wenn PHPs Zeitlimit erreicht ist oder der Browser auflegt — die
+erzeugten Passwörter existieren nur in ihr. Der Bericht steht danach auf der
+Verwaltungsseite. (Zeitgrenzen von PHP-FPM oder einem vorgeschalteten Proxy
+kann das Addon nicht aufheben.)
 
 **Versandfehler werden gemeldet.** Scheitert die Willkommensmail oder die
 Sammelmail an das Verwaltungsteam, oder ist keine Team-Adresse hinterlegt,
