@@ -121,12 +121,12 @@
             "source": {
                 "type": "git",
                 "url": "https://github.com/Celestial0579/Hengstverzeichnis_Framework.git",
-                "reference": "95458adaf1c67b12d04aab5f5901815164a12c39"
+                "reference": "c3cd2f9138749a9d92a603c375335cf84bdf9fbc"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/Celestial0579/Hengstverzeichnis_Framework/zipball/95458adaf1c67b12d04aab5f5901815164a12c39",
-                "reference": "95458adaf1c67b12d04aab5f5901815164a12c39",
+                "url": "https://api.github.com/repos/Celestial0579/Hengstverzeichnis_Framework/zipball/c3cd2f9138749a9d92a603c375335cf84bdf9fbc",
+                "reference": "c3cd2f9138749a9d92a603c375335cf84bdf9fbc",
                 "shasum": ""
             },
             "require": {
@@ -161,7 +161,7 @@
                 "source": "https://github.com/Celestial0579/Hengstverzeichnis_Framework/tree/main",
                 "issues": "https://github.com/Celestial0579/Hengstverzeichnis_Framework/issues"
             },
-            "time": "2026-11-15T09:57:19+00:00"
+            "time": "2026-11-15T12:45:42+00:00"
         },
         {
             "name": "myclabs/deep-copy",
