@@ -130,7 +130,10 @@ Mitgliedschaften **gezielt per ID** ab, ohne den Filter „Mitgliedschaftsarten"
 — der gilt nur für die Anlage. Gesperrt wird (`deactivated_at`, Grund
 `membership_ended`), was CiviCRM ausdrücklich als nicht laufend meldet oder
 was dort nicht mehr auffindbar ist. Eine Zeile ohne Statusangabe gilt als
-„unklar" und sperrt nicht. Ist CiviCRM nicht erreichbar, sperrt er
+„unklar" und sperrt nicht. Gesperrt werden nur Konten, die ausschließlich
+in Lesegruppen sind — ein Konto, das ein Admin inzwischen in `Administrator`
+oder eine Gruppe mit Schreibrechten gelegt hat, bleibt aktiv und steht im
+Protokoll zur Prüfung durch einen Admin. Ist CiviCRM nicht erreichbar, sperrt er
 **nichts** und schreibt das ins Protokoll: „konnte nicht prüfen" und
 „geprüft, läuft nicht mehr" sind verschiedene Aussagen.
 

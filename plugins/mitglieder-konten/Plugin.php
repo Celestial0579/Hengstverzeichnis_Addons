@@ -39,7 +39,9 @@
 //     in CiviCRM nicht mehr auffindbaren ID. Eine Zeile ohne Statusfeld ist
 //     "unklar" und sperrt nicht. Läuft eine Mitgliedschaft wieder, wird ein
 //     Konto mit Grund `membership_ended` automatisch entsperrt - aber nur,
-//     wenn es ausschließlich in Lesegruppen ist. Mehr als 20 % (mindestens
+//     wenn es ausschließlich in Lesegruppen ist. Dieselbe Regel gilt seit
+//     1.1.1 fürs Sperren: Ein Konto in `admin` oder einer schreibenden
+//     Gruppe sperrt CiviCRM nicht, der Lauf meldet es zur Prüfung. Mehr als 20 % (mindestens
 //     10) Sperren oder Entsperrungen auf einmal hält der Lauf an; ein ADMIN
 //     bestätigt auf der Verwaltungsseite genau die angezeigte Menge. Eine
 //     Sperre ist umkehrbar, eine Löschung nimmt Zuordnungen und Spuren mit
@@ -1175,10 +1177,13 @@ final class Abgleich {
 
         $db = Database::getInstance();
         $konten = self::kontenZustand(array_values($zuordnungen));
+        // Einmal je Lauf statt zweier Abfragen je Konto.
+        $nurLesen = self::lesegruppen($db, array_values($zuordnungen));
 
         $zuSperren = [];
         $zuEntsperren = [];
         $adminPruefen = [];
+        $sperrenPruefen = [];
         $aktiv = 0;
         $gesperrtBestand = 0;
         foreach ($zuordnungen as $membershipId => $userId) {
@@ -1193,23 +1198,33 @@ final class Abgleich {
                 $gesperrtBestand++;
             }
 
-            if (!array_key_exists($membershipId, $status)) {
-                // In CiviCRM nicht mehr auffindbar = beendet. Verschwinden
-                // viele auf einmal (ACL), greift die Grenze unten.
-                if ($istAktiv) {
+            // In CiviCRM nicht mehr auffindbar = beendet. Verschwinden viele
+            // auf einmal (ACL), greift die Grenze unten.
+            if (!array_key_exists($membershipId, $status) || $status[$membershipId] === false) {
+                if (!$istAktiv) {
+                    continue;
+                }
+                // Gesperrt wird nur, was auch automatisch wieder entsperrt
+                // wuerde: ein Konto ausschliesslich in Lesegruppen. Wer
+                // inzwischen in einer schreibenden Gruppe oder in `admin` ist,
+                // hat seine Rechte von einem Admin bekommen, nicht von
+                // CiviCRM - eine beendete (oder per ACL ausgeblendete)
+                // Mitgliedschaft sperrte sonst im Grenzfall das letzte
+                // Admin-Konto, und die Mengengrenze sieht einen Einzelfall nie.
+                if ($nurLesen[$userId] ?? false) {
                     $zuSperren[$membershipId] = $userId;
+                } else {
+                    $sperrenPruefen[] = $userId;
                 }
                 continue;
             }
 
             if ($status[$membershipId] === null) {
                 $bericht['unklar']++;
-            } elseif ($status[$membershipId] === false && $istAktiv) {
-                $zuSperren[$membershipId] = $userId;
             } elseif ($status[$membershipId] === true && !$istAktiv && $konto['deactivated_reason'] === self::GRUND) {
                 // Nur Lesegruppen: Ein Konto, das vor H1 in eine schreibende
                 // Gruppe gelegt wurde, holt CiviCRM nicht zurueck.
-                if (self::nurLesegruppen($db, $userId)) {
+                if ($nurLesen[$userId] ?? false) {
                     $zuEntsperren[$membershipId] = $userId;
                 } else {
                     $adminPruefen[] = $userId;
@@ -1233,6 +1248,17 @@ final class Abgleich {
                     'Mitgliedschaft laeuft wieder, aber das Konto ist nicht nur in Lesegruppen - bleibt gesperrt, '
                     . 'bitte durch einen Admin pruefen. Benutzer-IDs: %s',
                     implode(', ', $adminPruefen)
+                )
+            );
+        }
+        if ($sperrenPruefen !== []) {
+            AuditLogger::log(
+                'Mitglieder-Abgleich: Sperren durch Admin pruefen',
+                'users',
+                sprintf(
+                    'Mitgliedschaft laeuft nicht mehr, aber das Konto ist nicht nur in Lesegruppen - bleibt aktiv, '
+                    . 'bitte durch einen Admin pruefen. Benutzer-IDs: %s',
+                    implode(', ', $sperrenPruefen)
                 )
             );
         }
@@ -1305,7 +1331,7 @@ final class Abgleich {
         }
 
         foreach ($ausfuehren['entsperren'] as $membershipId => $userId) {
-            if (self::entsperren($userId, $membershipId)) {
+            if (self::entsperren($userId, $membershipId, $nurLesen[$userId] ?? false)) {
                 $bericht['reaktiviert']++;
             }
         }
@@ -1328,10 +1354,13 @@ final class Abgleich {
      * dieselben wie in DormantAccountService::reactivate() - ohne den
      * zurueckgesetzten Fristanker deaktivierte der naechste Nachtlauf das
      * Konto sofort wieder.
+     *
+     * $nurLesen reicht der Tageslauf aus seiner Vorabladung durch; ohne
+     * Angabe (Wiedereintritt) wird einzeln nachgeschlagen.
      */
-    public static function entsperren(int $userId, int $membershipId): bool {
+    public static function entsperren(int $userId, int $membershipId, ?bool $nurLesen = null): bool {
         $db = Database::getInstance();
-        if (!self::nurLesegruppen($db, $userId)) {
+        if (!($nurLesen ?? self::nurLesegruppen($db, $userId))) {
             return false;
         }
 
@@ -1356,14 +1385,41 @@ final class Abgleich {
 
     /** Ist das Konto in keiner Gruppe mit Schreib-/Veroeffentlichungsrecht und nicht admin? Im Zweifel nein. */
     private static function nurLesegruppen(PDO $db, int $userId): bool {
-        try {
-            $stmt = $db->prepare('SELECT group_id FROM user_groups WHERE user_id = ?');
-            $stmt->execute([$userId]);
-            $gruppen = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+        return self::lesegruppen($db, [$userId])[$userId] ?? false;
+    }
 
-            return array_intersect($gruppen, EmailRequirement::groupIdsRequiringEmail($db)) === [];
+    /**
+     * nurLesegruppen() fuer viele Konten auf einmal: die Pflichtgruppen
+     * einmal, die Zugehoerigkeiten in Bloecken wie kontenZustand().
+     *
+     * Im Zweifel nein - bei einem Fehler gilt kein Konto als "nur Lesen",
+     * der Lauf sperrt und entsperrt dann niemanden.
+     *
+     * @param array<int, int> $userIds
+     * @return array<int, bool> user_id => nur Lesegruppen
+     */
+    private static function lesegruppen(PDO $db, array $userIds): array {
+        $userIds = array_values(array_unique(array_filter(array_map('intval', $userIds), static fn(int $id): bool => $id > 0)));
+        if ($userIds === []) {
+            return [];
+        }
+
+        try {
+            $pflicht = array_flip(EmailRequirement::groupIdsRequiringEmail($db));
+            $ergebnis = array_fill_keys($userIds, true);
+            foreach (array_chunk($userIds, 500) as $block) {
+                $platzhalter = implode(', ', array_fill(0, count($block), '?'));
+                $stmt = $db->prepare("SELECT user_id, group_id FROM user_groups WHERE user_id IN ({$platzhalter})");
+                $stmt->execute($block);
+                foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $z) {
+                    if (isset($pflicht[(int)$z['group_id']])) {
+                        $ergebnis[(int)$z['user_id']] = false;
+                    }
+                }
+            }
+            return $ergebnis;
         } catch (\Throwable) {
-            return false;
+            return array_fill_keys($userIds, false);
         }
     }
 

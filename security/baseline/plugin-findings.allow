@@ -67,6 +67,7 @@ zuchtschau-ergebnisse|SQL mit konkatenierter Variable|WHERE ergebnis_id IN (' . 
 merkliste|SQL mit Variable im Query-String (Interpolation)|FROM horses WHERE id IN ({$platzhalter}) AND deleted_at IS NULL
 mitglieder-konten|SQL mit Variable im Query-String (Interpolation)|FROM settings WHERE setting_key IN ({$platzhalter})
 mitglieder-konten|SQL mit Variable im Query-String (Interpolation)|FROM users WHERE id IN ({$platzhalter})
+mitglieder-konten|SQL mit Variable im Query-String (Interpolation)|FROM user_groups WHERE user_id IN ({$platzhalter})
 
 # plausibilitaetspruefung Pruefung::fuerPferd(): $teile enthaelt nur
 # Regelwerk::abfrage() ueber die im Code definierten Regeln - feste SQL mit

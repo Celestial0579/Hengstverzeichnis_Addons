@@ -10,6 +10,19 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ### Sicherheit
 
+- **`mitglieder-konten` (1.1.1): Der tägliche Abgleich sperrt nur noch
+  Konten in reinen Lesegruppen.** Beim Entsperren prüfte der Lauf bereits,
+  ob ein Konto ausschließlich in Lesegruppen ist, beim Sperren nicht. Hatte
+  ein Admin ein über das Addon angelegtes Konto später in `Administrator`
+  oder eine schreibende Gruppe aufgenommen, sperrte eine beendete – oder für
+  den API-Benutzer nur ausgeblendete – Mitgliedschaft dieses Konto trotzdem.
+  War es das letzte aktive Admin-Konto, sperrte sich die Installation selbst
+  aus; die Mengengrenze greift bei einem Einzelfall nicht, und der Kern
+  zählt deaktivierte Admins, öffnet also auch den Einrichtungsassistenten
+  nicht. Solche Konten bleiben jetzt aktiv und stehen im Protokoll unter
+  „Mitglieder-Abgleich: Sperren durch Admin pruefen“. Nebenbei lädt der Lauf
+  die Gruppenzugehörigkeiten einmal statt zweimal je Konto.
+
 - **`datenmigration` (1.2.0): Der Import prüft `database.sql`, bevor er
   etwas ausführt** (Audit M1). Ob ein Archiv ein Teilarchiv ist und welche
   Tabellen es ersetzt, entnahm der Import bisher allein dem Manifest; der Dump

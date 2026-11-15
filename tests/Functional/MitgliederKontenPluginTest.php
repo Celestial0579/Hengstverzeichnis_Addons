@@ -1029,6 +1029,40 @@ class MitgliederKontenPluginTest extends FunctionalTestCase {
         $this->assertStringContainsString((string)$zuordnung[9861], $this->letztesAudit('Mitglieder-Abgleich: Entsperren durch Admin pruefen'));
     }
 
+    /**
+     * Spiegelbild zum Entsperren: Ein Konto, das ein Admin inzwischen in
+     * `admin` oder eine schreibende Gruppe gelegt hat, sperrt CiviCRM nicht.
+     * Sonst genuegte eine einzelne beendete - oder per ACL ausgeblendete -
+     * Mitgliedschaft, um das letzte Admin-Konto auszusperren; die
+     * Mengengrenze sieht einen Einzelfall nie.
+     */
+    public function testEinKontoInAdminOderSchreibenderGruppeWirdNichtGesperrt(): void {
+        $admin = $this->authenticatedClient();
+        $this->einrichten($admin, 'MK Sperre Admin');
+        $zuordnung = $this->kontenAnlegen([9871, 9872, 9873], 871);
+        $schreib = $this->schreibGruppeAnlegen($admin, 'MK schreibend ' . substr(uniqid(), -6));
+        $zuweisen = Database::getInstance()->prepare('INSERT INTO user_groups (user_id, group_id) VALUES (?, ?)');
+        $zuweisen->execute([$zuordnung[9871], $this->gruppeNachSlug('admin')]);
+        $zuweisen->execute([$zuordnung[9872], $schreib]);
+
+        // 9871 beendet, 9872 aus der Antwort verschwunden, 9873 (nur Lesen) beendet.
+        $bericht = Abgleich::taeglicherLauf($this->attrappe([], false, [9871 => false, 9873 => false]));
+
+        $this->assertSame(1, $bericht['gesperrt']);
+        $this->assertNull($this->konto('9871')['deactivated_at'], 'Admin-Konto bleibt aktiv.');
+        $this->assertNull($this->konto('9872')['deactivated_at'], 'Konto in schreibender Gruppe bleibt aktiv.');
+        $this->assertSame(Abgleich::GRUND, $this->konto('9873')['deactivated_reason']);
+
+        // Als Menge vergleichen, nicht als Teilstring: "12" steckt auch in "112".
+        $protokoll = $this->letztesAudit('Mitglieder-Abgleich: Sperren durch Admin pruefen');
+        $this->assertSame(1, preg_match('/Benutzer-IDs: ([0-9, ]+)$/', $protokoll, $treffer), $protokoll);
+        $this->assertEqualsCanonicalizing(
+            [(int)$zuordnung[9871], (int)$zuordnung[9872]],
+            array_map('intval', explode(', ', $treffer[1])),
+            'Gemeldet werden genau die beiden nicht gesperrten Konten.'
+        );
+    }
+
     /** Die Grenze gilt in BEIDE Richtungen - eine gefaelschte Quelle koennte sonst alle Beendeten zurueckholen. */
     public function testMassenReaktivierungWirdAngehalten(): void {
         $this->einrichten($this->authenticatedClient(), 'MK Massen-Reaktivierung');
