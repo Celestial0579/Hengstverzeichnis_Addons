@@ -8,6 +8,19 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+### Sicherheit
+
+- **`datenmigration` (1.3.2): Importverbindung auf älteren Kernen ohne
+  Klartext bei `DB_SSL`** (GHSA-32x3-72jg-f2jc, niedrig). Auf Kernen ohne
+  `Database::neueVerbindung()`, also vor 0.9.1-beta.1, baut das Addon die
+  Importverbindung selbst. Mit `DB_SSL=true` und ohne `DB_SSL_CA` setzte der
+  Nachbau nur den Prüfschalter. pdo_mysql forderte deshalb kein TLS an, und
+  der Dump lief im Klartext zur Datenbank, mit demselben Fehler wie
+  GHSA-jpw7-6m4r-v92q im Kern. Jetzt gilt wie im Kern der
+  Zertifikatsspeicher des Systems. Fehlt er, bricht der Import ab, statt
+  unverschlüsselt zu verbinden. Auf Kernen ab 0.9.1-beta.1 baut der Kern die
+  Verbindung, für sie ändert sich nichts.
+
 ## [0.9.1-beta.2] – 2026-11-15
 
 Vorabversion zur Kern-Beta 0.9.1-beta.2. Neu gegenüber 0.9.1-beta.1:

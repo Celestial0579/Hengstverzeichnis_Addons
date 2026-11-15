@@ -1775,6 +1775,69 @@ final class Importregel {
 }
 
 /**
+ * TLS-Optionen für den Nachbau der Importverbindung auf Kernen ohne
+ * Database::neueVerbindung() (GHSA-32x3-72jg-f2jc).
+ *
+ * pdo_mysql/mysqlnd fordert TLS nur an, wenn eine CA-Datei, ein
+ * CA-Verzeichnis, Schlüssel, Zertifikat oder Cipher gesetzt ist. Der
+ * Prüfschalter ATTR_SSL_VERIFY_SERVER_CERT allein genügt nicht. Ohne
+ * DB_SSL_CA lief der Nachbau deshalb im Klartext, mit demselben Fehler wie
+ * der Kern vor GHSA-jpw7-6m4r-v92q. Ohne eigene CA-Datei gilt wie im Kern
+ * der Zertifikatsspeicher des Systems, und zwar in der Reihenfolge, in der
+ * PHP ihn sucht: openssl.cafile/capath, SSL_CERT_FILE/SSL_CERT_DIR, dann
+ * die Voreinstellung von OpenSSL. Findet sich keiner, bricht der Aufbau ab,
+ * statt unverschlüsselt zu verbinden.
+ */
+final class TlsNachbau {
+
+    /**
+     * @param array<string, string> $orte Ergebnis von openssl_get_cert_locations()
+     * @param callable(string): string $umgebung Liest eine Umgebungsvariable
+     * @return array<int, mixed>
+     */
+    public static function optionen(bool $ssl, string $ca, bool $verify, array $orte, callable $umgebung): array {
+        if (!$ssl) {
+            return [];
+        }
+        $optionen = $ca !== '' ? [\Pdo\Mysql::ATTR_SSL_CA => $ca] : self::zertifikatsspeicher($orte, $umgebung);
+        if ($optionen === []) {
+            throw new \PDOException(
+                'DB_SSL ist eingeschaltet, aber es gibt weder DB_SSL_CA noch einen Zertifikatsspeicher '
+                . 'des Systems. Ohne eine dieser Angaben fordert der PDO-Treiber kein TLS an und die '
+                . 'Verbindung liefe unverschlüsselt. DB_SSL_CA auf eine CA-Datei setzen.'
+            );
+        }
+        $optionen[\Pdo\Mysql::ATTR_SSL_VERIFY_SERVER_CERT] = $verify;
+        return $optionen;
+    }
+
+    /**
+     * @param array<string, string> $orte
+     * @param callable(string): string $umgebung
+     * @return array<int, string>
+     */
+    public static function zertifikatsspeicher(array $orte, callable $umgebung): array {
+        $dateiEnv = (string) ($orte['default_cert_file_env'] ?? 'SSL_CERT_FILE');
+        $verzEnv = (string) ($orte['default_cert_dir_env'] ?? 'SSL_CERT_DIR');
+        $kandidaten = [
+            [\Pdo\Mysql::ATTR_SSL_CA, (string) ($orte['ini_cafile'] ?? '')],
+            [\Pdo\Mysql::ATTR_SSL_CAPATH, (string) ($orte['ini_capath'] ?? '')],
+            [\Pdo\Mysql::ATTR_SSL_CA, $dateiEnv !== '' ? $umgebung($dateiEnv) : ''],
+            [\Pdo\Mysql::ATTR_SSL_CAPATH, $verzEnv !== '' ? $umgebung($verzEnv) : ''],
+            [\Pdo\Mysql::ATTR_SSL_CA, (string) ($orte['default_cert_file'] ?? '')],
+            [\Pdo\Mysql::ATTR_SSL_CAPATH, (string) ($orte['default_cert_dir'] ?? '')],
+        ];
+        foreach ($kandidaten as [$option, $pfad]) {
+            $da = $option === \Pdo\Mysql::ATTR_SSL_CA ? is_file($pfad) && is_readable($pfad) : is_dir($pfad);
+            if ($pfad !== '' && $da) {
+                return [$option => $pfad];
+            }
+        }
+        return [];
+    }
+}
+
+/**
  * Wartungsmodus nach einem gescheiterten Import (Audit N21).
  *
  * Gelingt der Rückweg, ist die Instanz wieder auf dem Stand vor dem Import,
@@ -4200,12 +4263,15 @@ class MigrationController extends BaseController {
             PDO::ATTR_EMULATE_PREPARES => false,
             \Pdo\Mysql::ATTR_MULTI_STATEMENTS => false,
         ];
-        if (defined('DB_SSL') && \constant('DB_SSL')) {
-            if (defined('DB_SSL_CA') && !empty(\constant('DB_SSL_CA'))) {
-                $optionen[\Pdo\Mysql::ATTR_SSL_CA] = \constant('DB_SSL_CA');
-            }
-            $optionen[\Pdo\Mysql::ATTR_SSL_VERIFY_SERVER_CERT] = defined('DB_SSL_VERIFY') && \constant('DB_SSL_VERIFY');
-        }
+        // TLS wie Database::tlsOptionen() ab Kern 0.9.1-beta.2
+        // (GHSA-32x3-72jg-f2jc, Kern: GHSA-jpw7-6m4r-v92q).
+        $optionen = TlsNachbau::optionen(
+            defined('DB_SSL') && (bool) \constant('DB_SSL'),
+            defined('DB_SSL_CA') ? (string) \constant('DB_SSL_CA') : '',
+            defined('DB_SSL_VERIFY') && (bool) \constant('DB_SSL_VERIFY'),
+            function_exists('openssl_get_cert_locations') ? openssl_get_cert_locations() : [],
+            static fn(string $name): string => (string) getenv($name)
+        ) + $optionen;
         $db = new PDO($dsn, (string) \DB_USER, (string) \DB_PASS, $optionen);
 
         self::sqlModeBereinigen($db);
