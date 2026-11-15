@@ -8,6 +8,16 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+## [0.9.2] – 2026-11-15
+
+Patch-Release zur Kern-Linie 0.9, ohne neues Kern-Release: Im Framework hat
+sich seit v0.9.1 nur ein Test geändert. `gesundheitstests` 1.3.2 bereinigt
+bei der Aktivierung und nach dem Update einmal die Bilder, die vor 1.3.1
+abgelegt wurden. Erst damit sind die Metadaten (GHSA-v26w-vc3j-wm5x) auch
+auf bestehenden Installationen aus der Ablage und den Sicherungen.
+`datenmigration` 1.3.3 übernimmt die Treiber-Guards des Kerns. Alle 36 Addons
+bleiben bei der Kern-Linie 0.9.
+
 ### Geändert
 
 - **`datenmigration` (1.3.3): Treiber-Guards im TLS-Nachbau wie im Kern**
