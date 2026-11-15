@@ -81,6 +81,24 @@ class DatenmigrationTlsNachbauTest extends TestCase {
         $this->assertSame([], TlsNachbau::zertifikatsspeicher($orte, self::keineUmgebung()));
     }
 
+    /** #232: Ohne pdo_mysql keine Optionen, der PDO-Konstruktor meldet dann den fehlenden Treiber. */
+    public function testOhneTreiberGibtEsKeineOptionen(): void {
+        $this->assertSame([], TlsNachbau::optionen(true, '/etc/ca.pem', true, [], self::keineUmgebung(), treiberDa: false));
+    }
+
+    /** #232: Ohne mysqlnd fehlt der Prüfschalter. Verlangte Prüfung bricht ab. */
+    public function testVerlangtePruefungOhnePruefschalterBrichtAb(): void {
+        $this->expectException(\PDOException::class);
+        $this->expectExceptionMessage('DB_SSL_VERIFY');
+        TlsNachbau::optionen(true, '/etc/ca.pem', true, [], self::keineUmgebung(), pruefschalterDa: false);
+    }
+
+    /** #232: Ohne Prüfung und ohne Prüfschalter bleibt es bei TLS mit CA, ohne die Option. */
+    public function testOhnePruefungUndOhnePruefschalterBleibtTlsAn(): void {
+        $optionen = TlsNachbau::optionen(true, '/etc/ca.pem', false, [], self::keineUmgebung(), pruefschalterDa: false);
+        $this->assertSame([\Pdo\Mysql::ATTR_SSL_CA => '/etc/ca.pem'], $optionen);
+    }
+
     /** Fail-closed: lieber kein Import als ein Import im Klartext. */
     public function testOhneJedenZertifikatsspeicherBrichtDerAufbauAb(): void {
         $this->expectException(\PDOException::class);

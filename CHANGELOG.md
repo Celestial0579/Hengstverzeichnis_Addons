@@ -8,6 +8,15 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+### Geändert
+
+- **`datenmigration` (1.3.3): Treiber-Guards im TLS-Nachbau wie im Kern**
+  (#232). Der Nachbau der Importverbindung für ältere Kerne prüft jetzt wie
+  `Database::tlsOptionen()`, ob pdo_mysql geladen ist und ob der Treiber die
+  Zertifikatsprüfung einschalten kann. Ohne mysqlnd und mit `DB_SSL_VERIFY`
+  bricht der Import mit einer klaren Meldung ab. Auf Installationen mit
+  mysqlnd ändert sich nichts.
+
 ## [0.9.1] – 2026-11-15
 
 **Der Addon-Stand zur Kern-Freigabe v0.9.1.** Was in `v0.9.1-beta.1` und
