@@ -75,8 +75,10 @@
 //     https-Ziele mit öffentlicher Adresse.
 //
 //  8. VERSANDFEHLER WERDEN GEMELDET (Audit N31) - in der Verwaltung und im
-//     Protokoll, mit Benutzernamen, nie mit Passwort. Einen Weg "Zugangsdaten
-//     neu erzeugen und versenden" gibt es noch nicht (Folge-Issue).
+//     Protokoll, mit Benutzernamen, nie mit Passwort. Seit 1.3.0 (#226) kann
+//     wer das Recht zugangsdaten_erneuern hat (ab Werk nur Admins), die
+//     Zugangsdaten unbenutzter Konten in Lesegruppen neu erzeugen und
+//     zustellen (Abgleich::zugangsdatenNeu()).
 //
 //  9. EIN STAPEL, EINE MAILVERBINDUNG (seit 1.2.0, #223). Die Zugangsdaten
 //     gehen über Mailer::inEinerSitzung() des Kerns hinaus, sobald es die
@@ -111,6 +113,8 @@ class Plugin {
 
     public const SLUG = 'mitglieder-konten';
     public const MODUL = 'mitglieder_konten';
+    /** Recht fuer "Zugangsdaten neu erzeugen" (#226). */
+    public const RECHT_ERNEUERN = 'zugangsdaten_erneuern';
     public const VERWALTUNG = '/plugin/mitglieder-konten/verwaltung';
 
     /** Name der taeglichen Aufgabe im Scheduler des Kerns. */
@@ -181,6 +185,15 @@ class Plugin {
                 'label' => 'Mitglieder-Konten ansehen und anlegen',
                 'module_label' => 'Mitglieder-Konten',
             ],
+            [
+                // #226: Ab Werk nur Administratoren (die haben jedes Recht).
+                // Wer es einer Gruppe gibt, gibt ihr neue Passwoerter fremder
+                // Konten - die Grenzen stehen in Abgleich::erneuerbareKonten().
+                'module' => self::MODUL,
+                'action' => self::RECHT_ERNEUERN,
+                'label' => 'Zugangsdaten unbenutzter Konten neu erzeugen und zustellen',
+                'module_label' => 'Mitglieder-Konten',
+            ],
         ];
     }
 
@@ -210,6 +223,8 @@ class Plugin {
             ['method' => 'POST', 'path' => '/verwaltung/anlegen',    'callback' => [VerwaltungController::class, 'anlegen']],
             // Nur Admin (N30) - die Pruefung steht im Controller.
             ['method' => 'POST', 'path' => '/verwaltung/sperren-bestaetigen', 'callback' => [VerwaltungController::class, 'sperrenBestaetigen']],
+            // Eigenes Recht, ab Werk nur Admin (#226) - Pruefung im Controller.
+            ['method' => 'POST', 'path' => '/verwaltung/zugangsdaten-neu', 'callback' => [VerwaltungController::class, 'zugangsdatenNeu']],
         ];
     }
 }
@@ -1115,6 +1130,131 @@ final class Abgleich {
     }
 
     /**
+     * Konten, deren Zugangsdaten neu erzeugt und zugestellt werden duerfen
+     * (#226, Entscheidung von Tim am 15.11.2026: nur Admins, nur diese Konten):
+     *
+     * - angelegt von diesem Addon (Zeile in der Zuordnung),
+     * - nicht geloescht und nicht gesperrt,
+     * - ausschliesslich in Lesegruppen (wie beim Sperren und Entsperren),
+     * - nie angemeldet: Passwortwechsel noch erzwungen (must_change_password,
+     *   so legt UserProvisioning an; die erste Anmeldung setzt es zurueck)
+     *   UND kein Eintrag "Benutzer eingeloggt" im Protokoll. Ein Konto, das
+     *   jemand benutzt, bekommt kein fremdes Passwort.
+     *
+     * Im Zweifel nein: Bei einem Lesefehler ist kein Konto erneuerbar.
+     *
+     * @param array<int, int>|null $nurIds null = alle Kandidaten
+     * @return array<int, array{username: string, email: string}> user_id => Konto
+     */
+    public static function erneuerbareKonten(?array $nurIds = null): array {
+        try {
+            $db = Database::getInstance();
+            // Ohne IN-Liste und ohne LIMIT: eine feste Abfrage, die Auswahl
+            // filtert PHP. Der Bestand dieser Konten ist der eines Vereins.
+            $stmt = $db->query(
+                'SELECT u.id, u.username, COALESCE(u.email, \'\') AS email
+                 FROM `' . Zuordnung::TABELLE . '` z
+                 JOIN users u ON u.id = z.user_id
+                 WHERE u.deleted_at IS NULL AND u.deactivated_at IS NULL AND u.must_change_password = 1
+                   AND NOT EXISTS (SELECT 1 FROM audit_logs a WHERE a.user_id = u.id AND a.action = \'Benutzer eingeloggt\')
+                 ORDER BY u.username ASC'
+            );
+            $gewaehlt = $nurIds === null ? null : array_flip(array_map('intval', $nurIds));
+            $konten = [];
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $z) {
+                $id = (int)$z['id'];
+                if ($gewaehlt !== null && !isset($gewaehlt[$id])) {
+                    continue;
+                }
+                $konten[$id] = ['username' => (string)$z['username'], 'email' => (string)$z['email']];
+            }
+            $nurLesen = self::lesegruppen($db, array_keys($konten));
+            return array_filter($konten, static fn(int $id): bool => $nurLesen[$id] ?? false, ARRAY_FILTER_USE_KEY);
+        } catch (\Throwable $e) {
+            error_log('[mitglieder-konten] Erneuerbare Konten nicht lesbar: ' . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * Zugangsdaten neu erzeugen und zustellen (#226) - fuer Konten, deren
+     * Zustellung nach der Anlage gescheitert ist. Nur fuer die Auswahl, und
+     * nur, was erneuerbareKonten() JETZT noch zulaesst: Die Auswahl kommt aus
+     * einem Formular.
+     *
+     * Wie jede Neusetzung durch die Verwaltung im Kern (UserController):
+     * neuer Hash, session_version + 1 (beendet Sitzungen), offener
+     * Adressantrag leer, danach KontoSicherheit::nachPasswortwechsel()
+     * (Mailcodes, API-Schluessel). Der Passwortwechsel bei der naechsten
+     * Anmeldung bleibt erzwungen. Zustellung ueber denselben Weg wie bei der
+     * Anlage; ins Protokoll nur Benutzernamen.
+     *
+     * @param array<int, int> $userIds
+     * @return array{erneuert: int, abgewiesen: int, fehler: array<int, string>}
+     */
+    public static function zugangsdatenNeu(array $userIds, ?Mailer $mailer = null): array {
+        $auswahl = array_slice(array_values(array_unique(array_filter(array_map('intval', $userIds), static fn(int $id): bool => $id > 0))), 0, self::MAX_JE_STAPEL);
+        $ergebnis = ['erneuert' => 0, 'abgewiesen' => 0, 'fehler' => []];
+        if ($auswahl === []) {
+            return $ergebnis;
+        }
+        if (!class_exists(\App\Security\KontoSicherheit::class)) {
+            $ergebnis['abgewiesen'] = count($auswahl);
+            $ergebnis['fehler'][] = 'Der Kern ist zu alt für diese Funktion – Passwörter bitte durch einen Admin unter „Benutzer“ setzen.';
+            return $ergebnis;
+        }
+
+        $konten = self::erneuerbareKonten($auswahl);
+        $ergebnis['abgewiesen'] = count($auswahl) - count($konten);
+        if ($konten === []) {
+            return $ergebnis;
+        }
+
+        self::langeLaufzeitErlauben();
+        $db = Database::getInstance();
+        $setzen = $db->prepare(
+            'UPDATE users SET password_hash = ?, session_version = session_version + 1, must_change_password = 1, '
+            . \App\Security\KontoSicherheit::ADRESSANTRAG_LEEREN
+            . ' WHERE id = ? AND deleted_at IS NULL AND deactivated_at IS NULL AND must_change_password = 1'
+        );
+        $zugangsdaten = [];
+        $erneuert = [];
+        foreach ($konten as $userId => $konto) {
+            $passwort = UserProvisioning::erzeugePasswort();
+            $antrag = \App\Security\KontoSicherheit::offenerAdressantrag($userId);
+            $setzen->execute([password_hash($passwort, PASSWORD_DEFAULT), $userId]);
+            if ($setzen->rowCount() !== 1) {
+                // Zwischen Pruefung und UPDATE angemeldet oder gesperrt.
+                $ergebnis['abgewiesen']++;
+                continue;
+            }
+            $schluessel = \App\Security\KontoSicherheit::nachPasswortwechsel($userId, $antrag);
+            if ($schluessel > 0) {
+                AuditLogger::log(
+                    'API-Schlüssel widerrufen (Passwort neu gesetzt)',
+                    'security',
+                    sprintf('%d aktive(r) API-Schlüssel von Benutzer ID %d nach Neuerzeugung der Zugangsdaten widerrufen', $schluessel, $userId)
+                );
+            }
+            $erneuert[] = $konto['username'];
+            $zugangsdaten[] = ['benutzername' => $konto['username'], 'passwort' => $passwort, 'email' => $konto['email'], 'name' => ''];
+        }
+        $ergebnis['erneuert'] = count($zugangsdaten);
+        if ($erneuert !== []) {
+            AuditLogger::log(
+                'Zugangsdaten neu erzeugt',
+                'users',
+                sprintf('Mitglieder-Konten, Wechsel bei nächster Anmeldung erzwungen. Benutzernamen: %s', implode(', ', $erneuert))
+            );
+        }
+
+        foreach (self::zugangsdatenZustellen($zugangsdaten, $mailer) as $fehler) {
+            $ergebnis['fehler'][] = $fehler;
+        }
+        return $ergebnis;
+    }
+
+    /**
      * Ein Audit-Eintrag je Zustellungsfehler - nur Benutzernamen (N31).
      *
      * @param array<int, string> $benutzernamen
@@ -1595,6 +1735,7 @@ class VerwaltungController extends BaseController {
         $inhalt = $this->meldung();
         $inhalt .= $this->angehaltenKarte();
         $inhalt .= $this->zugangKarte();
+        $inhalt .= $this->erneuernKarte();
         // Die Vorschau nur auf Anforderung (#222). Sie holt den ganzen
         // Bestand der laufenden Mitgliedschaften aus CiviCRM - mehrere
         // HTTP-Runden, bei einem langsamen CiviCRM viele Sekunden. Frueher
@@ -1816,6 +1957,34 @@ class VerwaltungController extends BaseController {
         $this->zurueck($bericht['angehalten'] ? 'erneut-angehalten' : 'sperren-bestaetigt');
     }
 
+    /**
+     * Zugangsdaten neu erzeugen und zustellen (#226). Eigenes Recht, ab Werk
+     * nur fuer Administratoren: Mit `manage` allein bekaeme die
+     * Geschaeftsstelle ueber die Sammelmail die neuen Passwoerter aller
+     * Konten ohne eigene Adresse. Ein Admin kann es einer Gruppe geben.
+     */
+    public function zugangsdatenNeu(): void {
+        $this->requirePermission(Plugin::MODUL, Plugin::RECHT_ERNEUERN);
+        $this->pruefeCsrf();
+
+        $auswahl = array_map('intval', (array)($_POST['user_ids'] ?? []));
+        if ($auswahl === []) {
+            $this->zurueck('nichts-ausgewaehlt');
+        }
+
+        $ergebnis = Abgleich::zugangsdatenNeu($auswahl);
+
+        PluginAudit::log(
+            Plugin::SLUG,
+            'Zugangsdaten neu erzeugt',
+            'Mitglieder-Konten',
+            sprintf('%d erneuert, %d abgewiesen, %d Fehler', $ergebnis['erneuert'], $ergebnis['abgewiesen'], count($ergebnis['fehler']))
+        );
+
+        $_SESSION['mitglieder_konten_erneuert'] = $ergebnis;
+        $this->zurueck('zugangsdaten-neu');
+    }
+
     // ---- Anzeige -------------------------------------------------------
 
     private function meldung(): string {
@@ -1851,6 +2020,20 @@ class VerwaltungController extends BaseController {
             ));
         }
 
+        $erneuert = $_SESSION['mitglieder_konten_erneuert'] ?? null;
+        unset($_SESSION['mitglieder_konten_erneuert']);
+        if (is_array($erneuert)) {
+            $zeilen = sprintf(
+                'Zugangsdaten für %d Konto/Konten neu erzeugt, %d abgewiesen (nicht mehr erneuerbar).',
+                (int)($erneuert['erneuert'] ?? 0),
+                (int)($erneuert['abgewiesen'] ?? 0)
+            );
+            foreach ((array)($erneuert['fehler'] ?? []) as $fehler) {
+                $zeilen .= '<br>' . htmlspecialchars((string)$fehler, ENT_QUOTES, 'UTF-8');
+            }
+            $html .= $this->kasten(empty($erneuert['fehler']) ? 'ok' : 'fehler', $zeilen);
+        }
+
         $bericht = $_SESSION['mitglieder_konten_bericht'] ?? null;
         unset($_SESSION['mitglieder_konten_bericht']);
         if (is_array($bericht)) {
@@ -1867,6 +2050,36 @@ class VerwaltungController extends BaseController {
         }
 
         return $html;
+    }
+
+    /**
+     * Konten, deren Zugangsdaten sich neu erzeugen lassen (#226) - nur mit
+     * dem Recht dazu und nur, wenn es welche gibt.
+     */
+    private function erneuernKarte(): string {
+        if (!$this->hasPermission(Plugin::MODUL, Plugin::RECHT_ERNEUERN)) {
+            return '';
+        }
+        $konten = array_slice(Abgleich::erneuerbareKonten(), 0, Abgleich::MAX_JE_STAPEL, true);
+        if ($konten === []) {
+            return '';
+        }
+        $zeilen = '';
+        foreach ($konten as $id => $konto) {
+            $zeilen .= sprintf(
+                '<li><label><input type="checkbox" name="user_ids[]" value="%d"> %s%s</label></li>',
+                $id,
+                htmlspecialchars($konto['username'], ENT_QUOTES, 'UTF-8'),
+                $konto['email'] === '' ? ' <small>(ohne Adresse – Zustellung an das Verwaltungsteam)</small>' : ''
+            );
+        }
+        return '<div class="card" style="margin-top:1.5rem;"><h2 style="font-size:1.15rem;margin-top:0;">Zugangsdaten neu erzeugen</h2>'
+            . '<p>Konten aus diesem Addon in reinen Lesegruppen, die sich noch nie angemeldet haben – etwa nach einer gescheiterten Zustellung. '
+            . 'Das neue Passwort geht auf demselben Weg hinaus wie bei der Anlage; Sitzungen und API-Schlüssel des Kontos enden.</p>'
+            . '<form method="POST" action="' . Plugin::VERWALTUNG . '/zugangsdaten-neu">'
+            . '<input type="hidden" name="csrf_token" value="' . htmlspecialchars(Router::generateCsrfToken(), ENT_QUOTES, 'UTF-8') . '">'
+            . '<ul>' . $zeilen . '</ul>'
+            . '<button type="submit" class="btn">Zugangsdaten neu erzeugen und zustellen</button></form></div>';
     }
 
     private function kasten(string $art, string $inhaltHtml): string {
