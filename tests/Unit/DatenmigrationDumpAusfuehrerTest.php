@@ -151,6 +151,23 @@ class DatenmigrationDumpAusfuehrerTest extends TestCase {
         $this->assertFalse(Maintenance::isStale());
     }
 
+    /** Derselbe Fall mit einem Kern ohne Maintenance::enableDauerhaft() (#225). */
+    public function testOhneKernApiSchreibtDasAddonDenMarkerSelbst(): void {
+        Maintenance::enable('Datenmigrations-Import läuft');
+        Wartung::ohneKernApiFuerTests(true);
+        try {
+            Wartung::nachFehlschlag(false, 'Import und Rückweg gescheitert');
+        } finally {
+            Wartung::ohneKernApiFuerTests(false);
+        }
+
+        $info = Maintenance::info();
+        $this->assertNotNull($info);
+        $this->assertNull($info['pid'] ?? null);
+        $this->assertSame('Import und Rückweg gescheitert', $info['grund']);
+        $this->assertFalse(Maintenance::isStale());
+    }
+
     public function testGelungenerRueckwegHebtDenWartungsmodusAuf(): void {
         Maintenance::enable('Datenmigrations-Import läuft');
         Wartung::nachFehlschlag(true, 'egal');

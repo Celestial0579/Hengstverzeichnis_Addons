@@ -1785,17 +1785,35 @@ final class Importregel {
  * auch nicht, wenn dieser Prozess längst beendet ist. Gelöst wird er erst
  * von dem, der die Sicherung eingespielt hat (rm var/wartung.lock).
  *
- * Bis der Kern dafür eine eigene API hat (Maintenance::enableDauerhaft(),
- * Framework-Folgeissue), schreibt das Addon den Marker selbst - im Format,
- * das Maintenance::info() liest.
+ * Geschrieben wird er über Maintenance::enableDauerhaft() (Kern seit
+ * 30.09.2026, Audit N72; #225), damit das Format beim Kern bleibt. Nur ein
+ * älterer Kern ohne die Methode bekommt den Marker vom Addon selbst - im
+ * Format, das Maintenance::info() liest.
  */
 final class Wartung {
 
+    /** Nur für Tests: den Weg für einen Kern ohne enableDauerhaft() erzwingen. */
+    private static bool $ohneKernApi = false;
+
     private function __construct() {}
+
+    public static function ohneKernApiFuerTests(bool $an): void {
+        self::$ohneKernApi = $an;
+    }
 
     public static function nachFehlschlag(bool $rueckwegOk, string $grund): void {
         if ($rueckwegOk) {
             \App\Service\Maintenance::disable();
+            return;
+        }
+        if (!self::$ohneKernApi && method_exists(\App\Service\Maintenance::class, 'enableDauerhaft')) {
+            try {
+                \App\Service\Maintenance::enableDauerhaft($grund);
+            } catch (\Throwable $e) {
+                // Wie unten: Der alte Marker (mit pid) bleibt stehen, also laut.
+                error_log('Datenmigration: dauerhafter Wartungsmarker konnte nicht geschrieben werden - '
+                    . $e->getMessage());
+            }
             return;
         }
         $marker = json_encode(
@@ -4160,10 +4178,17 @@ class MigrationController extends BaseController {
      *   - KEIN ensureSchemaUpToDate - mitten im Import wäre eine Migration
      *     das Letzte, was man will.
      *
-     * Folgeissue im Framework: Database::neueVerbindung() im Kern, dann
-     * hierauf umstellen - der Nachbau hier kann vom Kern abweichen.
+     * Mit einem Kern, der Database::neueVerbindung() kennt (Framework #519),
+     * baut der Kern die Verbindung - DSN, TLS, Fehlermodus und Zeitzone wie
+     * bei der Anwendung, ohne Migration. Der Nachbau darunter bleibt nur für
+     * ältere Kerne (core_compatibility >=0.8.0).
      */
     private function importVerbindung(): PDO {
+        if (method_exists(\App\Database::class, 'neueVerbindung')) {
+            $db = \App\Database::neueVerbindung([\Pdo\Mysql::ATTR_MULTI_STATEMENTS => false]);
+            self::sqlModeBereinigen($db);
+            return $db;
+        }
         $host = (string) \DB_HOST;
         $port = defined('DB_PORT') ? (string) \constant('DB_PORT') : '3306';
         $dsn = str_starts_with($host, '/')
@@ -4183,14 +4208,19 @@ class MigrationController extends BaseController {
         }
         $db = new PDO($dsn, (string) \DB_USER, (string) \DB_PASS, $optionen);
 
+        self::sqlModeBereinigen($db);
+        $db->prepare('SET time_zone = ?')->execute([(new \DateTimeImmutable('now'))->format('P')]);
+        return $db;
+    }
+
+    /** sql_mode ohne NO_BACKSLASH_ESCAPES und ANSI_QUOTES (siehe importVerbindung()). */
+    private static function sqlModeBereinigen(PDO $db): void {
         $modus = (string) $db->query('SELECT @@SESSION.sql_mode')->fetchColumn();
         $bereinigt = array_filter(
             array_map('trim', explode(',', $modus)),
             static fn(string $m): bool => $m !== '' && !in_array(strtoupper($m), ['NO_BACKSLASH_ESCAPES', 'ANSI_QUOTES', 'ANSI'], true)
         );
         $db->prepare('SET SESSION sql_mode = ?')->execute([implode(',', $bereinigt)]);
-        $db->prepare('SET time_zone = ?')->execute([(new \DateTimeImmutable('now'))->format('P')]);
-        return $db;
     }
 
     /**
