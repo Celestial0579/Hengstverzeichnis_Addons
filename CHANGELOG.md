@@ -8,6 +8,17 @@ Release-Tags `vX.Y.z` folgen der Framework-Linie `X.Y`
 
 ## [Unreleased]
 
+### Geändert
+
+- **`datenmigration` (1.3.1): Wartungsmarker und Importverbindung über den
+  Kern** (#225, Framework #519). Scheitert nach einem misslungenen Import
+  auch der Rückweg, schreibt jetzt `Maintenance::enableDauerhaft()` den
+  dauerhaften Wartungsmarker statt eines selbst gebauten JSON; die
+  Importverbindung kommt aus `Database::neueVerbindung()` statt aus einem
+  Nachbau von DSN, TLS-Optionen und Zeitzone. Beides hing bisher am Format
+  bzw. an den Verbindungsregeln des Kerns zum Zeitpunkt des Abschreibens.
+  Mit einem älteren Kern ohne die Methoden bleibt es beim bisherigen Weg.
+
 ## [0.9.1-beta.1] – 2026-11-15
 
 Vorabversion zur Kern-Beta 0.9.1-beta.1. Sie enthält alles seit 0.9.0, darunter
