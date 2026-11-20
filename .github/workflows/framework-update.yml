@@ -136,10 +136,27 @@ jobs:
           set -o pipefail
           composer test 2>&1 | tee suite.log
 
+      # Optional: Token einer GitHub-App statt GITHUB_TOKEN. Pushs und PRs mit
+      # GITHUB_TOKEN lösen die pull_request-Workflows als github-actions[bot]
+      # aus, und die enden ohne Jobs rot (Issue #241). Mit App-Token laufen die
+      # normalen PR-Checks wie bei einem Menschen. Aktiv, sobald die Repository-
+      # Variable FRAMEWORK_UPDATE_APP_ID und das Secret FRAMEWORK_UPDATE_APP_KEY
+      # gesetzt sind (die App legt Tim an: Rechte Contents und Pull requests
+      # je Lesen und Schreiben, nur auf dieses Repo). Ohne beide gilt der alte Weg.
+      - name: App-Token erzeugen (falls eingerichtet)
+        id: app
+        if: steps.bump.outputs.geaendert == 'true' && steps.suite.outcome == 'success' && vars.FRAMEWORK_UPDATE_APP_ID != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.FRAMEWORK_UPDATE_APP_ID }}
+          private-key: ${{ secrets.FRAMEWORK_UPDATE_APP_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Pull Request öffnen (Suite grün)
         if: steps.bump.outputs.geaendert == 'true' && steps.suite.outcome == 'success'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.GITHUB_TOKEN }}
           VORHER: ${{ steps.bump.outputs.vorher }}
           NACHHER: ${{ steps.bump.outputs.nachher }}
         run: |
@@ -156,7 +173,12 @@ jobs:
             -m "Vorher:  ${VORHER}" \
             -m "Nachher: ${NACHHER}" \
             -m "Manifest- und Functional-Suite sind gegen diesen Stand gelaufen und grün."
-          git push --force origin "$branch"
+          # Der Push läuft mit demselben Token wie der PR (App-Token, sonst
+          # GITHUB_TOKEN); erst dann zählt er als Ereignis eines Nutzers.
+          # actions/checkout legt den GITHUB_TOKEN als Header ab und würde ihn
+          # über den Token in der URL stellen: vorher entfernen.
+          git config --local --unset-all http.https://github.com/.extraheader || true
+          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$branch"
 
           # Rumpf über eine Datei, nicht als Argument: Markdown-Tabellen
           # beginnen Zeilen mit '|', und das sprengt in einem YAML-Block-Skalar
@@ -168,7 +190,7 @@ jobs:
             printf '| vorher | `%s` |\n' "$VORHER"
             printf '| nachher | `%s` |\n\n' "$NACHHER"
             printf '%s\n\n' 'Manifest- und Functional-Suite sind im erzeugenden Lauf gegen diesen Stand gelaufen und grün.'
-            printf '%s\n' '**Hinweis:** Von `GITHUB_TOKEN` erzeugte Pull Requests lösen keine `pull_request`-Workflows aus — die Pflicht-Checks starten hier also nicht von selbst. Einmal Schließen und wieder Öffnen genügt, dann laufen sie.'
+            printf '%s\n' '**Hinweis (nur ohne App-Token):** Von `GITHUB_TOKEN` erzeugte Pull Requests lösen keine `pull_request`-Workflows aus — die Pflicht-Checks starten hier also nicht von selbst. Einmal Schließen und wieder Öffnen genügt, dann laufen sie.'
           } > pr-body.md
 
           if [ -z "$(gh pr list --head "$branch" --state open --json number --jq '.[].number')" ]; then
