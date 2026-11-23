@@ -69,6 +69,11 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Kein GITHUB_TOKEN in der Git-Konfiguration. Der einzige Push setzt
+          # sein Token selbst in die URL (#244). composer holt das öffentliche
+          # Framework ohne Git-Zugangsdaten, PR und Issues laufen über gh.
+          persist-credentials: false
 
       - name: Setup PHP
         uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # v2 (2.40.0)
@@ -175,13 +180,14 @@ jobs:
             -m "Manifest- und Functional-Suite sind gegen diesen Stand gelaufen und grün."
           # Der Push läuft mit demselben Token wie der PR (App-Token, sonst
           # GITHUB_TOKEN); erst dann zählt er als Ereignis eines Nutzers.
-          # actions/checkout legt den GITHUB_TOKEN als Header ab, und den
+          # actions/checkout legt den GITHUB_TOKEN sonst als Header ab, und den
           # schickt Git vor dem Token aus der URL mit. Seit checkout v6 steht
           # er in einer eigenen Datei, die .git/config per includeIf einbindet;
           # `git config --local --unset-all` erreicht ihn dort nicht (#244).
-          # Ein leerer Wert setzt die Liste der Header zurück, und `-c` gilt
-          # nach allen Konfigurationsdateien, also auch nach dem Include. So
-          # geht nur dieser Push ohne den Header hinaus.
+          # Der Checkout oben speichert darum keine Zugangsdaten. Das `-c`
+          # bleibt als Sicherung: Ein leerer Wert setzt die Liste der Header
+          # zurück und gilt nach allen Konfigurationsdateien, auch nach dem
+          # Include.
           git -c http.https://github.com/.extraheader= \
             push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$branch"
 
