@@ -9,7 +9,7 @@
 #
 # Die Folge ist unangenehm leise: Die Testsuite prüft die Plugins dann gegen
 # einen ALTEN Kern. Bricht ein Addon am aktuellen Framework, meldet die CI
-# trotzdem grün — auch der nächtliche devhost-tests-Lauf, der dieselbe
+# trotzdem grün — auch ein nächtlicher Testlauf, der dieselbe
 # composer.lock benutzt. Genau so ist die Regression
 # Hengstverzeichnis_Framework#151 tagelang unbemerkt geblieben.
 #
@@ -146,7 +146,7 @@ jobs:
       # aus, und die enden ohne Jobs rot (Issue #241). Mit App-Token laufen die
       # normalen PR-Checks wie bei einem Menschen. Aktiv, sobald die Repository-
       # Variable FRAMEWORK_UPDATE_APP_ID und das Secret FRAMEWORK_UPDATE_APP_KEY
-      # gesetzt sind (die App legt Tim an: Rechte Contents und Pull requests
+      # gesetzt sind (eine GitHub-App mit den Rechten Contents und Pull requests
       # je Lesen und Schreiben, nur auf dieses Repo). Ohne beide gilt der alte Weg.
       - name: App-Token erzeugen (falls eingerichtet)
         id: app
@@ -188,8 +188,14 @@ jobs:
           # bleibt als Sicherung: Ein leerer Wert setzt die Liste der Header
           # zurück und gilt nach allen Konfigurationsdateien, auch nach dem
           # Include.
-          git -c http.https://github.com/.extraheader= \
-            push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$branch"
+          # Das Token kommt über einen Credential-Helper aus der Umgebung, nicht
+          # über die URL: Dort stünde es in der Kommandozeile von git und
+          # git-remote-https (#247). ${GH_TOKEN} steht in einfachen
+          # Anführungszeichen und wird erst in der Shell des Helpers aufgelöst.
+          # shellcheck disable=SC2016
+          git -c http.https://github.com/.extraheader= -c credential.helper= \
+            -c 'credential.helper=!f() { test "$1" = get || return 0; echo username=x-access-token; echo "password=${GH_TOKEN}"; }; f' \
+            push --force "https://github.com/${GITHUB_REPOSITORY}.git" "$branch"
 
           # Rumpf über eine Datei, nicht als Argument: Markdown-Tabellen
           # beginnen Zeilen mit '|', und das sprengt in einem YAML-Block-Skalar
