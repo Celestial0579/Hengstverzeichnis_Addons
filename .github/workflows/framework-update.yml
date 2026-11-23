@@ -175,10 +175,15 @@ jobs:
             -m "Manifest- und Functional-Suite sind gegen diesen Stand gelaufen und grün."
           # Der Push läuft mit demselben Token wie der PR (App-Token, sonst
           # GITHUB_TOKEN); erst dann zählt er als Ereignis eines Nutzers.
-          # actions/checkout legt den GITHUB_TOKEN als Header ab und würde ihn
-          # über den Token in der URL stellen: vorher entfernen.
-          git config --local --unset-all http.https://github.com/.extraheader || true
-          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$branch"
+          # actions/checkout legt den GITHUB_TOKEN als Header ab, und den
+          # schickt Git vor dem Token aus der URL mit. Seit checkout v6 steht
+          # er in einer eigenen Datei, die .git/config per includeIf einbindet;
+          # `git config --local --unset-all` erreicht ihn dort nicht (#244).
+          # Ein leerer Wert setzt die Liste der Header zurück, und `-c` gilt
+          # nach allen Konfigurationsdateien, also auch nach dem Include. So
+          # geht nur dieser Push ohne den Header hinaus.
+          git -c http.https://github.com/.extraheader= \
+            push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$branch"
 
           # Rumpf über eine Datei, nicht als Argument: Markdown-Tabellen
           # beginnen Zeilen mit '|', und das sprengt in einem YAML-Block-Skalar
