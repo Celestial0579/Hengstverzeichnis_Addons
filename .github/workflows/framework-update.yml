@@ -141,14 +141,17 @@ jobs:
           set -o pipefail
           composer test 2>&1 | tee suite.log
 
-      # Optional: Token einer GitHub-App statt GITHUB_TOKEN. Pushs und PRs mit
+      # Token einer GitHub-App statt GITHUB_TOKEN. Pushs und PRs mit
       # GITHUB_TOKEN lösen die pull_request-Workflows als github-actions[bot]
       # aus, und die enden ohne Jobs rot (Issue #241). Mit App-Token laufen die
-      # normalen PR-Checks wie bei einem Menschen. Aktiv, sobald die Repository-
+      # normalen PR-Checks wie bei einem Menschen. Nötig sind die Repository-
       # Variable FRAMEWORK_UPDATE_APP_ID und das Secret FRAMEWORK_UPDATE_APP_KEY
-      # gesetzt sind (eine GitHub-App mit den Rechten Contents und Pull requests
-      # je Lesen und Schreiben, nur auf dieses Repo). Ohne beide gilt der alte Weg.
-      - name: App-Token erzeugen (falls eingerichtet)
+      # (eine GitHub-App mit den Rechten Contents und Pull requests je Lesen und
+      # Schreiben, nur auf dieses Repo). Einen Rückweg über GITHUB_TOKEN gibt es
+      # nicht mehr: Seit #253 dürfen Workflows hier keine Pull Requests mehr
+      # anlegen oder freigeben. Fehlt das App-Token, scheitert der nächste
+      # Schritt mit einer Meldung, statt still einen anderen Weg zu nehmen.
+      - name: App-Token erzeugen
         id: app
         if: steps.bump.outputs.geaendert == 'true' && steps.suite.outcome == 'success' && vars.FRAMEWORK_UPDATE_APP_ID != ''
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -161,11 +164,15 @@ jobs:
       - name: Pull Request öffnen (Suite grün)
         if: steps.bump.outputs.geaendert == 'true' && steps.suite.outcome == 'success'
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
           VORHER: ${{ steps.bump.outputs.vorher }}
           NACHHER: ${{ steps.bump.outputs.nachher }}
         run: |
           set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::Kein App-Token: FRAMEWORK_UPDATE_APP_ID (Variable) und FRAMEWORK_UPDATE_APP_KEY (Secret) einrichten. GITHUB_TOKEN darf hier keine Pull Requests anlegen (#253)."
+            exit 1
+          fi
           branch="auto/framework-update"
 
           git config user.name "github-actions[bot]"
@@ -178,8 +185,8 @@ jobs:
             -m "Vorher:  ${VORHER}" \
             -m "Nachher: ${NACHHER}" \
             -m "Manifest- und Functional-Suite sind gegen diesen Stand gelaufen und grün."
-          # Der Push läuft mit demselben Token wie der PR (App-Token, sonst
-          # GITHUB_TOKEN); erst dann zählt er als Ereignis eines Nutzers.
+          # Der Push läuft mit demselben App-Token wie der PR; erst dann zählt
+          # er als Ereignis eines Nutzers.
           # actions/checkout legt den GITHUB_TOKEN sonst als Header ab, und den
           # schickt Git vor dem Token aus der URL mit. Seit checkout v6 steht
           # er in einer eigenen Datei, die .git/config per includeIf einbindet;
@@ -206,8 +213,7 @@ jobs:
             printf '%s\n' '|---|---|'
             printf '| vorher | `%s` |\n' "$VORHER"
             printf '| nachher | `%s` |\n\n' "$NACHHER"
-            printf '%s\n\n' 'Manifest- und Functional-Suite sind im erzeugenden Lauf gegen diesen Stand gelaufen und grün.'
-            printf '%s\n' '**Hinweis (nur ohne App-Token):** Von `GITHUB_TOKEN` erzeugte Pull Requests lösen keine `pull_request`-Workflows aus — die Pflicht-Checks starten hier also nicht von selbst. Einmal Schließen und wieder Öffnen genügt, dann laufen sie.'
+            printf '%s\n' 'Manifest- und Functional-Suite sind im erzeugenden Lauf gegen diesen Stand gelaufen und grün.'
           } > pr-body.md
 
           if [ -z "$(gh pr list --head "$branch" --state open --json number --jq '.[].number')" ]; then
